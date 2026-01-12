@@ -1,0 +1,10 @@
+# dependencies
+node_modules/
+
+# env files
+.env
+.env.* 
+!.env.example
+
+# react build
+frontend/build/
