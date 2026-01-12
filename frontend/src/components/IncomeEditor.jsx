@@ -255,6 +255,7 @@ export default function IncomeEditor({
   grades,
   gradesYears,
   discounts,
+  currencyCode = "USD",
   dirtyPaths,
   onDirty,
 }) {
@@ -553,20 +554,20 @@ export default function IncomeEditor({
                   Öğrenci Sayısı
                 </th>
 
-                <th style={{ width: 120, textAlign: "right" }}>Birim Ücret (USD)</th>
-                <th style={{ width: 140, textAlign: "right" }}>Toplam (USD)</th>
+                <th style={{ width: 120, textAlign: "right" }}>{`Birim Ücret (${currencyCode})`}</th>
+                <th style={{ width: 140, textAlign: "right" }}>{`Toplam (${currencyCode})`}</th>
 
                 <th className="sep-left" style={{ width: 130, textAlign: "right" }}>
                   Öğrenci Sayısı
                 </th>
-                <th style={{ width: 120, textAlign: "right" }}>Birim Ücret (USD)</th>
-                <th style={{ width: 140, textAlign: "right" }}>Toplam (USD)</th>
+                <th style={{ width: 120, textAlign: "right" }}>{`Birim Ücret (${currencyCode})`}</th>
+                <th style={{ width: 140, textAlign: "right" }}>{`Toplam (${currencyCode})`}</th>
 
                 <th className="sep-left" style={{ width: 130, textAlign: "right" }}>
                   Öğrenci Sayısı
                 </th>
-                <th style={{ width: 120, textAlign: "right" }}>Birim Ücret (USD)</th>
-                <th style={{ width: 140, textAlign: "right" }}>Toplam (USD)</th>
+                <th style={{ width: 120, textAlign: "right" }}>{`Birim Ücret (${currencyCode})`}</th>
+                <th style={{ width: 140, textAlign: "right" }}>{`Toplam (${currencyCode})`}</th>
               </tr>
             </thead>
 
@@ -688,13 +689,13 @@ export default function IncomeEditor({
     <div className="card income-table">
 
 
-      {sectionTable("EĞİTİM FAALİYET GELİRLERİ / YIL (USD)", visibleTuitionRows, "tuition")}
-      {sectionTable("ÖĞRENİM DIŞI ÜCRETLER / YIL (USD)", nonEdRows, "nonEducationFees")}
-      {sectionTable("YURT / KONAKLAMA GELİRLERİ / YIL (USD)", dormRows, "dormitory")}
+      {sectionTable(`EĞİTİM FAALİYET GELİRLERİ / YIL (${currencyCode})`, visibleTuitionRows, "tuition")}
+      {sectionTable(`ÖĞRENİM DIŞI ÜCRETLER / YIL (${currencyCode})`, nonEdRows, "nonEducationFees")}
+      {sectionTable(`YURT / KONAKLAMA GELİRLERİ / YIL (${currencyCode})`, dormRows, "dormitory")}
 
       {/* Other institutional income */}
       <div style={{ marginTop: 18, fontWeight: 800 }}>
-        ÖĞRENCİ ÜCRETLERİ HARİÇ KURUMUN DİĞER GELİRLERİ (BRÜT) / YIL (USD)
+        {`ÖĞRENCİ ÜCRETLERİ HARİÇ KURUMUN DİĞER GELİRLERİ (BRÜT) / YIL (${currencyCode})`}
       </div>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y">
@@ -710,9 +711,9 @@ export default function IncomeEditor({
               </th>
             </tr>
             <tr>
-              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>Tutar (USD)</th>
-              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>Tutar (USD)</th>
-              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>Tutar (USD)</th>
+              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>{`Tutar (${currencyCode})`}</th>
+              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>{`Tutar (${currencyCode})`}</th>
+              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>{`Tutar (${currencyCode})`}</th>
             </tr>
           </thead>
           <tbody>
@@ -749,7 +750,7 @@ export default function IncomeEditor({
       </div>
 
       {/* Government incentives */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>DEVLET TEŞVİKLERİ / YIL (USD)</div>
+      <div style={{ marginTop: 18, fontWeight: 800 }}>{`DEVLET TEŞVİKLERİ / YIL (${currencyCode})`}</div>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y">
           <thead>
@@ -764,9 +765,9 @@ export default function IncomeEditor({
               </th>
             </tr>
             <tr>
-              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>Tutar (USD)</th>
-              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>Tutar (USD)</th>
-              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>Tutar (USD)</th>
+              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>{`Tutar (${currencyCode})`}</th>
+              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>{`Tutar (${currencyCode})`}</th>
+              <th className="sep-left" style={{ width: 140, textAlign: "right" }}>{`Tutar (${currencyCode})`}</th>
             </tr>
           </thead>
           <tbody>
@@ -809,9 +810,9 @@ export default function IncomeEditor({
               </th>
             </tr>
             <tr>
-              <th className="sep-left" style={{ textAlign: "right", width: 160 }}>USD</th>
-              <th className="sep-left" style={{ textAlign: "right", width: 160 }}>USD</th>
-              <th className="sep-left" style={{ textAlign: "right", width: 160 }}>USD</th>
+              <th className="sep-left" style={{ textAlign: "right", width: 160 }}>{currencyCode}</th>
+              <th className="sep-left" style={{ textAlign: "right", width: 160 }}>{currencyCode}</th>
+              <th className="sep-left" style={{ textAlign: "right", width: 160 }}>{currencyCode}</th>
             </tr>
           </thead>
           <tbody>

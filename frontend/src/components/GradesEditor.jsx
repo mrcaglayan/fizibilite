@@ -12,11 +12,11 @@ const GRADES = ["KG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "
  *   - Grades in the header
  *   - Left side rows:
  *       1) Şube Sayısı
- *       2) Öğrenci / Şube
- *       3) Toplam Öğrenci (auto)
+ *       2) Öğrenci (toplam)  ✅ NOT: sınıf bazında toplam öğrenci sayısı girilir; şube başı değildir.
  *
  * Props
  * - grades: [{ grade, branchCount, studentsPerBranch }]
+ *   NOTE: `studentsPerBranch` now represents TOTAL students for that grade (kept key for backward compatibility).
  * - onChange(nextGrades)
  * - title, subtitle (optional)
  * - layout: "matrix" | "rows"  (rows = legacy)
@@ -25,12 +25,13 @@ export default function GradesEditor({
   grades,
   onChange,
   title = "Sınıf / Şube Bilgileri",
-  subtitle = "Her sınıf için şube sayısı ve şube başı öğrenci sayısını girin.",
+  subtitle = "Her sınıf için şube sayısı ve toplam öğrenci sayısını girin.",
   layout = "matrix",
 }) {
   const data = Array.isArray(grades) ? grades : [];
 
-  const getRow = (g) => data.find((x) => String(x.grade) === g) || { grade: g, branchCount: 0, studentsPerBranch: 0 };
+  const getRow = (g) =>
+    data.find((x) => String(x.grade) === g) || { grade: g, branchCount: 0, studentsPerBranch: 0 };
 
   function setField(grade, field, value) {
     const next = GRADES.map((g) => {
@@ -42,14 +43,17 @@ export default function GradesEditor({
     onChange(next);
   }
 
-  const gradeTotals = GRADES.map((g) => {
+  const gradeRows = GRADES.map((g) => {
     const r = getRow(g);
     const bc = Number(r.branchCount || 0);
-    const spb = Number(r.studentsPerBranch || 0);
-    return { grade: g, branchCount: bc, studentsPerBranch: spb, total: bc * spb };
+    const students = Number(r.studentsPerBranch || 0);
+    return { grade: g, branchCount: bc, studentsPerBranch: students };
   });
 
-  const totalStudents = gradeTotals.reduce((s, r) => s + (Number.isFinite(r.total) ? r.total : 0), 0);
+  const totalStudents = gradeRows.reduce(
+    (s, r) => s + (Number.isFinite(r.studentsPerBranch) ? r.studentsPerBranch : 0),
+    0
+  );
 
   // --- Legacy (rows per grade) ---
   if (layout === "rows") {
@@ -68,25 +72,29 @@ export default function GradesEditor({
             <tr>
               <th>Sınıf</th>
               <th>Şube</th>
-              <th>Öğrenci / Şube</th>
-              <th>Toplam</th>
+              <th>Öğrenci (Toplam)</th>
             </tr>
           </thead>
           <tbody>
-            {gradeTotals.map((r) => (
+            {gradeRows.map((r) => (
               <tr key={r.grade}>
                 <td>{r.grade}</td>
                 <td>
-                  <NumberInput className="input sm" min="0" value={r.branchCount}
+                  <NumberInput
+                    className="input sm"
+                    min="0"
+                    value={r.branchCount}
                     onChange={(value) => setField(r.grade, "branchCount", value)}
                   />
                 </td>
                 <td>
-                  <NumberInput className="input sm" min="0" value={r.studentsPerBranch}
+                  <NumberInput
+                    className="input sm"
+                    min="0"
+                    value={r.studentsPerBranch}
                     onChange={(value) => setField(r.grade, "studentsPerBranch", value)}
                   />
                 </td>
-                <td>{Number(r.total || 0).toFixed(0)}</td>
               </tr>
             ))}
           </tbody>
@@ -115,18 +123,19 @@ export default function GradesEditor({
             <tr>
               <th style={{ ...rowHeadStyle, textAlign: "left" }}> </th>
               {GRADES.map((g) => (
-                <th key={g} style={cellStyle}>{g}</th>
+                <th key={g} style={cellStyle}>
+                  {g}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
             <tr>
               <td style={{ ...rowHeadStyle, fontWeight: 700 }}>Şube Sayısı</td>
-              {gradeTotals.map((r) => (
+              {gradeRows.map((r) => (
                 <td key={r.grade} style={cellStyle}>
                   <NumberInput
                     className="input sm"
-                   
                     min="0"
                     value={r.branchCount}
                     onChange={(value) => setField(r.grade, "branchCount", value)}
@@ -137,26 +146,16 @@ export default function GradesEditor({
             </tr>
 
             <tr>
-              <td style={{ ...rowHeadStyle, fontWeight: 700 }}>Öğrenci / Şube</td>
-              {gradeTotals.map((r) => (
+              <td style={{ ...rowHeadStyle, fontWeight: 700 }}>Öğrenci (Toplam)</td>
+              {gradeRows.map((r) => (
                 <td key={r.grade} style={cellStyle}>
                   <NumberInput
                     className="input sm"
-                   
                     min="0"
                     value={r.studentsPerBranch}
                     onChange={(value) => setField(r.grade, "studentsPerBranch", value)}
                     style={{ textAlign: "center" }}
                   />
-                </td>
-              ))}
-            </tr>
-
-            <tr>
-              <td style={{ ...rowHeadStyle, fontWeight: 800 }}>Toplam Öğrenci</td>
-              {gradeTotals.map((r) => (
-                <td key={r.grade} style={{ ...cellStyle, fontWeight: 800, background: "rgba(15, 23, 42, 0.03)" }}>
-                  {Number(r.total || 0).toFixed(0)}
                 </td>
               ))}
             </tr>

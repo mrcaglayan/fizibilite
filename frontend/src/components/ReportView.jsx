@@ -26,8 +26,19 @@ function yearLabel(y) {
   return "3.Yıl";
 }
 
-export default function ReportView({ results }) {
+export default function ReportView({ results, currencyMeta, reportCurrency = "usd", onReportCurrencyChange }) {
   const { years, meta } = useMemo(() => pickYearObj(results), [results]);
+  const fx = Number(currencyMeta?.fx_usd_to_local || 0);
+  const canShowLocal =
+    currencyMeta?.input_currency === "LOCAL" && fx > 0 && currencyMeta?.local_currency_code;
+  const showLocal = reportCurrency === "local" && canShowLocal;
+  const localLabel = currencyMeta?.local_currency_code || "LOCAL";
+  const money = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return v;
+    return showLocal ? n * fx : n;
+  };
+  const fmtMoney = (v) => fmt(money(v));
 
   const available = useMemo(() => {
     const keys = ["y1", "y2", "y3"].filter((k) => years?.[k]);
@@ -88,7 +99,7 @@ export default function ReportView({ results }) {
           </div>
         </div>
 
-        <div className="row">
+        <div className="row" style={{ gap: 10 }}>
           <div className="tabs">
             {available.map((ky) => (
               <button
@@ -101,6 +112,24 @@ export default function ReportView({ results }) {
               </button>
             ))}
           </div>
+          {canShowLocal ? (
+            <div className="tabs">
+              <button
+                type="button"
+                className={`tab ${reportCurrency === "usd" ? "active" : ""}`}
+                onClick={() => onReportCurrencyChange?.("usd")}
+              >
+                USD
+              </button>
+              <button
+                type="button"
+                className={`tab ${reportCurrency === "local" ? "active" : ""}`}
+                onClick={() => onReportCurrencyChange?.("local")}
+              >
+                {localLabel}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -136,27 +165,27 @@ export default function ReportView({ results }) {
             <tbody>
               <tr>
                 <td>Net Toplam Gelir</td>
-                <td className="num">{fmt(compare[0]?.netIncome)}</td>
-                <td className="num">{fmt(compare[1]?.netIncome)}</td>
-                <td className="num">{fmt(compare[2]?.netIncome)}</td>
+                <td className="num">{fmtMoney(compare[0]?.netIncome)}</td>
+                <td className="num">{fmtMoney(compare[1]?.netIncome)}</td>
+                <td className="num">{fmtMoney(compare[2]?.netIncome)}</td>
               </tr>
               <tr>
                 <td>Net Ciro</td>
-                <td className="num">{fmt(compare[0]?.netCiro)}</td>
-                <td className="num">{fmt(compare[1]?.netCiro)}</td>
-                <td className="num">{fmt(compare[2]?.netCiro)}</td>
+                <td className="num">{fmtMoney(compare[0]?.netCiro)}</td>
+                <td className="num">{fmtMoney(compare[1]?.netCiro)}</td>
+                <td className="num">{fmtMoney(compare[2]?.netCiro)}</td>
               </tr>
               <tr>
                 <td>Toplam Gider</td>
-                <td className="num">{fmt(compare[0]?.expenses)}</td>
-                <td className="num">{fmt(compare[1]?.expenses)}</td>
-                <td className="num">{fmt(compare[2]?.expenses)}</td>
+                <td className="num">{fmtMoney(compare[0]?.expenses)}</td>
+                <td className="num">{fmtMoney(compare[1]?.expenses)}</td>
+                <td className="num">{fmtMoney(compare[2]?.expenses)}</td>
               </tr>
               <tr style={{ fontWeight: 800 }}>
                 <td>Net Sonuç</td>
-                <td className="num">{fmt(compare[0]?.netResult)}</td>
-                <td className="num">{fmt(compare[1]?.netResult)}</td>
-                <td className="num">{fmt(compare[2]?.netResult)}</td>
+                <td className="num">{fmtMoney(compare[0]?.netResult)}</td>
+                <td className="num">{fmtMoney(compare[1]?.netResult)}</td>
+                <td className="num">{fmtMoney(compare[2]?.netResult)}</td>
               </tr>
               <tr>
                 <td>Kâr Marjı</td>
@@ -197,35 +226,35 @@ export default function ReportView({ results }) {
           <tbody>
             <tr>
               <td>Brüt Eğitim Geliri (Tuition)</td>
-              <td className="num">{fmt(i.grossTuition)}</td>
+              <td className="num">{fmtMoney(i.grossTuition)}</td>
             </tr>
             <tr>
               <td>Öğrenim Dışı Öğrenci Ücretleri (Brüt)</td>
-              <td className="num">{fmt(i.nonEducationFeesTotal)}</td>
+              <td className="num">{fmtMoney(i.nonEducationFeesTotal)}</td>
             </tr>
             <tr>
               <td>Yurt Gelirleri (Brüt)</td>
-              <td className="num">{fmt(i.dormitoryRevenuesTotal)}</td>
+              <td className="num">{fmtMoney(i.dormitoryRevenuesTotal)}</td>
             </tr>
             <tr style={{ fontWeight: 800 }}>
               <td>Faaliyet Gelirleri (Brüt)</td>
-              <td className="num">{fmt(i.activityGross)}</td>
+              <td className="num">{fmtMoney(i.activityGross)}</td>
             </tr>
             <tr>
               <td>Burs ve İndirimler</td>
-              <td className="num">-{fmt(i.totalDiscounts)}</td>
+              <td className="num">-{fmtMoney(i.totalDiscounts)}</td>
             </tr>
             <tr style={{ fontWeight: 800 }}>
               <td>Net Faaliyet Gelirleri (Net Ciro)</td>
-              <td className="num">{fmt(i.netActivityIncome)}</td>
+              <td className="num">{fmtMoney(i.netActivityIncome)}</td>
             </tr>
             <tr>
               <td>Diğer Gelirler (Brüt + Devlet Teşvikleri)</td>
-              <td className="num">{fmt(i.otherIncomeTotal)}</td>
+              <td className="num">{fmtMoney(i.otherIncomeTotal)}</td>
             </tr>
             <tr style={{ fontWeight: 800 }}>
               <td>Net Toplam Gelir</td>
-              <td className="num">{fmt(i.netIncome)}</td>
+              <td className="num">{fmtMoney(i.netIncome)}</td>
             </tr>
           </tbody>
         </table>
@@ -234,7 +263,7 @@ export default function ReportView({ results }) {
       <div className="grid2" style={{ marginTop: 8 }}>
         <div className="stat">
           <div className="label">Net Kişi Başı Ciro</div>
-          <div className="value">{fmt(k.netCiroPerStudent)}</div>
+          <div className="value">{fmtMoney(k.netCiroPerStudent)}</div>
         </div>
         <div className="stat">
           <div className="label">Diğer Gelirler %</div>
@@ -251,19 +280,19 @@ export default function ReportView({ results }) {
           <tbody>
             <tr>
               <td>İşletme Giderleri Toplamı</td>
-              <td className="num">{fmt(e.operatingExpensesTotal)}</td>
+              <td className="num">{fmtMoney(e.operatingExpensesTotal)}</td>
             </tr>
             <tr>
               <td>Öğrenim Dışı Maliyetler Toplamı</td>
-              <td className="num">{fmt(e.nonTuitionServicesCostTotal)}</td>
+              <td className="num">{fmtMoney(e.nonTuitionServicesCostTotal)}</td>
             </tr>
             <tr>
               <td>Yurt Giderleri Toplamı</td>
-              <td className="num">{fmt(e.dormitoryCostTotal)}</td>
+              <td className="num">{fmtMoney(e.dormitoryCostTotal)}</td>
             </tr>
             <tr style={{ fontWeight: 800 }}>
               <td>Toplam Gider</td>
-              <td className="num">{fmt(e.totalExpenses)}</td>
+              <td className="num">{fmtMoney(e.totalExpenses)}</td>
             </tr>
           </tbody>
         </table>
@@ -276,7 +305,7 @@ export default function ReportView({ results }) {
       <div className="grid2" style={{ marginTop: 6 }}>
         <div className="stat">
           <div className="label">Net Sonuç</div>
-          <div className="value">{fmt(r.netResult)}</div>
+          <div className="value">{fmtMoney(r.netResult)}</div>
         </div>
         <div className="stat">
           <div className="label">Kâr Marjı</div>
@@ -284,11 +313,11 @@ export default function ReportView({ results }) {
         </div>
         <div className="stat">
           <div className="label">Gelir / Öğrenci</div>
-          <div className="value">{fmt(k.revenuePerStudent)}</div>
+          <div className="value">{fmtMoney(k.revenuePerStudent)}</div>
         </div>
         <div className="stat">
           <div className="label">Gider / Öğrenci</div>
-          <div className="value">{fmt(k.costPerStudent)}</div>
+          <div className="value">{fmtMoney(k.costPerStudent)}</div>
         </div>
       </div>
 

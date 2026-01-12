@@ -100,8 +100,10 @@ function computeStudentsFromGrades(gradeInputs, gradeKeys) {
   for (const g of keys) {
     const r = perGradeMap.get(g);
     const branchCount = isFiniteNumber(r.branchCount) ? r.branchCount : 0;
+    // NOTE: In this project, studentsPerBranch now stores TOTAL students for the grade.
+    // (Classes are not assumed to be equal size.)
     const studentsPerBranch = isFiniteNumber(r.studentsPerBranch) ? r.studentsPerBranch : 0;
-    const gradeStudents = branchCount * studentsPerBranch;
+    const gradeStudents = studentsPerBranch;
 
     perGrade.push({ grade: g, branchCount, studentsPerBranch, gradeStudents });
     totalStudents += gradeStudents;

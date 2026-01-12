@@ -7,6 +7,7 @@ const { calculateSchoolFeasibility } = require("../engine/feasibilityEngine");
 const { computeScenarioProgress } = require("../utils/scenarioProgress");
 const { getProgressConfig } = require("../utils/progressConfig");
 const xlsx = require("xlsx");
+const crypto = require("crypto");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -79,6 +80,143 @@ function safeNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+const CURRENCY_CODE_REGEX = /^[A-Z0-9]{2,10}$/;
+
+function normalizeCurrencyCode(code) {
+  return String(code || "").trim().toUpperCase();
+}
+
+function normalizeAcademicYear(value) {
+  const raw = String(value || "").trim();
+  // Accept: "YYYY" or "YYYY-YYYY" where end = start + 1
+  const single = raw.match(/^(\d{4})$/);
+  if (single) return single[1];
+  const range = raw.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (Number.isFinite(start) && Number.isFinite(end) && end === start + 1) {
+      return `${start}-${end}`;
+    }
+  }
+  const err = new Error("Invalid academicYear format. Use YYYY or YYYY-YYYY (end must be start+1).");
+  err.status = 400;
+  throw err;
+}
+
+function parseInputsJson(inputsRaw) {
+  if (inputsRaw == null) return {};
+  if (typeof inputsRaw === "string") {
+    try {
+      return JSON.parse(inputsRaw);
+    } catch (err) {
+      const error = new Error("Invalid inputs JSON");
+      error.status = 400;
+      throw error;
+    }
+  }
+  if (typeof inputsRaw === "object") return inputsRaw;
+  return {};
+}
+
+function cloneInputs(value) {
+  if (!value || typeof value !== "object") return {};
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeInputsToUsd(inputsRaw, scenario) {
+  const inputs = parseInputsJson(inputsRaw);
+  if (!scenario || scenario.input_currency !== "LOCAL") return inputs;
+
+  const fx = Number(scenario.fx_usd_to_local);
+  if (!Number.isFinite(fx) || fx <= 0) {
+    const error = new Error("FX rate required for local currency");
+    error.status = 400;
+    throw error;
+  }
+
+  const out = cloneInputs(inputs);
+  const convert = (obj, key) => {
+    if (!obj || typeof obj !== "object") return;
+    const n = Number(obj[key]);
+    if (Number.isFinite(n)) obj[key] = n / fx;
+  };
+  const convertRows = (rows, key) => {
+    if (!Array.isArray(rows)) return;
+    rows.forEach((row) => convert(row, key));
+  };
+
+  const gelirler = out.gelirler && typeof out.gelirler === "object" ? out.gelirler : {};
+  convertRows(gelirler?.tuition?.rows, "unitFee");
+  convertRows(gelirler?.nonEducationFees?.rows, "unitFee");
+  convertRows(gelirler?.dormitory?.rows, "unitFee");
+  convertRows(gelirler?.otherInstitutionIncome?.rows, "amount");
+  convert(gelirler, "governmentIncentives");
+  convert(gelirler, "tuitionFeePerStudentYearly");
+  convert(gelirler, "lunchFeePerStudentYearly");
+  convert(gelirler, "dormitoryFeePerStudentYearly");
+  convert(gelirler, "otherFeePerStudentYearly");
+
+  const giderler = out.giderler && typeof out.giderler === "object" ? out.giderler : {};
+  const isletmeItems = giderler?.isletme?.items;
+  if (isletmeItems && typeof isletmeItems === "object") {
+    const skipKeys = ["pct", "percent", "ratio", "margin"];
+    Object.entries(isletmeItems).forEach(([key, value]) => {
+      const lower = key.toLowerCase();
+      if (skipKeys.some((token) => lower.includes(token))) return;
+      const n = Number(value);
+      if (Number.isFinite(n)) isletmeItems[key] = n / fx;
+    });
+  }
+
+  const legacyExpenseKeys = [
+    "educationStaffYearlyCostTotal",
+    "managementStaffYearlyCost",
+    "supportStaffYearlyCost",
+    "operationalExpensesYearly",
+  ];
+  legacyExpenseKeys.forEach((key) => convert(giderler, key));
+
+  const convertUnitCostItems = (items) => {
+    if (!items || typeof items !== "object") return;
+    Object.values(items).forEach((row) => convert(row, "unitCost"));
+  };
+  convertUnitCostItems(giderler?.ogrenimDisi?.items);
+  convertUnitCostItems(giderler?.yurt?.items);
+
+  const ik = out.ik && typeof out.ik === "object" ? out.ik : {};
+  const ikYears = ik?.years && typeof ik.years === "object" ? ik.years : {};
+  ["y1", "y2", "y3"].forEach((yearKey) => {
+    const unitCosts = ikYears?.[yearKey]?.unitCosts;
+    if (!unitCosts || typeof unitCosts !== "object") return;
+    Object.entries(unitCosts).forEach(([key, value]) => {
+      const n = Number(value);
+      if (Number.isFinite(n)) unitCosts[key] = n / fx;
+    });
+  });
+  const legacyUnitCosts = ik?.unitCosts;
+  if (legacyUnitCosts && typeof legacyUnitCosts === "object") {
+    Object.entries(legacyUnitCosts).forEach(([key, value]) => {
+      const n = Number(value);
+      if (Number.isFinite(n)) legacyUnitCosts[key] = n / fx;
+    });
+  }
+
+  if (Array.isArray(out.discounts)) {
+    out.discounts = out.discounts.map((d) => {
+      if (!d || typeof d !== "object") return d;
+      const mode = String(d.mode || "percent");
+      if (mode !== "fixed") return d;
+      const n = Number(d.value);
+      if (!Number.isFinite(n)) return d;
+      return { ...d, value: n / fx };
+    });
+  }
+
+  return out;
+}
+
 function extractScenarioYears(results) {
   let parsed = results;
   if (typeof parsed === "string") {
@@ -140,7 +278,7 @@ async function assertSchoolInUserCountry(pool, schoolId, countryId) {
 
 async function assertScenarioInSchool(pool, scenarioId, schoolId) {
   const [[s]] = await pool.query(
-    "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note FROM school_scenarios WHERE id=:id AND school_id=:school_id",
+    "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id AND school_id=:school_id",
     { id: scenarioId, school_id: schoolId }
   );
   return s || null;
@@ -156,14 +294,60 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
     const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
     if (!school) return res.status(404).json({ error: "School not found" });
 
-    const [rows] = await pool.query(
-      `SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, created_by, created_at
-       FROM school_scenarios
-       WHERE school_id=:school_id
-       ORDER BY created_at DESC`,
+    const limitValue = Number(req.query?.limit);
+    const offsetValue = Number(req.query?.offset);
+    const fieldsParam = String(req.query?.fields || "all").toLowerCase();
+    const briefColumns = ["id", "name", "academic_year", "status", "created_at", "submitted_at"];
+    const defaultColumns = [
+      "id",
+      "name",
+      "academic_year",
+      "status",
+      "submitted_at",
+      "reviewed_at",
+      "review_note",
+      "created_by",
+      "created_at",
+      "input_currency",
+      "local_currency_code",
+      "fx_usd_to_local",
+    ];
+    const columns = fieldsParam === "brief" ? briefColumns : defaultColumns;
+
+    const queryParams = { school_id: schoolId };
+    const hasLimit = Number.isFinite(limitValue) && limitValue > 0;
+    const hasOffset = Number.isFinite(offsetValue) && offsetValue >= 0;
+    const limitClause = hasLimit ? ` LIMIT :limit` : "";
+    if (hasLimit) queryParams.limit = limitValue;
+    const offsetClause = hasOffset ? ` OFFSET :offset` : "";
+    if (hasOffset) queryParams.offset = offsetValue;
+
+    const [countRows] = await pool.query(
+      "SELECT COUNT(*) AS total FROM school_scenarios WHERE school_id=:school_id",
       { school_id: schoolId }
     );
-    return res.json(rows);
+    const total = Number(countRows?.[0]?.total ?? 0);
+
+    const sql = `
+      SELECT ${columns.join(", ")}
+      FROM school_scenarios
+      WHERE school_id=:school_id
+      ORDER BY created_at DESC${limitClause}${offsetClause}
+    `;
+    const [rows] = await pool.query(sql, queryParams);
+
+    res.setHeader("X-Total-Scenarios", total);
+    if (!hasLimit && !hasOffset && fieldsParam === "all") {
+      return res.json(rows);
+    }
+
+    return res.json({
+      scenarios: rows,
+      total,
+      limit: hasLimit ? queryParams.limit : null,
+      offset: hasOffset ? queryParams.offset : 0,
+      fields: fieldsParam,
+    });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
@@ -176,8 +360,27 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
 router.post("/schools/:schoolId/scenarios", async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
-    const { name, academicYear, kademeConfig } = req.body || {};
+    const { name, academicYear, kademeConfig, inputCurrency, localCurrencyCode, fxUsdToLocal } = req.body || {};
     if (!name || !academicYear) return res.status(400).json({ error: "name and academicYear required" });
+    const academicYearNorm = normalizeAcademicYear(academicYear);
+    const inputCurrencyValue = String(inputCurrency || "USD").trim().toUpperCase();
+    if (!["USD", "LOCAL"].includes(inputCurrencyValue)) {
+      return res.status(400).json({ error: "Invalid inputCurrency" });
+    }
+
+    let localCode = null;
+    let fxValue = null;
+    if (inputCurrencyValue === "LOCAL") {
+      localCode = normalizeCurrencyCode(localCurrencyCode);
+      if (!CURRENCY_CODE_REGEX.test(localCode)) {
+        return res.status(400).json({ error: "Invalid localCurrencyCode" });
+      }
+      const fxNum = Number(fxUsdToLocal);
+      if (!Number.isFinite(fxNum) || fxNum <= 0) {
+        return res.status(400).json({ error: "Invalid fxUsdToLocal" });
+      }
+      fxValue = fxNum;
+    }
 
     const pool = getPool();
     const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
@@ -186,10 +389,37 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
       return res.status(409).json({ error: "School is closed; cannot create new scenarios." });
     }
 
-    const [r] = await pool.query(
-      "INSERT INTO school_scenarios (school_id, name, academic_year, created_by) VALUES (:school_id,:name,:year,:created_by)",
-      { school_id: schoolId, name, year: academicYear, created_by: req.user.id }
+    const [[existing]] = await pool.query(
+      "SELECT id FROM school_scenarios WHERE school_id=:school_id AND academic_year=:year LIMIT 1",
+      { school_id: schoolId, year: academicYearNorm }
     );
+    if (existing?.id) {
+      return res.status(409).json({ error: "This academic year already has a scenario." });
+    }
+
+    let r;
+    try {
+      [r] = await pool.query(
+      `INSERT INTO school_scenarios
+        (school_id, name, academic_year, input_currency, local_currency_code, fx_usd_to_local, created_by)
+       VALUES
+        (:school_id,:name,:year,:input_currency,:local_currency_code,:fx_usd_to_local,:created_by)`,
+      {
+        school_id: schoolId,
+        name,
+        year: academicYearNorm,
+        input_currency: inputCurrencyValue,
+        local_currency_code: localCode,
+        fx_usd_to_local: fxValue,
+        created_by: req.user.id,
+      }
+    );
+    } catch (e) {
+      if (e && (e.code === "ER_DUP_ENTRY" || e.errno === 1062)) {
+        return res.status(409).json({ error: "This academic year already has a scenario." });
+      }
+      throw e;
+    }
 
     // default inputs
     const defaultGrades = [
@@ -455,7 +685,14 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
       { scenario_id: r.insertId, json: JSON.stringify(defaultInputs), updated_by: req.user.id }
     );
 
-    return res.json({ id: r.insertId, name, academic_year: academicYear });
+    return res.json({
+      id: r.insertId,
+      name,
+      academic_year: academicYear,
+      input_currency: inputCurrencyValue,
+      local_currency_code: localCode,
+      fx_usd_to_local: fxValue,
+    });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
@@ -472,12 +709,14 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
     const name = req.body?.name;
     const academicYear = req.body?.academicYear;
     const kademeConfig = req.body?.kademeConfig;
+    const hasLocalCurrencyCode = req.body?.localCurrencyCode != null;
+    const hasFxUsdToLocal = req.body?.fxUsdToLocal != null;
 
     const hasName = typeof name === "string";
     const hasYear = typeof academicYear === "string";
     const hasKademe = kademeConfig && typeof kademeConfig === "object";
-    if (!hasName && !hasYear && !hasKademe) {
-      return res.status(400).json({ error: "name, academicYear, or kademeConfig required" });
+    if (!hasName && !hasYear && !hasKademe && !hasLocalCurrencyCode && !hasFxUsdToLocal) {
+      return res.status(400).json({ error: "name, academicYear, kademeConfig, or local currency fields required" });
     }
     if (hasName && !String(name).trim()) {
       return res.status(400).json({ error: "name is required" });
@@ -497,6 +736,15 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
       return res.status(409).json({ error: "Scenario locked. Awaiting admin review." });
     }
 
+    if (req.body?.inputCurrency != null || req.body?.input_currency != null) {
+      return res.status(409).json({ error: "input_currency cannot be changed" });
+    }
+
+    const wantsLocalUpdate = hasLocalCurrencyCode || hasFxUsdToLocal;
+    if (wantsLocalUpdate && scenario.input_currency !== "LOCAL") {
+      return res.status(409).json({ error: "local currency fields can only be updated for LOCAL scenarios" });
+    }
+
     const updates = [];
     const params = { id: scenarioId, school_id: schoolId };
     if (hasName) {
@@ -504,15 +752,57 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
       params.name = String(name).trim();
     }
     if (hasYear) {
+      const normalizedYear = normalizeAcademicYear(academicYear);
+      // If changing to a different year, enforce uniqueness per school
+      const currentYear = String(scenario.academic_year || "").trim();
+      if (normalizedYear !== currentYear) {
+        const [[dup]] = await pool.query(
+          "SELECT id FROM school_scenarios WHERE school_id=:school_id AND academic_year=:year AND id<>:id LIMIT 1",
+          { school_id: schoolId, year: normalizedYear, id: scenarioId }
+        );
+        if (dup?.id) {
+          return res.status(409).json({ error: "This academic year already has a scenario." });
+        }
+      }
       updates.push("academic_year=:year");
-      params.year = String(academicYear).trim();
+      params.year = normalizedYear;
+    }
+
+    let nextLocalCode = scenario.local_currency_code ?? null;
+    let nextFx = scenario.fx_usd_to_local != null ? Number(scenario.fx_usd_to_local) : null;
+    if (scenario.input_currency === "LOCAL") {
+      if (hasLocalCurrencyCode) {
+        const normalized = normalizeCurrencyCode(req.body?.localCurrencyCode);
+        if (!CURRENCY_CODE_REGEX.test(normalized)) {
+          return res.status(400).json({ error: "Invalid localCurrencyCode" });
+        }
+        nextLocalCode = normalized;
+        updates.push("local_currency_code=:local_currency_code");
+        params.local_currency_code = normalized;
+      }
+      if (hasFxUsdToLocal) {
+        const fxNum = Number(req.body?.fxUsdToLocal);
+        if (!Number.isFinite(fxNum) || fxNum <= 0) {
+          return res.status(400).json({ error: "Invalid fxUsdToLocal" });
+        }
+        nextFx = fxNum;
+        updates.push("fx_usd_to_local=:fx_usd_to_local");
+        params.fx_usd_to_local = fxNum;
+      }
     }
 
     if (updates.length) {
-      await pool.query(
-        `UPDATE school_scenarios SET ${updates.join(", ")} WHERE id=:id AND school_id=:school_id`,
-        params
-      );
+      try {
+        await pool.query(
+          `UPDATE school_scenarios SET ${updates.join(", ")} WHERE id=:id AND school_id=:school_id`,
+          params
+        );
+      } catch (e) {
+        if (e && (e.code === "ER_DUP_ENTRY" || e.errno === 1062)) {
+          return res.status(409).json({ error: "This academic year already has a scenario." });
+        }
+        throw e;
+      }
     }
 
     if (hasKademe) {
@@ -522,15 +812,7 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
       );
       if (!row) return res.status(404).json({ error: "Inputs not found" });
 
-      let inputs = row.inputs_json;
-      if (typeof inputs === "string") {
-        try {
-          inputs = JSON.parse(inputs);
-        } catch (_) {
-          inputs = {};
-        }
-      }
-      if (!inputs || typeof inputs !== "object") inputs = {};
+      const inputs = parseInputsJson(row.inputs_json);
       inputs.temelBilgiler =
         inputs.temelBilgiler && typeof inputs.temelBilgiler === "object" ? inputs.temelBilgiler : {};
       inputs.temelBilgiler.kademeler = normalizeKademeConfig(kademeConfig);
@@ -541,13 +823,24 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
       );
     }
 
+    const shouldClearCache =
+      scenario.input_currency === "LOCAL" &&
+      ((hasLocalCurrencyCode && nextLocalCode !== (scenario.local_currency_code ?? null)) ||
+        (hasFxUsdToLocal && !Number.isNaN(nextFx) && Math.abs(Number(nextFx) - Number(scenario.fx_usd_to_local || 0)) > 1e-9));
+
+    if (shouldClearCache) {
+      await pool.query("DELETE FROM scenario_results WHERE scenario_id=:id", { id: scenarioId });
+      await pool.query("DELETE FROM scenario_kpis WHERE scenario_id=:id", { id: scenarioId });
+    }
+
     const [[updated]] = await pool.query(
-      "SELECT id, name, academic_year FROM school_scenarios WHERE id=:id",
+      "SELECT id, name, academic_year, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id",
       { id: scenarioId }
     );
 
     return res.json({ scenario: updated || null });
   } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });
@@ -604,8 +897,10 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/inputs", async (req, res) =
     );
     if (!row) return res.status(404).json({ error: "Inputs not found" });
 
-    return res.json({ inputs: row.inputs_json, updatedAt: row.updated_at, scenario });
+    const inputs = parseInputsJson(row.inputs_json);
+    return res.json({ inputs, updatedAt: row.updated_at, scenario });
   } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });
@@ -672,7 +967,8 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/calculate", async (req, re
     if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
 
     const normConfig = normalizeNormConfigRow(normRow);
-    const results = calculateSchoolFeasibility(inputsRow.inputs_json, normConfig);
+    const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
+    const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
 
     // upsert cache
     await pool.query(
@@ -683,6 +979,7 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/calculate", async (req, re
 
     return res.json({ results });
   } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });
@@ -714,17 +1011,7 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
     );
     if (!inputsRow) return res.status(404).json({ error: "Inputs not found" });
 
-    let inputsForProgress = inputsRow.inputs_json;
-    if (typeof inputsForProgress === "string") {
-      try {
-        inputsForProgress = JSON.parse(inputsForProgress);
-      } catch (_) {
-        inputsForProgress = {};
-      }
-    }
-    if (!inputsForProgress || typeof inputsForProgress !== "object") {
-      inputsForProgress = {};
-    }
+    const inputsForProgress = parseInputsJson(inputsRow.inputs_json);
 
     const [[cached]] = await pool.query(
       "SELECT results_json FROM scenario_results WHERE scenario_id=:id",
@@ -739,7 +1026,8 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
     const normConfig = normRow ? normalizeNormConfigRow(normRow) : null;
     if (!results) {
       if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
-      results = calculateSchoolFeasibility(inputsRow.inputs_json, normConfig);
+      const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
+      results = calculateSchoolFeasibility(inputsForCalc, normConfig);
 
       await pool.query(
         "INSERT INTO scenario_results (scenario_id, results_json, calculated_by) VALUES (:id,:json,:u) ON DUPLICATE KEY UPDATE results_json=VALUES(results_json), calculated_by=VALUES(calculated_by), calculated_at=CURRENT_TIMESTAMP",
@@ -786,12 +1074,13 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
     );
 
     const [[updated]] = await pool.query(
-      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note FROM school_scenarios WHERE id=:id",
+      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id",
       { id: scenarioId }
     );
 
     return res.json({ scenario: updated || null });
   } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });
@@ -816,24 +1105,54 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
       "SELECT results_json, calculated_at FROM scenario_results WHERE scenario_id=:id",
       { id: scenarioId }
     );
-    if (cache && cache.results_json)
-      return res.json({ results: cache.results_json, calculatedAt: cache.calculated_at, cached: true });
 
-    // else calculate
-    const [[inputsRow]] = await pool.query(
-      "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
-      { id: scenarioId }
-    );
-    const [[normRow]] = await pool.query(
-      "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
-      { id: schoolId }
-    );
+    let resultsPayload = null;
+    let resultsString = null;
+    let calculatedAt = cache?.calculated_at ?? null;
+    let servedFromCache = false;
 
-    const normConfig = normalizeNormConfigRow(normRow);
-    const results = calculateSchoolFeasibility(inputsRow.inputs_json, normConfig);
+    if (cache && cache.results_json) {
+      resultsPayload = cache.results_json;
+      resultsString = cache.results_json;
+      servedFromCache = true;
+    } else {
+      const [[inputsRow]] = await pool.query(
+        "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
+        { id: scenarioId }
+      );
+      if (!inputsRow) return res.status(404).json({ error: "Inputs not found" });
 
-    return res.json({ results, cached: false });
+      const [[normRow]] = await pool.query(
+        "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
+        { id: schoolId }
+      );
+      if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
+
+      const normConfig = normalizeNormConfigRow(normRow);
+      const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
+      const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
+
+      const serialized = JSON.stringify(results);
+      resultsPayload = results;
+      resultsString = serialized;
+      calculatedAt = null;
+    }
+
+    const etag = crypto.createHash("sha1").update(resultsString).digest("hex");
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      return res.status(304).end();
+    }
+
+    res.setHeader("ETag", etag);
+    res.setHeader("Cache-Control", "private, max-age=60");
+    return res.json({
+      results: resultsPayload,
+      cached: servedFromCache,
+      calculatedAt,
+    });
   } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });
@@ -859,6 +1178,23 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
+    const reportCurrency = String(req.query?.reportCurrency || "usd").toLowerCase();
+    if (!["usd", "local"].includes(reportCurrency)) {
+      return res.status(400).json({ error: "Invalid reportCurrency" });
+    }
+
+    const localCode = scenario.local_currency_code;
+    const fxRate = Number(scenario.fx_usd_to_local);
+    const showLocal = reportCurrency === "local";
+    if (showLocal) {
+      if (scenario.input_currency !== "LOCAL") {
+        return res.status(400).json({ error: "Local report requires LOCAL scenario" });
+      }
+      if (!localCode || !Number.isFinite(fxRate) || fxRate <= 0) {
+        return res.status(400).json({ error: "FX rate and local currency code required" });
+      }
+    }
+
     const [[inputsRow]] = await pool.query(
       "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
       { id: scenarioId }
@@ -868,9 +1204,10 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       { id: schoolId }
     );
 
-    const inputs = inputsRow?.inputs_json || {};
+    const inputs = parseInputsJson(inputsRow?.inputs_json);
     const normConfig = normalizeNormConfigRow(normRow);
-    const results = calculateSchoolFeasibility(inputs, normConfig);
+    const inputsForCalc = normalizeInputsToUsd(inputsRow?.inputs_json, scenario);
+    const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
 
     const years = results?.years || { y1: results, y2: null, y3: null };
 
@@ -887,6 +1224,17 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const n = (v) => {
       const x = Number(v);
       return Number.isFinite(x) ? x : 0;
+    };
+    const money = (v) => {
+      const x = Number(v);
+      if (!Number.isFinite(x)) return 0;
+      return showLocal ? x * fxRate : x;
+    };
+    const withCurrencyLabels = (rows) => {
+      if (!showLocal || !localCode) return rows;
+      return rows.map((row) =>
+        row.map((cell) => (typeof cell === "string" ? cell.replace("(USD)", `(${localCode})`) : cell))
+      );
     };
 
     // IK salary mapping (same as engine)
@@ -1073,15 +1421,15 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
     gelirlerSheet.push(["ÖZET"]);
     gelirlerSheet.push(["", "Y1", "Y2", "Y3"]);
-    gelirlerSheet.push(["FAALİYET GELİRLERİ (Brüt)", n(y1?.income?.activityGross), n(y2?.income?.activityGross), n(y3?.income?.activityGross)]);
-    gelirlerSheet.push(["BURS VE İNDİRİMLER", n(y1?.income?.totalDiscounts), n(y2?.income?.totalDiscounts), n(y3?.income?.totalDiscounts)]);
-    gelirlerSheet.push(["NET FAALİYET GELİRLERİ", n(y1?.income?.netActivityIncome), n(y2?.income?.netActivityIncome), n(y3?.income?.netActivityIncome)]);
-    gelirlerSheet.push(["NET KİŞİ BAŞI CİRO", n(y1?.kpis?.netCiroPerStudent), n(y2?.kpis?.netCiroPerStudent), n(y3?.kpis?.netCiroPerStudent)]);
-    gelirlerSheet.push(["DİĞER GELİRLER (Brüt + Devlet Teşvikleri)", n(y1?.income?.otherIncomeTotal), n(y2?.income?.otherIncomeTotal), n(y3?.income?.otherIncomeTotal)]);
+    gelirlerSheet.push(["FAALİYET GELİRLERİ (Brüt)", money(y1?.income?.activityGross), money(y2?.income?.activityGross), money(y3?.income?.activityGross)]);
+    gelirlerSheet.push(["BURS VE İNDİRİMLER", money(y1?.income?.totalDiscounts), money(y2?.income?.totalDiscounts), money(y3?.income?.totalDiscounts)]);
+    gelirlerSheet.push(["NET FAALİYET GELİRLERİ", money(y1?.income?.netActivityIncome), money(y2?.income?.netActivityIncome), money(y3?.income?.netActivityIncome)]);
+    gelirlerSheet.push(["NET KİŞİ BAŞI CİRO", money(y1?.kpis?.netCiroPerStudent), money(y2?.kpis?.netCiroPerStudent), money(y3?.kpis?.netCiroPerStudent)]);
+    gelirlerSheet.push(["DİĞER GELİRLER (Brüt + Devlet Teşvikleri)", money(y1?.income?.otherIncomeTotal), money(y2?.income?.otherIncomeTotal), money(y3?.income?.otherIncomeTotal)]);
     gelirlerSheet.push(["DİĞER GELİRLER %", n(y1?.income?.otherIncomeRatio), n(y2?.income?.otherIncomeRatio), n(y3?.income?.otherIncomeRatio)]);
-    gelirlerSheet.push(["NET TOPLAM GELİR", n(y1?.income?.netIncome), n(y2?.income?.netIncome), n(y3?.income?.netIncome)]);
+    gelirlerSheet.push(["NET TOPLAM GELİR", money(y1?.income?.netIncome), money(y2?.income?.netIncome), money(y3?.income?.netIncome)]);
 
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(gelirlerSheet), "gelirler");
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(withCurrencyLabels(gelirlerSheet)), "gelirler");
 
     // GİDERLER (3Y)
     const gider = inputs.giderler || {};
@@ -1264,9 +1612,9 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const pct = Math.max(0, Math.min(n(dIn.value || 0), 1));
       const count = tuitionStudents > 0 ? Math.round(tuitionStudents * ratio) : 0;
 
-      const amt1 = n(d1.get(name)?.amount) || 0;
-      const amt2 = n(d2.get(name)?.amount) || 0;
-      const amt3 = n(d3.get(name)?.amount) || 0;
+      const amt1 = money(d1.get(name)?.amount);
+      const amt2 = money(d2.get(name)?.amount);
+      const amt3 = money(d3.get(name)?.amount);
 
       bursStudents += count;
       weightedPctSum += count * pct;
@@ -1283,11 +1631,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     // Expenses summary
     giderlerSheet.push(["ÖZET"]);
     giderlerSheet.push(["", "Y1", "Y2", "Y3"]);
-    giderlerSheet.push(["TOPLAM GİDER", n(y1?.expenses?.totalExpenses), n(y2?.expenses?.totalExpenses), n(y3?.expenses?.totalExpenses)]);
-    giderlerSheet.push(["NET SONUÇ", n(y1?.result?.netResult), n(y2?.result?.netResult), n(y3?.result?.netResult)]);
+    giderlerSheet.push(["TOPLAM GİDER", money(y1?.expenses?.totalExpenses), money(y2?.expenses?.totalExpenses), money(y3?.expenses?.totalExpenses)]);
+    giderlerSheet.push(["NET SONUÇ", money(y1?.result?.netResult), money(y2?.result?.netResult), money(y3?.result?.netResult)]);
     giderlerSheet.push(["KÂR MARJI", n(y1?.kpis?.profitMargin), n(y2?.kpis?.profitMargin), n(y3?.kpis?.profitMargin)]);
 
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(giderlerSheet), "Giderler");
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(withCurrencyLabels(giderlerSheet)), "Giderler");
 
     // n.kadro (norm insights) - year-1
     const nk = [["Grade", "Branches", "Weekly Teaching Hours"]];
@@ -1301,11 +1649,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       ["Metric", "Y1", "Y2", "Y3"],
       ["Total Students", n(y1?.students?.totalStudents), n(y2?.students?.totalStudents), n(y3?.students?.totalStudents)],
       ["Utilization", n(y1?.students?.utilizationRate), n(y2?.students?.utilizationRate), n(y3?.students?.utilizationRate)],
-      ["Net Income", n(y1?.income?.netIncome), n(y2?.income?.netIncome), n(y3?.income?.netIncome)],
-      ["Total Expenses", n(y1?.expenses?.totalExpenses), n(y2?.expenses?.totalExpenses), n(y3?.expenses?.totalExpenses)],
-      ["Net Result", n(y1?.result?.netResult), n(y2?.result?.netResult), n(y3?.result?.netResult)],
-      ["Revenue/Student", n(y1?.kpis?.revenuePerStudent), n(y2?.kpis?.revenuePerStudent), n(y3?.kpis?.revenuePerStudent)],
-      ["Cost/Student", n(y1?.kpis?.costPerStudent), n(y2?.kpis?.costPerStudent), n(y3?.kpis?.costPerStudent)],
+      ["Net Income", money(y1?.income?.netIncome), money(y2?.income?.netIncome), money(y3?.income?.netIncome)],
+      ["Total Expenses", money(y1?.expenses?.totalExpenses), money(y2?.expenses?.totalExpenses), money(y3?.expenses?.totalExpenses)],
+      ["Net Result", money(y1?.result?.netResult), money(y2?.result?.netResult), money(y3?.result?.netResult)],
+      ["Revenue/Student", money(y1?.kpis?.revenuePerStudent), money(y2?.kpis?.revenuePerStudent), money(y3?.kpis?.revenuePerStudent)],
+      ["Cost/Student", money(y1?.kpis?.costPerStudent), money(y2?.kpis?.costPerStudent), money(y3?.kpis?.costPerStudent)],
       ["Profit Margin", n(y1?.kpis?.profitMargin), n(y2?.kpis?.profitMargin), n(y3?.kpis?.profitMargin)],
     ];
     xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(rapor), "rapor");
@@ -1313,9 +1661,13 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=\"${school.name}-${scenario.academic_year}.xlsx\"`);
+    const baseName = showLocal
+      ? `${school.name}-${scenario.academic_year}-${localCode}.xlsx`
+      : `${school.name}-${scenario.academic_year}.xlsx`;
+    res.setHeader("Content-Disposition", `attachment; filename=\"${baseName}\"`);
     return res.send(buf);
   } catch (e) {
+    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });

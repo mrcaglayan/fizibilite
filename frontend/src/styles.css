@@ -1356,7 +1356,9 @@ hr {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
 }
 .auth-input-eye:hover {
   color: #0f172a;
@@ -2027,7 +2029,11 @@ hr {
 }
 .school-page .school-tab > * {
   position: relative;
-  z-index: 1;
+}
+
+.school-page .school-tab:hover::after {
+  transform: translate(-6px, -6px) scale(2.5) rotate(-3deg);
+  opacity: 1;
 }
 .school-page .school-tab:hover {
   background: transparent;

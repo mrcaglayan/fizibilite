@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 
 const authRoutes = require("./routes/auth");
 const adminRoutes = require("./routes/admin");
@@ -20,6 +21,8 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || "*",
   credentials: false
 }));
+
+app.use(compression());
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -41,7 +44,17 @@ app.use("/api/meta", metaRoutes);
 const backendBuildPath = path.join(__dirname, "..", "build");
 const frontendBuildPath = path.join(__dirname, "..", "..", "frontend", "build");
 const buildPath = fs.existsSync(backendBuildPath) ? backendBuildPath : frontendBuildPath;
-app.use(express.static(buildPath));
+const isProduction = process.env.NODE_ENV === "production";
+const staticCacheOptions = {
+  maxAge: isProduction ? 30 * 24 * 60 * 60 * 1000 : 0,
+  immutable: isProduction,
+  setHeaders(res, filePath) {
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-cache");
+    }
+  },
+};
+app.use(express.static(buildPath, staticCacheOptions));
 app.get("*", (req, res) => {
   const indexPath = path.join(buildPath, "index.html");
   if (!fs.existsSync(indexPath)) {

@@ -190,7 +190,8 @@ export default function TemelBilgilerEditor({
 
     // fallback: derive from gradesCurrent if entered
     const list = Array.isArray(gradesCurrent) ? gradesCurrent : [];
-    return list.reduce((s, r) => s + safeNum(r.branchCount) * safeNum(r.studentsPerBranch), 0);
+    // gradesCurrent studentsPerBranch is TOTAL students per grade
+    return list.reduce((s, r) => s + safeNum(r.studentsPerBranch), 0);
   }, [kapasite, gradesCurrent]);
 
   const totalBranchesCurrent = useMemo(() => {

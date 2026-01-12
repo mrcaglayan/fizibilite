@@ -77,7 +77,7 @@ export default function LoginPage() {
             <input
               id="login-email"
               className="auth-input"
-              placeholder="isim@okul.org"
+              placeholder="e-mail"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -88,7 +88,7 @@ export default function LoginPage() {
               <input
                 id="login-password"
                 className="auth-input"
-                placeholder="?ifreniz"
+                placeholder="Şifreniz"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

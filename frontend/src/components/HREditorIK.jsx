@@ -234,6 +234,7 @@ export default function HREditorIK({
   kademeConfig,
   onChange,
   onSalaryComputed,
+  currencyCode = "USD",
   dirtyPaths,
   onDirty,
   uiScopeKey,
@@ -377,7 +378,8 @@ export default function HREditorIK({
         <table className="table data-table ik-compact-table">
           <thead>
             <tr>
-              {/* ✅ 3 satır header var artık */}
+              {/* �
+ 3 satır header var artık */}
               <th className="ik-compact-level" rowSpan={3}>
                 Kademeler
               </th>
@@ -401,7 +403,8 @@ export default function HREditorIK({
               ))}
             </tr>
 
-            {/* ✅ Yeni header satırı: Yıllar (dinamik) */}
+            {/* �
+ Yeni header satırı: Yıllar (dinamik) */}
             <tr>
               {ALL_ROLES.map((r) => (
                 <th key={`yr-${r.key}`} className={`ik-year-head ${cellDividerClass(r.key)}`}>
@@ -422,7 +425,7 @@ export default function HREditorIK({
           <tbody>
             <tr>
               <td className="ik-compact-level ik-compact-title">
-                Birim İşveren Maliyeti / YIL (USD)
+                {`Birim İşveren Maliyeti / YIL (${currencyCode})`}
               </td>
 
               {ALL_ROLES.map((r) => (
@@ -550,7 +553,7 @@ export default function HREditorIK({
               <th>Gider Anahtarı</th>
               {YEARS.map((y) => (
                 <th key={`map-${y.key}`} className="cell-num">
-                  {y.label} (USD)
+                  {`${y.label} (${currencyCode})`}
                 </th>
               ))}
             </tr>

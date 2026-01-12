@@ -89,7 +89,8 @@ export function summarizeGradesByKademe(grades, config) {
   const out = { okulOncesi: 0, ilkokul: 0, ortaokul: 0, lise: 0, total: 0 };
 
   for (const r of rows) {
-    const students = Number(r?.branchCount || 0) * Number(r?.studentsPerBranch || 0);
+    // studentsPerBranch now represents TOTAL students for the grade (not per-branch).
+    const students = Number(r?.studentsPerBranch || 0);
     if (!Number.isFinite(students)) continue;
     out.total += students;
     const key = getKademeForGrade(r?.grade, config);

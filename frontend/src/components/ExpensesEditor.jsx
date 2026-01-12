@@ -151,7 +151,8 @@ function defaultGiderler() {
 
 function computeTotalStudents(grades) {
   const list = Array.isArray(grades) ? grades : [];
-  return list.reduce((sum, r) => sum + toNum(r?.branchCount) * toNum(r?.studentsPerBranch), 0);
+  // studentsPerBranch now represents TOTAL students for the grade (not per-branch)
+  return list.reduce((sum, r) => sum + toNum(r?.studentsPerBranch), 0);
 }
 
 // ---- IK salary mapping (same formula as HR tab) ----
@@ -269,6 +270,7 @@ export default function ExpensesEditor({
   gelirler,
   discounts,
   onDiscountsChange,
+  currencyCode = "USD",
   temelBilgiler,
   ik,
   dirtyPaths,
@@ -539,16 +541,7 @@ export default function ExpensesEditor({
     onDirty?.(discountPath(name, "value"), pct);
   }
 
-  function loadDefaultBurs() {
-    const next = BURS_DEFAULTS.map((r) => ({ name: r.name, mode: "percent", value: 0, ratio: 0 }));
-    onDiscountsChange?.(next);
-    if (onDirty) {
-      BURS_DEFAULTS.forEach((r) => {
-        onDirty(discountPath(r.name, "ratio"), 0);
-        onDirty(discountPath(r.name, "value"), 0);
-      });
-    }
-  }
+
 
   useEffect(() => {
     if (!onDiscountsChange) return;
@@ -622,7 +615,7 @@ export default function ExpensesEditor({
       </div>
 
       {/* SECTION 1 */}
-      <div style={{ marginTop: 14, fontWeight: 800 }}>GİDERLER (İŞLETME) / YIL (USD)</div>
+      <div style={{ marginTop: 14, fontWeight: 800 }}>{`GİDERLER (İŞLETME) / YIL (${currencyCode})`}</div>
       <div className="table-scroll no-vert-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y expenses-3block expenses-main">
           <thead>
@@ -636,17 +629,17 @@ export default function ExpensesEditor({
               <th colSpan={4} className="sep-left exp-year-head" style={{ textAlign: "center" }}>{yearMeta.y3.labelLong}</th>
             </tr>
             <tr>
-              <th className="sep-left exp-col-total cell-num">Toplam (USD)</th>
+              <th className="sep-left exp-col-total cell-num">{`Toplam (${currencyCode})`}</th>
               <th className="exp-col-pct cell-num"><div className="exp-th-wrap"><div>İşletme Giderleri</div><div>Toplamı içindeki %</div></div></th>
               <th className="exp-col-pct cell-num"><div className="exp-th-wrap"><div>Toplam Ciro</div><div>içindeki %</div></div></th>
 
               <th className="sep-left exp-col-yoy cell-num"><div className="exp-th-wrap"><div>Tahmini</div><div>artış %</div></div></th>
-              <th className="exp-col-total cell-num">Toplam (USD)</th>
+              <th className="exp-col-total cell-num">{`Toplam (${currencyCode})`}</th>
               <th className="exp-col-pct cell-num"><div className="exp-th-wrap"><div>İşletme Giderleri</div><div>Toplamı içindeki %</div></div></th>
               <th className="exp-col-pct cell-num"><div className="exp-th-wrap"><div>Toplam Ciro</div><div>içindeki %</div></div></th>
 
               <th className="sep-left exp-col-yoy cell-num"><div className="exp-th-wrap"><div>Tahmini</div><div>artış %</div></div></th>
-              <th className="exp-col-total cell-num">Toplam (USD)</th>
+              <th className="exp-col-total cell-num">{`Toplam (${currencyCode})`}</th>
               <th className="exp-col-pct cell-num"><div className="exp-th-wrap"><div>İşletme Giderleri</div><div>Toplamı içindeki %</div></div></th>
               <th className="exp-col-pct cell-num"><div className="exp-th-wrap"><div>Toplam Ciro</div><div>içindeki %</div></div></th>
             </tr>
@@ -906,9 +899,6 @@ export default function ExpensesEditor({
       {/* SECTION 4 */}
       <div className="row" style={{ marginTop: 18, justifyContent: "space-between" }}>
         <div style={{ fontWeight: 800 }}>BURS VE İNDİRİMLER / YIL</div>
-        <button className="btn" type="button" onClick={loadDefaultBurs}>
-          Excel kategorilerini yükle
-        </button>
       </div>
 
       <div className="table-scroll no-vert-scroll" style={{ marginTop: 8 }}>

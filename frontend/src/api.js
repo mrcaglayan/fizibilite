@@ -61,9 +61,10 @@ async function request(path, { method = "GET", body, token } = {}) {
   }
 }
 
-async function downloadXlsx(schoolId, scenarioId) {
+async function downloadXlsx(schoolId, scenarioId, reportCurrency = "usd") {
+  const qs = toQuery({ reportCurrency });
   const res = await fetch(
-    `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx`,
+    `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx${qs}`,
     { method: "GET", headers: getAuthHeaders() }
   );
 
@@ -148,7 +149,8 @@ export const api = {
   adminGetRollup: (params = {}) => request(`/admin/reports/rollup${toQuery(params)}`),
 
   downloadXlsx,
-  exportXlsxUrl: (schoolId, scenarioId) => `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx`,
+  exportXlsxUrl: (schoolId, scenarioId, reportCurrency = "usd") =>
+    `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx${toQuery({ reportCurrency })}`,
   adminExportRollupXlsxUrl: (academicYear) =>
     `${API_BASE}/admin/reports/rollup.xlsx${toQuery({ academicYear })}`,
 };

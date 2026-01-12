@@ -2,6 +2,7 @@
 
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const { getPool } = require("../db");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { getProgressConfig, parseJsonValue } = require("../utils/progressConfig");
@@ -232,6 +233,59 @@ router.post("/users", async (req, res) => {
       country_code: country?.code ?? null,
       role,
       region,
+      must_reset_password: true,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+function generateTemporaryPassword(length = 12) {
+  // Avoid ambiguous characters (0/O, 1/l/I) for easier sharing.
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*?";
+  const bytes = crypto.randomBytes(Math.max(12, Number(length) || 12));
+  let out = "";
+  for (let i = 0; i < bytes.length && out.length < length; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+/**
+ * POST /admin/users/:id/reset-password
+ * Resets a user's password and returns a temporary password (admin-only).
+ * Body (optional): { password }  // if omitted, a strong random password is generated
+ */
+router.post("/users/:id/reset-password", async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+
+    const customPasswordRaw = req.body?.password;
+    const temporaryPassword =
+      customPasswordRaw != null && String(customPasswordRaw).trim()
+        ? String(customPasswordRaw)
+        : generateTemporaryPassword(12);
+
+    if (String(temporaryPassword).length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+
+    const pool = getPool();
+    const [[user]] = await pool.query("SELECT id, email FROM users WHERE id=:id", { id: userId });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const password_hash = await bcrypt.hash(String(temporaryPassword), 10);
+    await pool.query(
+      "UPDATE users SET password_hash=:password_hash, must_reset_password=1 WHERE id=:id",
+      { id: userId, password_hash }
+    );
+
+    return res.json({
+      ok: true,
+      user_id: userId,
+      email: user.email,
+      temporary_password: temporaryPassword,
       must_reset_password: true,
     });
   } catch (e) {
@@ -525,6 +579,9 @@ router.get("/scenarios/queue", async (req, res) => {
         sc.submitted_at,
         sc.review_note,
         sc.reviewed_at,
+        sc.input_currency,
+        sc.local_currency_code,
+        sc.fx_usd_to_local,
         sc.progress_pct,
         sc.progress_json,
         sc.progress_calculated_at,
@@ -567,6 +624,9 @@ router.get("/scenarios/queue", async (req, res) => {
           submitted_at: row.submitted_at,
           review_note: row.review_note,
           reviewed_at: row.reviewed_at,
+          input_currency: row.input_currency,
+          local_currency_code: row.local_currency_code,
+          fx_usd_to_local: row.fx_usd_to_local,
           progress_pct: row.progress_pct != null ? Number(row.progress_pct) : null,
           progress_json: progressJson,
           progress_calculated_at: row.progress_calculated_at,
@@ -679,7 +739,7 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
     }
 
     const [[updated]] = await pool.query(
-      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note FROM school_scenarios WHERE id=:id",
+      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id",
       { id: scenarioId }
     );
     return res.json({ scenario: updated || null });

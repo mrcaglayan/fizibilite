@@ -105,6 +105,9 @@ export default function AdminPage() {
   const [userUpdateLoading, setUserUpdateLoading] = useState(false);
   const [confirmAssign, setConfirmAssign] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [confirmReset, setConfirmReset] = useState(null);
+  const [resetResult, setResetResult] = useState(null);
+  const [resetLoadingId, setResetLoadingId] = useState(null);
 
   const [countryName, setCountryName] = useState("");
   const [countryCode, setCountryCode] = useState("");
@@ -573,6 +576,93 @@ export default function AdminPage() {
     }
   }
 
+  function getAuthTokenFromStorage() {
+    try {
+      const keys = ["token", "auth_token", "jwt", "access_token"];
+      for (const k of keys) {
+        const v = window?.localStorage?.getItem(k);
+        if (v) return String(v);
+      }
+    } catch {
+      // ignore
+    }
+    return "";
+  }
+
+  async function adminResetUserPassword(userId) {
+    const token = getAuthTokenFromStorage();
+    const res = await fetch(`/api/admin/users/${userId}/reset-password`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({}),
+    });
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+    if (!res.ok) {
+      const msg = data?.error || data?.details || `Reset failed (${res.status})`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  async function resetPasswordForUser(user) {
+    if (!user?.id) return;
+    setConfirmReset({ id: user.id, email: user.email, full_name: user.full_name || null });
+  }
+
+  async function confirmResetPassword(data) {
+    if (!data?.id) return;
+    if (resetLoadingId) return;
+    setResetLoadingId(data.id);
+    try {
+      const out = await adminResetUserPassword(data.id);
+      setResetResult({
+        id: data.id,
+        email: data.email,
+        full_name: data.full_name || null,
+        temporary_password: out.temporary_password,
+      });
+      await load();
+      toast.success("Temporary password generated");
+    } catch (e) {
+      toast.error(e.message || "Reset failed");
+    } finally {
+      setResetLoadingId(null);
+    }
+  }
+
+  async function copyText(text) {
+    const value = String(text || "");
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success("Copied");
+      return;
+    } catch {
+      // fallback
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      toast.success("Copied");
+    } catch {
+      toast.error("Copy failed");
+    }
+  }
+
   async function saveSchoolName(school) {
     if (!school?.id) return;
     const draft = schoolNameDrafts[school.id];
@@ -992,6 +1082,93 @@ export default function AdminPage() {
         </div>
       ) : null}
 
+      {resetLoadingId ? (
+        <div className="modal-backdrop" role="status" aria-live="polite" aria-busy="true">
+          <style>{`@keyframes adminSpin{to{transform:rotate(360deg)}}`}</style>
+          <div
+            className="card"
+            style={{
+              width: "min(360px, 92vw)",
+              padding: "16px",
+              textAlign: "center",
+            }}
+          >
+            <div
+              aria-hidden
+              style={{
+                width: 28,
+                height: 28,
+                margin: "0 auto",
+                borderRadius: "50%",
+                border: "3px solid rgba(0,0,0,.15)",
+                borderTopColor: "rgba(0,0,0,.75)",
+                animation: "adminSpin .8s linear infinite",
+              }}
+            />
+            <div style={{ fontWeight: 700, marginTop: 10 }}>Resetting password...</div>
+            <div className="small muted" style={{ marginTop: 6 }}>
+              Please wait.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmReset ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal">
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Reset Password</div>
+            <div className="small" style={{ marginBottom: 12 }}>
+              {`Generate a new temporary password for ${confirmReset.email}? The user will be forced to change it on next login.`}
+            </div>
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setConfirmReset(null)} disabled={Boolean(resetLoadingId)}>
+                Cancel
+              </button>
+              <button
+                className="btn primary"
+                onClick={() => {
+                  const data = confirmReset;
+                  setConfirmReset(null);
+                  confirmResetPassword(data);
+                }}
+                disabled={Boolean(resetLoadingId)}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {resetResult ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal" style={{ maxWidth: 560 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Temporary Password</div>
+            <div className="small" style={{ marginBottom: 10 }}>
+              Share this password securely with the user. It will only be shown once here.
+            </div>
+            <div className="card" style={{ padding: 12, background: "rgba(0,0,0,.03)" }}>
+              <div className="small" style={{ marginBottom: 6 }}>
+                User: <strong>{resetResult.email}</strong>
+              </div>
+              <div className="row" style={{ alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace", fontSize: 18 }}>
+                  {resetResult.temporary_password}
+                </div>
+                <button className="btn" onClick={() => copyText(resetResult.temporary_password)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+              <button className="btn primary" onClick={() => setResetResult(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {reviewModal ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal">
@@ -1182,6 +1359,13 @@ export default function AdminPage() {
                         <div className="row">
                           <button className="btn" onClick={() => setAssignUserId(String(u.id))}>
                             Edit
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={() => resetPasswordForUser(u)}
+                            disabled={Boolean(resetLoadingId)}
+                          >
+                            Reset password
                           </button>
                           <button className="btn" onClick={() => deleteUser(u)}>
                             Delete

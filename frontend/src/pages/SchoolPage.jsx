@@ -53,6 +53,8 @@ const INPUT_HEADER_TABS = new Set(["basics", "kapasite", "income", "expenses", "
 
 const DEFAULT_START_YEAR = "2026";
 const DEFAULT_END_YEAR = "2027";
+const CURRENCY_CODE_REGEX = /^[A-Z0-9]{2,10}$/;
+const LOCAL_CURRENCY_OPTIONS = ["USD", "EUR", "TRY", "GBP", "JPY", "CNY", "INR", "RUB", "AED", "SAR", "AFN"];
 
 function normalizeYearInput(value) {
   const s = String(value || "").trim();
@@ -85,6 +87,22 @@ function parseAcademicYear(academicYear) {
     if (Number.isFinite(startYear)) return { startYear, endYear: startYear };
   }
   return { startYear: null, endYear: null };
+}
+
+function incrementAcademicYearString(academicYear) {
+  const raw = String(academicYear || "").trim();
+  const single = raw.match(/^(\d{4})$/);
+  if (single) {
+    const start = Number(single[1]);
+    return Number.isFinite(start) ? String(start + 1) : "";
+  }
+  const range = raw.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (Number.isFinite(start) && Number.isFinite(end)) return `${start + 1}-${end + 1}`;
+  }
+  return "";
 }
 
 function pctValue(tab) {
@@ -139,17 +157,20 @@ export default function SchoolPage() {
   const [newScenarioStartYear, setNewScenarioStartYear] = useState(DEFAULT_START_YEAR);
   const [newScenarioEndYear, setNewScenarioEndYear] = useState(DEFAULT_END_YEAR);
   const [newScenarioKademeler, setNewScenarioKademeler] = useState(getDefaultKademeConfig());
+  const [newScenarioInputCurrency, setNewScenarioInputCurrency] = useState("USD");
+  const [newScenarioLocalCurrencyCode, setNewScenarioLocalCurrencyCode] = useState("");
+  const [newScenarioFxUsdToLocal, setNewScenarioFxUsdToLocal] = useState("");
   const [newScenarioStep, setNewScenarioStep] = useState(0);
   const [scenarioWizardOpen, setScenarioWizardOpen] = useState(false);
   const [scenarioWizardMode, setScenarioWizardMode] = useState("create");
   const [scenarioWizardScenario, setScenarioWizardScenario] = useState(null);
   const [scenarioWizardLoading, setScenarioWizardLoading] = useState(false);
   const [scenarioWizardSaving, setScenarioWizardSaving] = useState(false);
-const [selectedScenarioId, setSelectedScenarioId] = useScenarioUiState(
-  "school.selectedScenarioId",
-  null,
-  { scope: `school:${schoolId}` }
-);
+  const [selectedScenarioId, setSelectedScenarioId] = useScenarioUiState(
+    "school.selectedScenarioId",
+    null,
+    { scope: `school:${schoolId}` }
+  );
   // inputs
   const [inputs, setInputs] = useState(null);
   const [inputsSaving, setInputsSaving] = useState(false);
@@ -177,9 +198,10 @@ const [selectedScenarioId, setSelectedScenarioId] = useScenarioUiState(
   const [bootLoadingLabel, setBootLoadingLabel] = useState("Okul açılıyor...");
 
   const uiScopeKey = useMemo(
-  () => `school:${schoolId}:scenario:${selectedScenarioId ?? "none"}`,
-  [schoolId, selectedScenarioId]
-);
+    () => `school:${schoolId}:scenario:${selectedScenarioId ?? "none"}`,
+    [schoolId, selectedScenarioId]
+  );
+  const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
   const [tab, setTab] = useScenarioUiString("school.activeTab", "scenarios", { scope: uiScopeKey });
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -271,21 +293,50 @@ const [selectedScenarioId, setSelectedScenarioId] = useScenarioUiState(
   const draftEndYear = normalizeYearInput(newScenarioEndYear);
   const draftAcademicYear = formatAcademicYear(newScenarioPeriod, newScenarioStartYear, newScenarioEndYear);
   const draftRangeOk = newScenarioPeriod === "full" || (draftStartYear != null && draftEndYear === draftStartYear + 1);
+  const yearConflict = useMemo(() => {
+    if (!draftAcademicYear) return false;
+    const excludeId =
+      scenarioWizardMode === "edit"
+        ? Number(scenarioWizardScenario?.id || selectedScenarioId || 0)
+        : null;
+    return scenarios.some(
+      (s) =>
+        String(s?.academic_year || "").trim() === String(draftAcademicYear).trim() &&
+        (excludeId == null || Number(s?.id) !== excludeId)
+    );
+  }, [draftAcademicYear, scenarios, scenarioWizardMode, scenarioWizardScenario?.id, selectedScenarioId]);
+
   const draftKademeConfig = useMemo(() => normalizeKademeConfig(newScenarioKademeler), [newScenarioKademeler]);
   const hasEnabledKademe = useMemo(
     () => Object.values(draftKademeConfig).some((row) => row && row.enabled),
     [draftKademeConfig]
   );
+  const normalizedLocalCode = String(newScenarioLocalCurrencyCode || "").trim().toUpperCase();
+  const localCodeOk = newScenarioInputCurrency !== "LOCAL" || CURRENCY_CODE_REGEX.test(normalizedLocalCode);
+  const fxValue = Number(newScenarioFxUsdToLocal);
+  const fxOk = newScenarioInputCurrency !== "LOCAL" || (Number.isFinite(fxValue) && fxValue > 0);
+  const currencyStepOk = newScenarioInputCurrency === "USD" || (localCodeOk && fxOk);
   const draftReady =
-    Boolean(newScenarioName.trim()) && Boolean(draftAcademicYear) && draftRangeOk && hasEnabledKademe;
-  const scenarioStepTotal = 4;
-  const scenarioStepLabels = ["Dönem Türü", "Yıl", "Kademeler", "Senaryo Adı"];
+    Boolean(newScenarioName.trim()) &&
+    Boolean(draftAcademicYear) &&
+    draftRangeOk &&
+    !yearConflict &&
+    hasEnabledKademe &&
+    currencyStepOk;
+  const scenarioStepTotal = 5;
+  const scenarioStepLabels = ["Donem Turu", "Para Birimi", "Yil", "Kademeler", "Senaryo Adi"];
   const scenarioStepOk = [
     true,
-    Boolean(draftAcademicYear) && draftRangeOk,
+    currencyStepOk,
+    Boolean(draftAcademicYear) && draftRangeOk && !yearConflict,
     hasEnabledKademe,
     draftReady,
   ];
+  const inputCurrencyCode =
+    selectedScenario?.input_currency === "LOCAL"
+      ? (selectedScenario.local_currency_code || "LOCAL")
+      : "USD";
+
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
 
@@ -700,11 +751,11 @@ const [selectedScenarioId, setSelectedScenarioId] = useScenarioUiState(
 
 
 
-if (sc.length) {
-  const exists =
-    selectedScenarioId != null && sc.some((x) => String(x.id) === String(selectedScenarioId));
-  if (!exists) setSelectedScenarioId(sc[0].id);
-}      setBootLoading(false);
+      if (sc.length) {
+        const exists =
+          selectedScenarioId != null && sc.some((x) => String(x.id) === String(selectedScenarioId));
+        if (!exists) setSelectedScenarioId(sc[0].id);
+      } setBootLoading(false);
 
     } catch (e) {
       setErr(e.message || "Failed to load school");
@@ -780,6 +831,16 @@ if (sc.length) {
     loadScenario();
   }, [schoolId, selectedScenarioId]);
 
+  useEffect(() => {
+    const isLocal =
+      selectedScenario?.input_currency === "LOCAL" &&
+      Number(selectedScenario?.fx_usd_to_local) > 0 &&
+      selectedScenario?.local_currency_code;
+    if (!isLocal && reportCurrency !== "usd") {
+      setReportCurrency("usd");
+    }
+  }, [selectedScenario?.input_currency, selectedScenario?.fx_usd_to_local, selectedScenario?.local_currency_code, reportCurrency, setReportCurrency]);
+
   function getPrevAcademicYear(academicYear) {
     const { startYear, endYear } = parseAcademicYear(academicYear);
     if (!startYear) return "";
@@ -810,13 +871,28 @@ if (sc.length) {
     loadPrev();
   }, [schoolId, selectedScenario?.academic_year, scenarios]);
 
+  const handleScenarioCurrencyChange = (next) => {
+    setNewScenarioInputCurrency(next);
+    if (next !== "LOCAL") {
+      setNewScenarioLocalCurrencyCode("");
+      setNewScenarioFxUsdToLocal("");
+    }
+  };
+
   function getScenarioStepError(step) {
     if (step === 1) {
+      if (newScenarioInputCurrency === "LOCAL") {
+        if (!localCodeOk) return "Local currency code zorunludur.";
+        if (!fxOk) return "Kur degeri zorunlu ve 0'dan buyuk olmali.";
+      }
+    }
+    if (step === 2) {
       if (!draftAcademicYear) return "Lütfen geçerli bir akademik yıl girin.";
       if (!draftRangeOk) return "Bitiş yılı, başlangıç yılından 1 fazla olmalı.";
+      if (yearConflict) return "Bu yıl türü için zaten bir senaryo var. Lütfen başka bir yıl seçin.";
     }
-    if (step === 2 && !hasEnabledKademe) return "En az bir kademe seçmelisiniz.";
-    if (step === 3 && !newScenarioName.trim()) return "Senaryo adı zorunludur.";
+    if (step === 3 && !hasEnabledKademe) return "En az bir kademe seçmelisiniz.";
+    if (step === 4 && !newScenarioName.trim()) return "Senaryo adı zorunludur.";
     return "";
   }
 
@@ -846,6 +922,9 @@ if (sc.length) {
     setNewScenarioStartYear(DEFAULT_START_YEAR);
     setNewScenarioEndYear(DEFAULT_END_YEAR);
     setNewScenarioKademeler(getDefaultKademeConfig());
+    setNewScenarioInputCurrency("USD");
+    setNewScenarioLocalCurrencyCode("");
+    setNewScenarioFxUsdToLocal("");
     setNewScenarioStep(0);
   }
 
@@ -902,6 +981,12 @@ if (sc.length) {
       setNewScenarioKademeler(
         existingKademe ? normalizeKademeConfig(existingKademe) : getDefaultKademeConfig()
       );
+      const scenarioCurrency = scenario.input_currency || "USD";
+      setNewScenarioInputCurrency(scenarioCurrency);
+      setNewScenarioLocalCurrencyCode(scenario.local_currency_code || "");
+      setNewScenarioFxUsdToLocal(
+        scenario.fx_usd_to_local != null ? String(scenario.fx_usd_to_local) : ""
+      );
     } catch (e) {
       setErr(e.message || "Senaryo yüklenemedi.");
       setScenarioWizardOpen(false);
@@ -929,9 +1014,23 @@ if (sc.length) {
       setErr("Bitiş yılı, başlangıç yılından 1 fazla olmalı.");
       return;
     }
+    if (yearConflict) {
+      setErr("Bu yıl türü için zaten bir senaryo var. Lütfen başka bir yıl seçin.");
+      return;
+    }
     if (!hasEnabledKademe) {
       setErr("En az bir kademe seçmelisiniz.");
       return;
+    }
+    if (newScenarioInputCurrency === "LOCAL") {
+      if (!localCodeOk) {
+        setErr("Local currency code zorunludur.");
+        return;
+      }
+      if (!fxOk) {
+        setErr("Kur degeri zorunlu ve 0'dan buyuk olmali.");
+        return;
+      }
     }
     setErr("");
     setScenarioWizardSaving(true);
@@ -941,6 +1040,9 @@ if (sc.length) {
         name,
         academicYear: draftAcademicYear,
         kademeConfig,
+        inputCurrency: newScenarioInputCurrency,
+        localCurrencyCode: newScenarioInputCurrency === "LOCAL" ? normalizedLocalCode : null,
+        fxUsdToLocal: newScenarioInputCurrency === "LOCAL" ? newScenarioFxUsdToLocal : null,
       });
       setNewScenarioName("");
       const sc = await api.listScenarios(schoolId);
@@ -968,9 +1070,23 @@ if (sc.length) {
       setErr("Bitiş yılı, başlangıç yılından 1 fazla olmalı.");
       return;
     }
+    if (yearConflict) {
+      setErr("Bu yıl türü için zaten bir senaryo var. Lütfen başka bir yıl seçin.");
+      return;
+    }
     if (!hasEnabledKademe) {
       setErr("En az bir kademe seçmelisiniz.");
       return;
+    }
+    if (scenarioWizardScenario?.input_currency === "LOCAL") {
+      if (!localCodeOk) {
+        setErr("Local currency code zorunludur.");
+        return;
+      }
+      if (!fxOk) {
+        setErr("Kur degeri zorunlu ve 0'dan buyuk olmali.");
+        return;
+      }
     }
     setErr("");
     setScenarioWizardSaving(true);
@@ -980,6 +1096,10 @@ if (sc.length) {
         name,
         academicYear: draftAcademicYear,
         kademeConfig,
+        localCurrencyCode:
+          scenarioWizardScenario?.input_currency === "LOCAL" ? normalizedLocalCode : undefined,
+        fxUsdToLocal:
+          scenarioWizardScenario?.input_currency === "LOCAL" ? newScenarioFxUsdToLocal : undefined,
       });
       const sc = await api.listScenarios(schoolId);
       setScenarios(sc);
@@ -987,7 +1107,14 @@ if (sc.length) {
       setTab("basics");
       setSelectedScenario((prev) =>
         prev && prev.id === scenarioWizardScenario.id
-          ? { ...prev, name, academic_year: draftAcademicYear }
+          ? {
+            ...prev,
+            name,
+            academic_year: draftAcademicYear,
+            ...(scenarioWizardScenario?.input_currency === "LOCAL"
+              ? { local_currency_code: normalizedLocalCode, fx_usd_to_local: fxValue }
+              : {}),
+          }
           : prev
       );
       setInputs((prev) => {
@@ -1139,13 +1266,34 @@ if (sc.length) {
     try {
       const baseName = selectedScenario.name || "Senaryo";
       const copyName = `${baseName} (Kopya)`;
+      let candidateYear = incrementAcademicYearString(selectedScenario.academic_year);
+      if (!candidateYear) {
+        throw new Error("Akademik yil formati gecersiz.");
+      }
+      let guard = 0;
+      const hasAcademicYear = (yearStr) =>
+        scenarios.some((s) => String(s?.academic_year || "").trim() === String(yearStr).trim());
+
+      while (hasAcademicYear(candidateYear)) {
+        candidateYear = incrementAcademicYearString(candidateYear);
+        guard += 1;
+        if (!candidateYear || guard > 20) {
+          throw new Error("Uygun yeni akademik yil bulunamadi.");
+        }
+      }
+
       const kademeConfig = normalizeKademeConfig(
         inputs?.temelBilgiler?.kademeler || getDefaultKademeConfig()
       );
       const created = await api.createScenario(schoolId, {
         name: copyName,
-        academicYear: selectedScenario.academic_year,
+        academicYear: candidateYear,
         kademeConfig,
+        inputCurrency: selectedScenario.input_currency || "USD",
+        localCurrencyCode:
+          selectedScenario.input_currency === "LOCAL" ? selectedScenario.local_currency_code || "" : null,
+        fxUsdToLocal:
+          selectedScenario.input_currency === "LOCAL" ? selectedScenario.fx_usd_to_local : null,
       });
 
       let clonedInputs = structuredClone(inputs);
@@ -1208,7 +1356,7 @@ if (sc.length) {
     if (!selectedScenarioId) return;
     setErr("");
     try {
-      await api.downloadXlsx(schoolId, selectedScenarioId);
+      await api.downloadXlsx(schoolId, selectedScenarioId, reportCurrency);
     } catch (e) {
       setErr(e.message || "Download failed");
     }
@@ -1495,10 +1643,10 @@ if (sc.length) {
           >
             <span aria-hidden>&lt;</span>
           </Link>
-    
+
           <div className="school-topbar-text">
             <div className="school-topbar-title">{school?.name || "Okul"}</div>
-    
+
             <div className="school-topbar-sub">
               <span className={"school-pill " + (selectedScenario ? "" : "is-muted")}>
                 {scenarioText}
@@ -1508,7 +1656,7 @@ if (sc.length) {
                   {getScenarioStatusMeta(selectedScenario.status).label}
                 </span>
               ) : null}
-    
+
               {showInputsHeader && inputs ? (
                 <>
                   {inputsDirty ? (
@@ -1531,7 +1679,7 @@ if (sc.length) {
             </div>
           </div>
         </div>
-    
+
         <div className="school-topbar-right">
           {showInputsHeader ? (
             inputs ? (
@@ -1551,7 +1699,7 @@ if (sc.length) {
                 >
                   {inputsSaving ? "Kaydediliyor..." : inputsDirty ? "Kaydet" : "Kaydedildi"}
                 </button>
-    
+
                 <button
                   type="button"
                   className="topbar-btn is-primary"
@@ -1569,7 +1717,7 @@ if (sc.length) {
                 >
                   {calculating ? "Hesaplaniyor..." : calculateLabel}
                 </button>
-    
+
                 {showExportButton ? (
                   <div className="action-menu" ref={exportMenuRef}>
                     <button
@@ -1587,30 +1735,30 @@ if (sc.length) {
                     </button>
                     {exportOpen ? (
                       <div className="action-menu-panel" role="menu">
-                          <button
-                            type="button"
-                            className="action-menu-item"
-                            onClick={() => {
-                              setExportOpen(false);
-                              handleExport();
-                            }}
-                            disabled={exportDisabled}
-                            role="menuitem"
-                          >
-                            Excel (.xlsx)
-                          </button>
-                          <button
-                            type="button"
-                            className="action-menu-item"
-                            onClick={() => {
-                              setExportOpen(false);
-                              handleExportPdf();
-                            }}
-                            disabled={exportDisabled}
-                            role="menuitem"
-                          >
-                            PDF (.pdf)
-                          </button>
+                        <button
+                          type="button"
+                          className="action-menu-item"
+                          onClick={() => {
+                            setExportOpen(false);
+                            handleExport();
+                          }}
+                          disabled={exportDisabled}
+                          role="menuitem"
+                        >
+                          Excel (.xlsx)
+                        </button>
+                        <button
+                          type="button"
+                          className="action-menu-item"
+                          onClick={() => {
+                            setExportOpen(false);
+                            handleExportPdf();
+                          }}
+                          disabled={exportDisabled}
+                          role="menuitem"
+                        >
+                          PDF (.pdf)
+                        </button>
                       </div>
                     ) : null}
                   </div>
@@ -1758,6 +1906,82 @@ if (sc.length) {
 
                 {newScenarioStep === 1 && (
                   <div style={{ marginTop: 10 }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Para Birimi</div>
+                    <div className="row" style={{ gap: 12, alignItems: "center" }}>
+                      <label className="row" style={{ gap: 6, alignItems: "center" }}>
+                        <input
+                          type="radio"
+                          name="scenario-currency"
+                          checked={newScenarioInputCurrency === "USD"}
+                          onChange={() => handleScenarioCurrencyChange("USD")}
+                          disabled={scenarioWizardMode === "edit"}
+                        />
+                        <span>USD</span>
+                      </label>
+                      <label className="row" style={{ gap: 6, alignItems: "center" }}>
+                        <input
+                          type="radio"
+                          name="scenario-currency"
+                          checked={newScenarioInputCurrency === "LOCAL"}
+                          onChange={() => handleScenarioCurrencyChange("LOCAL")}
+                          disabled={scenarioWizardMode === "edit"}
+                        />
+                        <span>Local currency</span>
+                      </label>
+                    </div>
+
+                    {newScenarioInputCurrency === "LOCAL" && (
+                      <div style={{ marginTop: 10 }}>
+                        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                          <div className="small" style={{ fontWeight: 700 }}>Local currency code</div>
+                          <input
+                            className="input sm"
+                            list="local-currency-codes"
+                            placeholder="TRY"
+                            value={newScenarioLocalCurrencyCode}
+                            onChange={(e) =>
+                              setNewScenarioLocalCurrencyCode(
+                                e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)
+                              )
+                            }
+                          />
+                          <datalist id="local-currency-codes">
+                            {LOCAL_CURRENCY_OPTIONS.map((code) => (
+                              <option key={code} value={code} />
+                            ))}
+                          </datalist>
+                        </div>
+                        {!localCodeOk ? (
+                          <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>
+                            Code 2-10 chars, A-Z0-9.
+                          </div>
+                        ) : null}
+
+                        <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10 }}>
+                          <span>1 USD =</span>
+                          <input
+                            className="input sm"
+                            type="number"
+                            step="0.000001"
+                            value={newScenarioFxUsdToLocal}
+                            onChange={(e) => setNewScenarioFxUsdToLocal(e.target.value)}
+                          />
+                          <span>{normalizedLocalCode || "LOCAL"}</span>
+                        </div>
+                        {!fxOk ? (
+                          <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>
+                            FX rate must be {'>'} 0.
+                          </div>
+                        ) : null}
+                        <div className="small muted" style={{ marginTop: 6 }}>
+                          Kur formati: 1 USD = X LOCAL
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {newScenarioStep === 2 && (
+                  <div style={{ marginTop: 10 }}>
                     <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Yıl</div>
                     {newScenarioPeriod === "full" ? (
                       <input
@@ -1790,11 +2014,16 @@ if (sc.length) {
                           Bitiş yılı, başlangıç yılından 1 fazla olmalı.
                         </span>
                       ) : null}
+                      {draftAcademicYear && yearConflict ? (
+                        <span style={{ color: "#b91c1c", marginLeft: 8 }}>
+                          Bu yıl türü için zaten bir senaryo var.
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 )}
 
-                {newScenarioStep === 2 && (
+                {newScenarioStep === 3 && (
                   <div style={{ marginTop: 10 }}>
                     <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Kademeler</div>
                     <table className="table">
@@ -1854,7 +2083,7 @@ if (sc.length) {
                   </div>
                 )}
 
-                {newScenarioStep === 3 && (
+                {newScenarioStep === 4 && (
                   <div style={{ marginTop: 10 }}>
                     <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Senaryo Adı</div>
                     <div className="row">
@@ -1985,16 +2214,9 @@ if (sc.length) {
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <div style={{ fontWeight: 800 }}>Senaryolar</div>
-              <div className="small">Her akademik yıl için ayrı senaryo oluşturabilirsiniz.</div>
+              <div className="small">Her yıl türü için (2026 veya 2026-2027) tek senaryo oluşturabilirsiniz.</div>
             </div>
             <div className="row">
-              <Link style={{
-                textDecoration: "none",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                lineHeight: 1,
-              }} className="btn" to="/schools">Okullara Dön</Link>
               <button className="btn primary" onClick={openScenarioWizardCreate}>Yeni Senaryo</button>
             </div>
           </div>
@@ -2004,6 +2226,7 @@ if (sc.length) {
               <tr>
                 <th>Ad</th>
                 <th>Yıl</th>
+                <th>Para Birimi</th>
                 <th>Durum</th>
                 <th>Tarih</th>
                 <th></th>
@@ -2012,7 +2235,7 @@ if (sc.length) {
             <tbody>
               {scenarios.length === 0 ? (
                 <tr>
-                  <td colSpan="5" className="small">
+                  <td colSpan="6" className="small">
                     Henüz senaryo yok.
                   </td>
                 </tr>
@@ -2029,79 +2252,84 @@ if (sc.length) {
                   const canCopy = isSelected && inputs;
                   const isSubmitting = submittingScenarioId === s.id;
                   const isCopying = copyingScenarioId === s.id;
+                  const currencyLabel =
+                    s.input_currency === "LOCAL"
+                      ? `${s.local_currency_code || "LOCAL"} (LOCAL)`
+                      : "USD";
                   return (
                     <tr key={s.id}>
-                    <td>
-                      <b>{s.name}</b>
-                    </td>
-                    <td>{s.academic_year}</td>
-                    <td>
-                      <span className={`status-badge ${statusMeta.className}`}>
-                        {statusMeta.label}
-                      </span>
-                    </td>
-                    <td className="small">{new Date(s.created_at).toLocaleString()}</td>
-                    <td>
-                      <div className="scenario-actions">
-                        <button
-                          type="button"
-                          className={"btn scenario-action-btn " + (isSelected ? "primary" : "")}
-                          onClick={() => setSelectedScenarioId(s.id)}
-                          disabled={isSelected}
-                          title={isSelected ? "Secili" : "Sec"}
-                        >
-                          <FaCheck />
-                          <span>{isSelected ? "Secildi" : "Sec"}</span>
-                        </button>
-                        {canEdit ? (
+                      <td>
+                        <b>{s.name}</b>
+                      </td>
+                      <td>{s.academic_year}</td>
+                      <td>{currencyLabel}</td>
+                      <td>
+                        <span className={`status-badge ${statusMeta.className}`}>
+                          {statusMeta.label}
+                        </span>
+                      </td>
+                      <td className="small">{new Date(s.created_at).toLocaleString()}</td>
+                      <td>
+                        <div className="scenario-actions">
                           <button
                             type="button"
-                            className="btn scenario-action-btn"
-                            onClick={() => openScenarioWizardEdit(s.id)}
-                            title="Planlamayi Duzenle"
+                            className={"btn scenario-action-btn " + (isSelected ? "primary" : "")}
+                            onClick={() => setSelectedScenarioId(s.id)}
+                            disabled={isSelected}
+                            title={isSelected ? "Secili" : "Sec"}
                           >
-                            <FaEdit />
-                            <span>Planlamayi Duzenle</span>
+                            <FaCheck />
+                            <span>{isSelected ? "Secildi" : "Sec"}</span>
                           </button>
-                        ) : null}
-                        {canCopy ? (
-                          <button
-                            type="button"
-                            className="btn scenario-action-btn"
-                            onClick={copySelectedScenario}
-                            disabled={inputsSaving || calculating || isCopying}
-                            title="Kopyala"
-                          >
-                            <FaCopy />
-                            <span>{isCopying ? "Kopyalaniyor..." : "Kopyala"}</span>
-                          </button>
-                        ) : null}
-                        {canSubmit ? (
-                          <button
-                            type="button"
-                            className="btn primary scenario-action-btn"
-                            onClick={() => submitScenarioForApproval(s.id)}
-                            disabled={inputsSaving || calculating || isSubmitting}
-                            title="Onaya Gonder"
-                          >
-                            <FaPaperPlane />
-                            <span>{isSubmitting ? "Gonderiliyor..." : "Onaya Gonder"}</span>
-                          </button>
-                        ) : null}
-                        {canDelete ? (
-                          <button
-                            type="button"
-                            className="btn danger scenario-action-btn"
-                            onClick={() => deleteScenario(s.id)}
-                            disabled={inputsSaving || calculating}
-                            title="Sil"
-                          >
-                            <FaTrash />
-                            <span>Sil</span>
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              className="btn scenario-action-btn"
+                              onClick={() => openScenarioWizardEdit(s.id)}
+                              title="Planlamayi Duzenle"
+                            >
+                              <FaEdit />
+                              <span>Planlamayi Duzenle</span>
+                            </button>
+                          ) : null}
+                          {canCopy ? (
+                            <button
+                              type="button"
+                              className="btn scenario-action-btn"
+                              onClick={copySelectedScenario}
+                              disabled={inputsSaving || calculating || isCopying}
+                              title="Kopyala"
+                            >
+                              <FaCopy />
+                              <span>{isCopying ? "Kopyalaniyor..." : "Kopyala"}</span>
+                            </button>
+                          ) : null}
+                          {canSubmit ? (
+                            <button
+                              type="button"
+                              className="btn primary scenario-action-btn"
+                              onClick={() => submitScenarioForApproval(s.id)}
+                              disabled={inputsSaving || calculating || isSubmitting}
+                              title="Onaya Gonder"
+                            >
+                              <FaPaperPlane />
+                              <span>{isSubmitting ? "Gonderiliyor..." : "Onaya Gonder"}</span>
+                            </button>
+                          ) : null}
+                          {canDelete ? (
+                            <button
+                              type="button"
+                              className="btn danger scenario-action-btn"
+                              onClick={() => deleteScenario(s.id)}
+                              disabled={inputsSaving || calculating}
+                              title="Sil"
+                            >
+                              <FaTrash />
+                              <span>Sil</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })
@@ -2182,6 +2410,7 @@ if (sc.length) {
                 gradesYears={inputs.gradesYears}
                 grades={inputs.gradesYears?.y1 || inputs.grades}
                 discounts={inputs.discounts}
+                currencyCode={inputCurrencyCode}
                 onChange={(v) => {
                   setField("gelirler", v);
                 }}
@@ -2210,6 +2439,7 @@ if (sc.length) {
                 grades={inputs.grades}
                 gelirler={inputs.gelirler}
                 discounts={inputs.discounts}
+                currencyCode={inputCurrencyCode}
                 onDiscountsChange={(v) => {
                   setField("discounts", v);
                 }}
@@ -2278,6 +2508,7 @@ if (sc.length) {
               <HREditorIK
                 value={inputs.ik}
                 kademeConfig={inputs.temelBilgiler?.kademeler}
+                currencyCode={inputCurrencyCode}
                 onChange={(v) => {
                   setField("ik", v);
                 }}
@@ -2330,7 +2561,12 @@ if (sc.length) {
       {tab === "report" && (
         <div style={{ marginTop: 12 }}>
           <div ref={reportExportRef} data-report-export="1" className="report-export">
-            <ReportView results={report} />
+            <ReportView
+              results={report}
+              currencyMeta={selectedScenario}
+              reportCurrency={reportCurrency}
+              onReportCurrencyChange={setReportCurrency}
+            />
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 //frontend/src/components/NormConfigEditor.jsx
 
 import React, { useMemo, useState } from "react";
-import { getGradeOptions, normalizeKademeConfig } from "../utils/kademe";
+import { getGradeOptions, getKademeDefinitions, getKademeForGrade, formatKademeLabel, normalizeKademeConfig } from "../utils/kademe";
 import NumberInput from "./NumberInput";
 
 const KEY_SEP = "||"; // stored subject key format: "Teacher||Lesson"
@@ -9,6 +9,14 @@ const ALL_GRADES = getGradeOptions();
 const GRADE_INDEX = new Map(ALL_GRADES.map((g, i) => [g, i]));
 const YEAR_KEYS = ["y1", "y2", "y3"];
 const DEFAULT_MAX_HOURS = 24;
+
+const KADEME_DEFS = getKademeDefinitions();
+const KADEME_LABELS = Object.freeze(
+  KADEME_DEFS.reduce((m, d) => {
+    m[d.key] = d.label;
+    return m;
+  }, {})
+);
 
 const EMPTY_ARRAY = Object.freeze([]);
 
@@ -102,7 +110,8 @@ function normalizePlanningGrades(input) {
 
 function totalStudentsFromGrades(grades) {
   const rows = normalizeGrades(grades, ALL_GRADES);
-  return rows.reduce((s, r) => s + safeNum(r.branchCount) * safeNum(r.studentsPerBranch), 0);
+  // studentsPerBranch now represents TOTAL students for the grade (not per-branch)
+  return rows.reduce((s, r) => s + safeNum(r.studentsPerBranch), 0);
 }
 
 function resolveVisibleGrades(kademeConfig) {
@@ -121,6 +130,35 @@ function resolveVisibleGrades(kademeConfig) {
   return list.length ? list : ALL_GRADES;
 }
 
+
+function buildKademeSegments(gradeOrder, kademeConfig) {
+  const order = Array.isArray(gradeOrder) && gradeOrder.length ? gradeOrder : ALL_GRADES;
+  const segments = [];
+
+  let curKey = null;
+  let curGrades = [];
+
+  const push = () => {
+    if (!curGrades.length) return;
+    const key = curKey;
+    const label = key ? formatKademeLabel(KADEME_LABELS[key] || key, kademeConfig, key) : "";
+    segments.push({ key, label, grades: curGrades });
+  };
+
+  for (const g of order) {
+    const k = getKademeForGrade(g, kademeConfig);
+    if (k !== curKey && curGrades.length) {
+      push();
+      curGrades = [];
+    }
+    if (k !== curKey) curKey = k;
+    curGrades.push(g);
+  }
+  push();
+
+  return segments;
+}
+
 function GradeTable({
   title,
   subtitle,
@@ -133,6 +171,7 @@ function GradeTable({
   inputWidth,
   gradeOrder,
   allGrades,
+  kademeConfig,
 }) {
   const visibleOrder = Array.isArray(gradeOrder) && gradeOrder.length ? gradeOrder : ALL_GRADES;
   const fullOrder = Array.isArray(allGrades) && allGrades.length ? allGrades : visibleOrder;
@@ -145,7 +184,8 @@ function GradeTable({
 
   const totals = data.reduce(
     (acc, r) => {
-      const gradeStudents = safeNum(r.branchCount) * safeNum(r.studentsPerBranch);
+      // studentsPerBranch is TOTAL students for the grade.
+      const gradeStudents = safeNum(r.studentsPerBranch);
       acc.totalBranches += safeNum(r.branchCount);
       acc.totalStudents += gradeStudents;
       return acc;
@@ -168,9 +208,9 @@ function GradeTable({
   const totalColStyle = { background: "rgba(0,0,0,0.04)" };
   const rowLabelStyle = { fontWeight: 800, whiteSpace: "nowrap" };
 
-  const LABEL_COL_W = 130;
+  const LABEL_COL_W = 150;
   const GRADE_COL_W = Number.isFinite(gradeColWidth) ? gradeColWidth : 44;
-  const TOTAL_COL_W = 64;
+  const TOTAL_COL_W = 78;
 
   const compactInputStyle = {
     width: Number.isFinite(inputWidth) ? inputWidth : GRADE_COL_W - 4,
@@ -179,6 +219,14 @@ function GradeTable({
     paddingLeft: 4,
     paddingRight: 4,
   };
+
+  const segments = useMemo(() => buildKademeSegments(visibleOrder, kademeConfig), [visibleOrder, kademeConfig]);
+
+  // kademe total students per segment
+  const segmentTotals = useMemo(() => {
+    const byGrade = new Map(data.map((r) => [r.grade, safeNum(r.studentsPerBranch)]));
+    return segments.map((seg) => seg.grades.reduce((s, g) => s + safeNum(byGrade.get(g)), 0));
+  }, [segments, data]);
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
@@ -196,8 +244,48 @@ function GradeTable({
       <div style={{ overflowX: "auto", marginTop: 10 }}>
         <table className="table" style={{ tableLayout: "fixed" }}>
           <thead>
+            {/* Grouping header (Kademe) */}
             <tr>
-              <th style={{ minWidth: LABEL_COL_W, width: LABEL_COL_W, maxWidth: LABEL_COL_W }}></th>
+              <th
+                rowSpan={2}
+                style={{ minWidth: LABEL_COL_W, width: LABEL_COL_W, maxWidth: LABEL_COL_W }}
+              ></th>
+              {segments.map((seg, idx) => (
+                <th
+                  key={`${seg.key || "none"}-${idx}`}
+                  colSpan={seg.grades.length}
+                  style={{
+                    textAlign: "center",
+                    fontWeight: 900,
+                    paddingTop: 6,
+                    paddingBottom: 6,
+                    ...(idx === 0 ? {} : dividerStyle),
+                    background: "rgba(15, 23, 42, 0.03)",
+                  }}
+                  title={seg.label}
+                >
+                  {seg.label}
+                </th>
+              ))}
+              <th
+                rowSpan={2}
+                style={{
+                  textAlign: "right",
+                  minWidth: TOTAL_COL_W,
+                  width: TOTAL_COL_W,
+                  maxWidth: TOTAL_COL_W,
+                  ...dividerStyle,
+                  ...totalColStyle,
+                  paddingLeft: 8,
+                  paddingRight: 8,
+                }}
+              >
+                TOPLAM
+              </th>
+            </tr>
+
+            {/* Grade headers */}
+            <tr>
               {data.map((r, idx) => (
                 <th
                   key={r.grade}
@@ -214,20 +302,6 @@ function GradeTable({
                   {r.grade}
                 </th>
               ))}
-              <th
-                style={{
-                  textAlign: "right",
-                  minWidth: TOTAL_COL_W,
-                  width: TOTAL_COL_W,
-                  maxWidth: TOTAL_COL_W,
-                  ...dividerStyle,
-                  ...totalColStyle,
-                  paddingLeft: 8,
-                  paddingRight: 8,
-                }}
-              >
-                TOPLAM
-              </th>
             </tr>
           </thead>
 
@@ -247,7 +321,6 @@ function GradeTable({
                   <NumberInput
                     className={inputClass("input sm", makePath(r.grade, "branchCount"))}
                     style={compactInputStyle}
-                   
                     min="0"
                     step="1"
                     value={r.branchCount}
@@ -271,7 +344,7 @@ function GradeTable({
             </tr>
 
             <tr>
-              <td style={rowLabelStyle}>Öğrenci / Şube</td>
+              <td style={rowLabelStyle}>Öğrenci</td>
               {data.map((r, idx) => (
                 <td
                   key={r.grade}
@@ -285,7 +358,6 @@ function GradeTable({
                   <NumberInput
                     className={inputClass("input sm", makePath(r.grade, "studentsPerBranch"))}
                     style={compactInputStyle}
-                   
                     min="0"
                     step="1"
                     value={r.studentsPerBranch}
@@ -294,30 +366,39 @@ function GradeTable({
                   />
                 </td>
               ))}
-              <td style={{ textAlign: "right", ...dividerStyle, ...totalColStyle, paddingLeft: 4, paddingRight: 4 }}>
-                —
+              <td
+                style={{
+                  textAlign: "right",
+                  fontWeight: 900,
+                  ...dividerStyle,
+                  ...totalColStyle,
+                  paddingLeft: 4,
+                  paddingRight: 4,
+                }}
+              >
+                {totals.totalStudents.toFixed(0)}
               </td>
             </tr>
 
+            {/* Kademe totals (students only) */}
             <tr>
-              <td style={rowLabelStyle}>Toplam Öğrenci</td>
-              {data.map((r, idx) => {
-                const gradeStudents = safeNum(r.branchCount) * safeNum(r.studentsPerBranch);
-                return (
-                  <td
-                    key={r.grade}
-                    style={{
-                      textAlign: "right",
-                      fontWeight: 900,
-                      ...(idx === 0 ? {} : dividerStyle),
-                      paddingLeft: 4,
-                      paddingRight: 4,
-                    }}
-                  >
-                    {gradeStudents.toFixed(0)}
-                  </td>
-                );
-              })}
+              <td style={rowLabelStyle}>Kademe Toplamı</td>
+              {segments.map((seg, idx) => (
+                <td
+                  key={`seg-total-${idx}`}
+                  colSpan={seg.grades.length}
+                  style={{
+                    textAlign: "right",
+                    fontWeight: 900,
+                    ...(idx === 0 ? {} : dividerStyle),
+                    background: "rgba(15, 23, 42, 0.03)",
+                    paddingLeft: 8,
+                    paddingRight: 8,
+                  }}
+                >
+                  {safeNum(segmentTotals[idx]).toFixed(0)}
+                </td>
+              ))}
               <td
                 style={{
                   textAlign: "right",
@@ -337,6 +418,7 @@ function GradeTable({
     </div>
   );
 }
+
 
 export default function NormConfigEditor({
   value,
@@ -710,13 +792,13 @@ export default function NormConfigEditor({
   const planKpis = useMemo(() => {
     const totalBranches = visibleGrades.reduce((s, g) => s + safeNum(branchByGrade[g]), 0);
     const totalStudents = visibleGrades.reduce(
-      (s, g) => s + safeNum(branchByGrade[g]) * safeNum(studentsPerBranchByGrade[g]),
+      (s, g) => s + safeNum(studentsPerBranchByGrade[g]),
       0
     );
 
     const kgBranches = visibleGrades.includes("KG") ? safeNum(branchByGrade["KG"]) : 0;
     const kgStudents = visibleGrades.includes("KG")
-      ? safeNum(branchByGrade["KG"]) * safeNum(studentsPerBranchByGrade["KG"])
+      ? safeNum(studentsPerBranchByGrade["KG"])
       : 0;
 
     // Okul öncesi kademesinde 50 öğrenciye 1 personel istihdamı yapılır.
@@ -793,7 +875,7 @@ export default function NormConfigEditor({
               <div className="small">Öğretmen Haftalık Max Saat ({yearLabel(activeYear)})</div>
               <NumberInput
                 className={inputClass("input sm", normPath("teacherWeeklyMaxHours"))}
-               
+
                 min="1"
                 step="1"
                 value={teacherWeeklyMaxHours}
@@ -933,7 +1015,7 @@ export default function NormConfigEditor({
 
       <GradeTable
         title="PLANLANAN DÖNEM BİLGİLERİ"
-        subtitle="Her sınıf düzeyi için şube sayısı ve şube başına öğrenci sayısı (senaryo)."
+        subtitle="Her sınıf düzeyi için şube sayısı ve öğrenci sayısı (senaryo)."
         grades={activePlanningGrades}
         onChange={setPlanningGrades}
         dirtyPaths={dirtyPaths}
@@ -943,11 +1025,12 @@ export default function NormConfigEditor({
         inputWidth={24}
         gradeOrder={visibleGrades}
         allGrades={ALL_GRADES}
+        kademeConfig={kademeConfig}
       />
 
       <GradeTable
         title="MEVCUT DÖNEM BİLGİLERİ"
-        subtitle="Mevcut dönem şube ve öğrenci sayıları (karşılaştırma için)."
+        subtitle="Mevcut dönem şube ve toplam öğrenci sayıları (karşılaştırma için)."
         grades={currentGrades}
         onChange={canEditCurrent ? onCurrentGradesChange : null}
         dirtyPaths={dirtyPaths}
@@ -955,6 +1038,7 @@ export default function NormConfigEditor({
         pathPrefix="inputs.gradesCurrent"
         gradeOrder={visibleGrades}
         allGrades={ALL_GRADES}
+        kademeConfig={kademeConfig}
       />
 
       {!canEditCurrent ? (
@@ -1087,7 +1171,7 @@ export default function NormConfigEditor({
                             paddingLeft: 4,
                             paddingRight: 4,
                           }}
-                         
+
                           min="0"
                           step="0.25"
                           value={safeNum(curriculumWeeklyHours?.[g]?.[r.key])}

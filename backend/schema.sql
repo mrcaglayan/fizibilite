@@ -75,6 +75,9 @@ CREATE TABLE `school_scenarios` (
   `school_id` bigint NOT NULL,
   `name` varchar(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `academic_year` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `input_currency` enum('USD','LOCAL') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'USD',
+  `local_currency_code` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `fx_usd_to_local` decimal(18,6) DEFAULT NULL,
   `status` enum('draft','submitted','revision_requested','approved') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `submitted_at` timestamp NULL DEFAULT NULL,
   `submitted_by` bigint DEFAULT NULL,
@@ -91,13 +94,23 @@ CREATE TABLE `school_scenarios` (
   KEY `idx_scenarios_school` (`school_id`),
   KEY `fk_scenarios_submitted_by` (`submitted_by`),
   KEY `fk_scenarios_reviewed_by` (`reviewed_by`),
-  KEY `idx_scenarios_school_year` (`school_id`,`academic_year`),
+  UNIQUE KEY `uniq_scenarios_school_year` (`school_id`,`academic_year`),
   KEY `idx_scenarios_status_year` (`status`,`academic_year`),
   CONSTRAINT `fk_scenarios_reviewed_by` FOREIGN KEY (`reviewed_by`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_scenarios_submitted_by` FOREIGN KEY (`submitted_by`) REFERENCES `users` (`id`),
   CONSTRAINT `school_scenarios_ibfk_1` FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
   CONSTRAINT `school_scenarios_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Migration helper:
+-- ALTER TABLE school_scenarios
+--   ADD COLUMN input_currency ENUM('USD','LOCAL') NOT NULL DEFAULT 'USD',
+--   ADD COLUMN local_currency_code VARCHAR(10) NULL,
+--   ADD COLUMN fx_usd_to_local DECIMAL(18,6) NULL;
+
+-- Migration helper (uniqueness per school+academic_year):
+-- ALTER TABLE school_scenarios DROP INDEX idx_scenarios_school_year;
+-- ALTER TABLE school_scenarios ADD UNIQUE KEY uniq_scenarios_school_year (school_id, academic_year);
 
 
 CREATE TABLE `school_reporting_scenarios` (
