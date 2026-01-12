@@ -44,7 +44,7 @@ export default function LoginPage() {
       <div className="auth-grid">
         <section className="auth-hero">
           <div className="auth-badge">Feasibility Studio</div>
-          <h1 className="auth-title">Ücret Belirleme Modülüne hoş geldiniz.</h1>
+          <h1 className="auth-title">Ücret Belirleme ufuk Modülüne hoş geldiniz.</h1>
           <p className="auth-subtitle">
             Gelir, kapasite ve personel ihtiyaçlarını tek bir yerde modelleyin. Yöneticiler hesap sağlar ve kimlik bilgilerini güvenli şekilde paylaşır.
           </p>
