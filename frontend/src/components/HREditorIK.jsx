@@ -378,7 +378,7 @@ export default function HREditorIK({
         <table className="table data-table ik-compact-table">
           <thead>
             <tr>
-              {/* �
+              {/* �
  3 satır header var artık */}
               <th className="ik-compact-level" rowSpan={3}>
                 Kademeler
@@ -403,7 +403,7 @@ export default function HREditorIK({
               ))}
             </tr>
 
-            {/* �
+            {/* �
  Yeni header satırı: Yıllar (dinamik) */}
             <tr>
               {ALL_ROLES.map((r) => (

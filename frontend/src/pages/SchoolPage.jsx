@@ -1209,8 +1209,74 @@ export default function SchoolPage() {
     }
   }
 
+
+  // --- Guard: prevent calculating / submitting if Y2 & Y3 planned student totals are missing ---
+  function sumPlannedStudents(grades) {
+    const list = Array.isArray(grades) ? grades : [];
+    let sum = 0;
+    for (const row of list) {
+      const n = Number(row?.studentsPerBranch ?? 0);
+      if (Number.isFinite(n)) sum += n;
+    }
+    return sum;
+  }
+
+  function getPlannedStudentTotalsByYear(srcInputs) {
+    const s = srcInputs && typeof srcInputs === "object" ? srcInputs : {};
+    const years = s.gradesYears && typeof s.gradesYears === "object" ? s.gradesYears : {};
+    return {
+      y1: sumPlannedStudents(Array.isArray(years.y1) ? years.y1 : s.grades),
+      y2: sumPlannedStudents(years.y2),
+      y3: sumPlannedStudents(years.y3),
+    };
+  }
+
+
+  function showBlockingToast(message) {
+    // Small bottom-right notification (does not affect page layout)
+    toast.warn(message, {
+      toastId: "norm-y2y3-missing",
+      position: "bottom-right",
+      autoClose: false,
+      closeOnClick: false,
+      draggable: true,
+      icon: "⚠️",
+      style: {
+        background: "rgba(15, 23, 42, 0.96)",
+        color: "#f8fafc",
+        border: "1px solid rgba(251, 191, 36, 0.35)",
+        boxShadow: "0 18px 40px rgba(0,0,0,.28)",
+        borderRadius: 14,
+      },
+    });
+  }
+
+  function ensurePlanningStudentsForY2Y3(actionLabel = "Islem") {
+    // If inputs are not loaded yet, don't block here (other guards will handle it)
+    if (!inputs) return true;
+
+    const totals = getPlannedStudentTotalsByYear(inputs);
+    const missing = [];
+    if (!(totals.y2 > 0)) missing.push("Y2");
+    if (!(totals.y3 > 0)) missing.push("Y3");
+    if (!missing.length) return true;
+
+    const msg =
+      `${actionLabel} yapilamaz: Norm > Planlanan Donem Bilgileri bolumunde ` +
+      `${missing.join(" ve ")} toplam ogrenci 0 gorunuyor. Lutfen Y2/Y3 ogrenci sayilarini girin.`;
+
+    // Do NOT set page-level err here (it breaks layout). Use toast only.
+    setErr("");
+    showBlockingToast(msg);
+
+    if (tab !== "norm") setTab("norm");
+    return false;
+  }
+
+
   async function calculate(options = {}) {
     if (!selectedScenarioId) return;
+    if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return;
     setCalculating(true);
     setErr("");
     try {
@@ -1227,6 +1293,7 @@ export default function SchoolPage() {
 
   async function submitScenarioForApproval(scenarioId) {
     if (!scenarioId || scenarioId !== selectedScenarioId) return;
+    if (!ensurePlanningStudentsForY2Y3("Onaya gonderme")) return;
     if (submittingScenarioId) return;
 
     setErr("");
@@ -1549,14 +1616,114 @@ export default function SchoolPage() {
     return cur;
   }
 
+// ...existing code...
   function getBaselineValue(path) {
     if (!path) return undefined;
     const parts = path.split(".");
     if (!parts.length) return undefined;
-    if (parts[0] === "inputs") return getValueAtPath(baselineInputs, parts.slice(1));
+    if (parts[0] === "inputs") {
+      const val = getValueAtPath(baselineInputs, parts.slice(1));
+      if (val !== undefined) return val;
+
+      const last = parts[parts.length - 1];
+
+      // If field ends with Y2/Y3 try base field fallback (e.g. unitCostY2 -> unitCost)
+      if (last.endsWith("Y2") || last.endsWith("Y3")) {
+        const suffix = last.endsWith("Y2") ? "Y2" : "Y3";
+        const baseField = last.slice(0, -2);
+        const baseVal = getValueAtPath(baselineInputs, parts.slice(1, -1).concat(baseField));
+        if (baseVal !== undefined) {
+          // For unitCost-like fields, return the inflation-adjusted derived value so UI matches display logic
+          if (baseField === "unitCost" || baseField.startsWith("unitCost")) {
+            const infl = getValueAtPath(baselineInputs, ["temelBilgiler", "inflation"]) || {};
+            const y2f = 1 + Number(infl?.y2 || 0);
+            const y3f = y2f * (1 + Number(infl?.y3 || 0));
+            return suffix === "Y2" ? Number(baseVal) * y2f : Number(baseVal) * y3f;
+          }
+          // Other Y2/Y3 fields (studentCountY2, ratioY2, valueY2, etc.) fall back to base field
+          return baseVal;
+        }
+      }
+
+      // studentCountY2/Y3 fallback -> studentCount
+      if ((last === "studentCountY2" || last === "studentCountY3") && baselineInputs) {
+        const parent = getValueAtPath(baselineInputs, parts.slice(1, -1));
+        if (parent && typeof parent === "object") {
+          const sc = parent.studentCount;
+          if (sc != null) return sc;
+        }
+      }
+
+      // kapasite / year fallbacks handled elsewhere above; generic years fallback:
+      const yearsIdx = parts.indexOf("years");
+      if (yearsIdx >= 0 && parts.length > yearsIdx + 1 && baselineInputs) {
+        const yearKey = parts[yearsIdx + 1]; // e.g. 'y1','y2','y3'
+        if (yearKey === "y2" || yearKey === "y3") {
+          const altParts = [...parts];
+          altParts[yearsIdx + 1] = "y1";
+          const altVal = getValueAtPath(baselineInputs, altParts.slice(1));
+          if (altVal !== undefined) {
+            if (parts.includes("ik") && parts.includes("unitCosts")) {
+              const ratio = getValueAtPath(baselineInputs, ["ik", "unitCostRatio"]);
+              const r = Number(ratio);
+              if (Number.isFinite(r)) {
+                const base = Number(altVal);
+                const multiplier = yearKey === "y2" ? r : r * r;
+                return Number.isFinite(base) ? base * multiplier : undefined;
+              }
+            }
+            return altVal;
+          }
+        }
+      }
+
+      // ik specific fallbacks:
+      if (parts.slice(1, 3).join(".") === "ik.years" && baselineInputs) {
+        if (parts.includes("unitCostRatio")) {
+          const u = getValueAtPath(baselineInputs, ["ik", "unitCostRatio"]);
+          if (u !== undefined) return u;
+          return 1;
+        }
+        const leafCandidates = ["unitCosts", "headcountsByLevel"];
+        if (leafCandidates.some((c) => parts.includes(c))) {
+          return 0;
+        }
+      }
+
+      // generic kapasite fallbacks (years.cur/y1/y2/y3 etc.)
+      if ((last === "y1" || last === "y2" || last === "y3") && baselineInputs) {
+        const parent = getValueAtPath(baselineInputs, parts.slice(1, -1));
+        if (parent && typeof parent === "object" && parent.y1 != null) return parent.y1;
+
+        const byIdx = parts.indexOf("byKademe");
+        if (byIdx >= 1 && parts.length > byIdx + 1) {
+          const lvlKey = parts[byIdx + 1];
+          const per = getValueAtPath(baselineInputs, ["kapasite", "byKademe", lvlKey, "caps", "y1"]);
+          if (per !== undefined) return per;
+        }
+
+        const yearsY1 = getValueAtPath(baselineInputs, ["kapasite", "years", "y1"]);
+        if (yearsY1 !== undefined) return yearsY1;
+      }
+
+      // cur fallback for kapasite -> per-kademe caps.cur or kapasite.currentStudents
+      if (last === "cur" && baselineInputs) {
+        const byIdx = parts.indexOf("byKademe");
+        if (byIdx >= 1 && parts.length > byIdx + 1) {
+          const lvlKey = parts[byIdx + 1];
+          const per = getValueAtPath(baselineInputs, ["kapasite", "byKademe", lvlKey, "caps", "cur"]);
+          if (per !== undefined) return per;
+        }
+        const curAll = getValueAtPath(baselineInputs, ["kapasite", "currentStudents"]);
+        if (curAll !== undefined) return curAll;
+      }
+
+      return undefined;
+    }
     if (parts[0] === "norm") return getValueAtPath(baselineNorm, parts.slice(1));
     return undefined;
   }
+// ...existing code...
 
   function markDirty(path, value) {
     if (!path) return;
@@ -1705,6 +1872,7 @@ export default function SchoolPage() {
                   className="topbar-btn is-primary"
                   onClick={async () => {
                     if (inputsSaving || calculating) return;
+                    if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
                     if (inputsDirty) {
                       const ok = await saveInputs();
                       if (ok) await calculate();
@@ -1776,7 +1944,7 @@ export default function SchoolPage() {
 
   return (
     <div className="container school-page">
-      <ToastContainer position="top-right" autoClose={3000} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover />
+      <ToastContainer position="bottom-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover hideProgressBar theme="dark" />
       {bootLoading && !scenarioWizardOpen ? (
         <div className="modal-backdrop" role="status" aria-live="polite" aria-busy="true">
           <style>{`@keyframes schoolSpin{to{transform:rotate(360deg)}}`}</style>
@@ -2358,6 +2526,7 @@ export default function SchoolPage() {
                 ik={inputs.ik}
                 prevReport={prevReport}
                 dirtyPaths={dirtyPaths}
+                currencyCode={inputCurrencyCode}
                 onDirty={markDirty}
               />
             </TabProgressHeatmap>

@@ -148,6 +148,7 @@ export default function TemelBilgilerEditor({
   prevReport,
   dirtyPaths,
   onDirty,
+  currencyCode,
 }) {
   const tb = useMemo(() => (value && typeof value === "object" ? value : {}), [value]);
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
@@ -166,6 +167,8 @@ export default function TemelBilgilerEditor({
     onChange(next);
     onDirty?.(makePath(path), v);
   };
+
+  console.log("currencyCode in TemelBilgilerEditor:", currencyCode);
 
   const updateKademe = (key, patch) => {
     const nextConfig = normalizeKademeConfig(tb.kademeler);
@@ -604,6 +607,7 @@ export default function TemelBilgilerEditor({
               </thead>
               <tbody>
                 {feeParamRows.map((row) => {
+                  console.log(feeParamRows);
                   const rawValue = get(tb, row.key, 0);
                   const isPercent = row.type === "percent";
                   const displayValue = isPercent ? fracToPercent(rawValue) : safeNum(rawValue);
@@ -624,13 +628,14 @@ export default function TemelBilgilerEditor({
                           </div>
                         ) : (
                           <div className="tb-affix">
-                            <span className="tb-affix-pfx">$</span>
+                            
                             <NumberInput
                              
                               className={inputClass("input tb-input tb-num", row.key)}
                               value={displayValue.toFixed(0)}
                               onChange={(value) => update(row.key, safeNum(value))}
                             />
+                            <span className="tb-affix-pfx">{currencyCode}</span>
                           </div>
                         )}
                       </td>

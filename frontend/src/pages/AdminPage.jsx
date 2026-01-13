@@ -12,7 +12,7 @@ const ADMIN_TABS = [
   { key: "users", label: "Users" },
   { key: "countries", label: "Countries" },
   { key: "progress", label: "Progress Tracking" },
-  { key: "approvals", label: "Approvals" },
+  { key: "approvals", label: "Çalışma Listeleri" },
   { key: "reports", label: "Reports" },
 ];
 
@@ -142,11 +142,13 @@ export default function AdminPage() {
   const [queueRows, setQueueRows] = useState([]);
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueFilters, setQueueFilters] = useState({
-    status: "submitted",
+    status: "",
     academicYear: "",
     region: "",
     countryId: "",
   });
+
+  const [queueSort, setQueueSort] = useState({ key: null, dir: null });
 
   const [reviewModal, setReviewModal] = useState(null);
   const [reviewNote, setReviewNote] = useState("");
@@ -246,6 +248,102 @@ export default function AdminPage() {
     if (!queueFilters.region) return countries;
     return countries.filter((c) => c.region === queueFilters.region);
   }, [countries, queueFilters.region]);
+
+  const toggleQueueSort = useCallback((key) => {
+    const cycles = {
+      academic_year: ["desc", "asc", null],
+      country_name: ["asc", "desc", null],
+      school_name: ["asc", "desc", null],
+      scenario_name: ["asc", "desc", null],
+      submitted_at: ["desc", "asc", null],
+      status: ["asc", "desc", null],
+    };
+
+    setQueueSort((prev) => {
+      const cycle = cycles[key] || ["asc", "desc", null];
+      if (prev.key !== key) return { key, dir: cycle[0] };
+
+      const i = cycle.indexOf(prev.dir);
+      const next = cycle[(i + 1) % cycle.length];
+      if (!next) return { key: null, dir: null };
+      return { key, dir: next };
+    });
+  }, [setQueueSort]);
+
+  const sortIndicator = useCallback(
+    (key) => {
+      if (queueSort.key !== key || !queueSort.dir) return "";
+      return queueSort.dir === "asc" ? "▲" : "▼";
+    },
+    [queueSort]
+  );
+
+  const ariaSort = useCallback(
+    (key) => {
+      if (queueSort.key !== key || !queueSort.dir) return "none";
+      return queueSort.dir === "asc" ? "ascending" : "descending";
+    },
+    [queueSort]
+  );
+
+  const sortedQueueRows = useMemo(() => {
+    const base = Array.isArray(queueRows) ? queueRows : [];
+    if (!queueSort?.key || !queueSort?.dir) return base;
+
+    const parseAcademicYear = (value) => {
+      const raw = String(value || "").trim();
+      const nums = raw.match(/\d{4}/g) || [];
+      const a = nums[0] ? Number(nums[0]) : -1;
+      const b = nums[1] ? Number(nums[1]) : a;
+      return { a, b, raw: raw.toLowerCase() };
+    };
+
+    const getValue = (row) => {
+      switch (queueSort.key) {
+        case "country_name":
+          return String(row.country?.name || "");
+        case "school_name":
+          return String(row.school?.name || "");
+        case "scenario_name":
+          return String(row.scenario?.name || "");
+        case "academic_year":
+          return parseAcademicYear(row.scenario?.academic_year);
+        case "submitted_at":
+          return row.scenario?.submitted_at ? new Date(row.scenario.submitted_at).getTime() : -Infinity;
+        case "status":
+          return String(row.scenario?.status || "");
+        default:
+          return "";
+      }
+    };
+
+    const dirMul = queueSort.dir === "desc" ? -1 : 1;
+    const cmpStr = (a, b) =>
+      String(a || "").localeCompare(String(b || ""), undefined, { sensitivity: "base" });
+
+    const decorated = base.map((row, idx) => ({ row, idx, val: getValue(row) }));
+
+    decorated.sort((A, B) => {
+      let c = 0;
+      const av = A.val;
+      const bv = B.val;
+
+      if (queueSort.key === "academic_year") {
+        c = (av?.a ?? -1) - (bv?.a ?? -1);
+        if (c === 0) c = (av?.b ?? -1) - (bv?.b ?? -1);
+        if (c === 0) c = cmpStr(av?.raw, bv?.raw);
+      } else if (typeof av === "number" && typeof bv === "number") {
+        c = av - bv;
+      } else {
+        c = cmpStr(av, bv);
+      }
+
+      if (c === 0) return A.idx - B.idx; // back to server order
+      return c * dirMul;
+    });
+
+    return decorated.map((d) => d.row);
+  }, [queueRows, queueSort]);
 
   const progressSearchValue = progressSearch.trim().toLowerCase();
 
@@ -1789,7 +1887,7 @@ export default function AdminPage() {
         <div className="card" style={{ marginTop: 12 }}>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
             <div>
-              <div style={{ fontWeight: 700 }}>Scenario Approvals</div>
+              <div style={{ fontWeight: 700 }}>Çalışma Listeleri</div>
               <div className="small">Review submitted scenarios and approve for rollups.</div>
             </div>
             <div className="row admin-filter-row">
@@ -1798,6 +1896,7 @@ export default function AdminPage() {
                 value={queueFilters.status}
                 onChange={(e) => setQueueFilters((prev) => ({ ...prev, status: e.target.value }))}
               >
+                <option value="">All</option>
                 <option value="submitted">Submitted</option>
                 <option value="approved">Approved</option>
                 <option value="revision_requested">Revision requested</option>
@@ -1844,10 +1943,120 @@ export default function AdminPage() {
           <table className="table admin-approvals-table" style={{ marginTop: 12 }}>
             <thead>
               <tr>
-                <th>School</th>
-                <th>Scenario</th>
-                <th>Submitted</th>
-                <th>Status</th>
+                <th aria-sort={ariaSort("country_name")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQueueSort("country_name")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                    title="Sort"
+                  >
+                    Ülke <span aria-hidden>{sortIndicator("country_name")}</span>
+                  </button>
+                </th>
+                <th aria-sort={ariaSort("school_name")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQueueSort("school_name")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                    title="Sort"
+                  >
+                    School <span aria-hidden>{sortIndicator("school_name")}</span>
+                  </button>
+                </th>
+                <th aria-sort={ariaSort("scenario_name")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQueueSort("scenario_name")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                    title="Sort"
+                  >
+                    Scenario <span aria-hidden>{sortIndicator("scenario_name")}</span>
+                  </button>
+                </th>
+                <th aria-sort={ariaSort("academic_year")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQueueSort("academic_year")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                    title="Sort"
+                  >
+                    Academic Year <span aria-hidden>{sortIndicator("academic_year")}</span>
+                  </button>
+                </th>
+                <th aria-sort={ariaSort("submitted_at")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQueueSort("submitted_at")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                    title="Sort"
+                  >
+                    Submitted <span aria-hidden>{sortIndicator("submitted_at")}</span>
+                  </button>
+                </th>
+                <th aria-sort={ariaSort("status")}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQueueSort("status")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                    title="Sort"
+                  >
+                    Status <span aria-hidden>{sortIndicator("status")}</span>
+                  </button>
+                </th>
                 <th>Progress</th>
                 <th>Y1 KPIs</th>
                 <th>Y2 KPIs</th>
@@ -1858,18 +2067,18 @@ export default function AdminPage() {
             <tbody>
               {queueLoading ? (
                 <tr>
-                  <td colSpan="9" className="small">
+                  <td colSpan="11" className="small">
                     Loading...
                   </td>
                 </tr>
-              ) : queueRows.length === 0 ? (
+              ) : sortedQueueRows.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="small">
+                  <td colSpan="11" className="small">
                     No scenarios found.
                   </td>
                 </tr>
               ) : (
-                queueRows.map((row) => {
+                sortedQueueRows.map((row) => {
                   const statusMeta = getStatusMeta(row.scenario?.status);
                   const canApprove = row.scenario?.status === "submitted";
                   const canRevise = ["submitted", "approved"].includes(row.scenario?.status);
@@ -1888,13 +2097,17 @@ export default function AdminPage() {
                   return (
                     <tr key={row.scenario?.id || `${row.school?.id}-${row.scenario?.name}`}>
                       <td>
+                        <div style={{ fontWeight: 700 }}>{row.country?.name || "-"}</div>
+                        {row.country?.region ? <div className="small">{row.country.region}</div> : null}
+                      </td>
+                      <td>
                         <div style={{ fontWeight: 700 }}>{row.school?.name || "-"}</div>
-                        <div className="small">{row.country?.name || ""}</div>
                       </td>
                       <td>
                         <div>{row.scenario?.name || "-"}</div>
                         {missing ? <span className="status-badge is-bad">Missing KPIs</span> : null}
                       </td>
+                      <td className="small">{row.scenario?.academic_year || "-"}</td>
                       <td className="small">{formatDateTime(row.scenario?.submitted_at)}</td>
                       <td>
                         <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>

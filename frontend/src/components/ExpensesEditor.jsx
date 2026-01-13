@@ -229,20 +229,21 @@ function computeIncomeYears(gelirler, totalStudents, factors) {
   const studentCountForYear = (row, yearKey) => {
     if (!row) return 0;
     if (yearKey === "y2") return toNum(row?.studentCountY2 ?? row?.studentCount);
-    if (yearKey === "y3") return toNum(row?.studentCountY3 ?? row?.studentCount);
+    if (yearKey === "y3") return toNum(row?.studentCountY3 ?? row?.studentCountY2 ?? row?.studentCount);
     return toNum(row?.studentCount);
   };
 
-  const tuitionStudents = tuitionRows.length
-    ? tuitionRows.reduce((s, r) => s + toNum(r?.studentCount), 0)
-    : totalStudents;
+  const tuitionStudentsForYear = (yearKey) => {
+    if (!tuitionRows.length) return totalStudents;
+    return tuitionRows.reduce((s, r) => s + studentCountForYear(r, yearKey), 0);
+  };
 
   const grossTuitionForYear = (yearKey) => {
     const f = factors?.[yearKey] ?? 1;
     if (tuitionRows.length) {
-      return tuitionRows.reduce((s, r) => s + toNum(r?.studentCount) * toNum(r?.unitFee) * f, 0);
+      return tuitionRows.reduce((s, r) => s + studentCountForYear(r, yearKey) * toNum(r?.unitFee) * f, 0);
     }
-    return tuitionStudents * toNum(inc.tuitionFeePerStudentYearly) * f;
+    return tuitionStudentsForYear(yearKey) * toNum(inc.tuitionFeePerStudentYearly) * f;
   };
 
   const nonEdForYear = (yearKey) => {
@@ -264,6 +265,7 @@ function computeIncomeYears(gelirler, totalStudents, factors) {
   const out = {};
   for (const y of YEAR_KEYS) {
     const grossTuition = grossTuitionForYear(y);
+    const tuitionStudents = tuitionStudentsForYear(y);
     const nonEdTotal = nonEdForYear(y);
     const dormIncomeTotal = dormForYear(y);
     const activityGross = grossTuition + nonEdTotal + dormIncomeTotal;
@@ -280,10 +282,11 @@ function computeDiscountTotalForYear({ yearKey, discounts, grossTuition, tuition
   const tuition = toNum(avgTuitionFee);
   if (gross <= 0 || students <= 0) return 0;
 
+  // pick helpers WITHOUT cascading fallbacks across years
   const pick = (d, baseKey, yk) => {
     if (!d) return undefined;
-    if (yk === "y2") return d?.[baseKey + "Y2"] ?? d?.[baseKey];
-    if (yk === "y3") return d?.[baseKey + "Y3"] ?? d?.[baseKey];
+    if (yk === "y2") return d?.[baseKey + "Y2"];
+    if (yk === "y3") return d?.[baseKey + "Y3"];
     return d?.[baseKey];
   };
 
@@ -574,56 +577,6 @@ export default function ExpensesEditor({
     onDirty?.(dormPath(key, field), nextValue);
   }
 
-  // -------- Burs/İndirim (Excel section inside "Giderler") ----------
-  const normalizedDiscounts = useMemo(() => {
-    const list = Array.isArray(discounts) ? discounts : [];
-    const byName = new Map(list.map((d) => [String(d.name || ""), d]));
-    return BURS_DEFAULTS.map((row) => {
-      const d = byName.get(row.name) || { name: row.name, mode: "percent", value: 0, ratio: 0 };
-      const hasStudentCount = d && d.studentCount != null && d.studentCount !== "";
-      const rawCount = hasStudentCount ? Number(d.studentCount) : NaN;
-      const studentCount = Number.isFinite(rawCount) ? Math.max(0, Math.round(rawCount)) : null;
-      return {
-        name: row.name,
-        mode: d.mode || "percent",
-        value: toNum(d.value), // percent stored as 0-1
-        ratio: clamp(toNum(d.ratio), 0, 1),
-        studentCount,
-      };
-    });
-  }, [discounts]);
-
-  const bursRows = useMemo(() => {
-    const baseStudents = baseTuitionStudents || 0;
-    return normalizedDiscounts.map((d) => {
-      const rawCount = Number.isFinite(d.studentCount) ? Math.max(0, Math.round(d.studentCount)) : null;
-      const count =
-        baseStudents > 0
-          ? Math.min(rawCount != null ? rawCount : Math.round(d.ratio * baseStudents), baseStudents)
-          : rawCount != null
-            ? rawCount
-            : 0;
-      const ratio = baseStudents > 0 ? clamp(count / baseStudents, 0, 1) : clamp(d.ratio, 0, 1);
-      const pct = clamp(d.value, 0, 1);
-      const amountY = (yearKey) => {
-        const avg = toNum(incomeYears?.[yearKey]?.avgTuitionFee);
-        if (d.mode === "fixed") return count * Math.max(0, toNum(d.value)) * (factors?.[yearKey] ?? 1);
-        return avg * count * pct;
-      };
-      return {
-        ...d,
-        ratio,
-        studentCount: count,
-        pct,
-        a1: amountY("y1"),
-        a2: amountY("y2"),
-        a3: amountY("y3"),
-      };
-    });
-  }, [normalizedDiscounts, incomeYears, factors, baseTuitionStudents]);
-
-
-
 
 
   useEffect(() => {
@@ -812,7 +765,7 @@ export default function ExpensesEditor({
               <td className="cell-pct">{fmtPct(netCiro.y1 > 0 ? operatingTotals.y1 / netCiro.y1 : null)}</td>
 
               <td className="cell-pct sep-left">{fmtPct(yoy(operatingTotals.y2, operatingTotals.y1))}</td>
-              <td className="cell-num">{fmtMoney(operatingTotals.y2)}</td>
+              <td className="cell-num">{`Toplam (${currencyCode})`}</td>
               <td className="cell-pct">{fmtPct(1)}</td>
               <td className="cell-pct">{fmtPct(netCiro.y2 > 0 ? operatingTotals.y2 / netCiro.y2 : null)}</td>
 
@@ -1220,15 +1173,15 @@ export default function ExpensesEditor({
                   yk === "y1"
                     ? d?.studentCount
                     : yk === "y2"
-                      ? (d?.studentCountY2 ?? d?.studentCount)
-                      : (d?.studentCountY3 ?? d?.studentCountY2 ?? d?.studentCount);
+                      ? d?.studentCountY2
+                      : d?.studentCountY3;
 
                 const rawRatio =
                   yk === "y1"
                     ? d?.ratio
                     : yk === "y2"
-                      ? (d?.ratioY2 ?? d?.ratio)
-                      : (d?.ratioY3 ?? d?.ratioY2 ?? d?.ratio);
+                      ? d?.ratioY2
+                      : d?.ratioY3;
 
                 const hasCount = rawCount != null && rawCount !== "";
                 const c = hasCount ? Math.max(0, Math.round(toNum(rawCount))) : null;
@@ -1245,8 +1198,8 @@ export default function ExpensesEditor({
                   yk === "y1"
                     ? d?.value
                     : yk === "y2"
-                      ? (d?.valueY2 ?? d?.value)
-                      : (d?.valueY3 ?? d?.valueY2 ?? d?.value);
+                      ? d?.valueY2
+                      : d?.valueY3;
                 return clamp(toNum(v), 0, 1);
               };
 
@@ -1257,8 +1210,8 @@ export default function ExpensesEditor({
                     yk === "y1"
                       ? d?.value
                       : yk === "y2"
-                        ? (d?.valueY2 ?? d?.value)
-                        : (d?.valueY3 ?? d?.valueY2 ?? d?.value);
+                        ? d?.valueY2
+                        : d?.valueY3;
                   const hasYearVal =
                     (yk === "y2" && d?.valueY2 != null && d?.valueY2 !== "") ||
                     (yk === "y3" && d?.valueY3 != null && d?.valueY3 !== "");
@@ -1387,6 +1340,7 @@ export default function ExpensesEditor({
                         />
                       </td>
                       <td className="cell-num">
+                       
                         <NumberInput
                           className={inputClass("input xs num", discountPath(r.name, "valueY2"))}
                           min="0"
