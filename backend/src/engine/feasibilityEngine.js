@@ -9,6 +9,26 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
 const GRADE_INDEX = new Map(DEFAULT_GRADE_KEYS.map((g, i) => [g, i]));
 
+const SERVICE_TO_INCOME_KEY = {
+  yemek: "yemek",
+  uniforma: "uniforma",
+  kitapKirtasiye: "kitap",
+  ulasimServis: "ulasim",
+};
+
+const DORM_TO_INCOME_KEY = {
+  yurtGiderleri: "yurt",
+  digerYurt: "yazOkulu",
+};
+
+function pickStudentCountForYear(row, yearKey) {
+  if (!row) return 0;
+  if (yearKey === "y2") return safeNum(row.studentCountY2 ?? row.studentCount);
+  if (yearKey === "y3") return safeNum(row.studentCountY3 ?? row.studentCountY2 ?? row.studentCount);
+  return safeNum(row.studentCount);
+}
+
+
 /**
  * Kademe configuration (same defaults as backend routes/scenarios.js)
  * Shape: { okulOncesi:{enabled,from,to}, ilkokul:{...}, ortaokul:{...}, lise:{...} }
@@ -671,6 +691,106 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
     // ignore
   }
 
+  // --- NEW: Link giderler student counts to gelirler student counts (per-year) ---
+  // Services: studentCount comes from gelirler.nonEducationFees
+  // Dorm: studentCount comes from gelirler.dormitory
+  // Also: Services unit costs are manual per year (unitCostY2/unitCostY3), not inflated.
+  try {
+    const SERVICE_TO_INCOME_KEY = {
+      yemek: "yemek",
+      uniforma: "uniforma",
+      kitapKirtasiye: "kitap",
+      ulasimServis: "ulasim",
+    };
+
+    const DORM_TO_INCOME_KEY = {
+      yurtGiderleri: "yurt",
+      digerYurt: "yazOkulu",
+    };
+
+    const nonEdRows = Array.isArray(out?.gelirler?.nonEducationFees?.rows) ? out.gelirler.nonEducationFees.rows : [];
+    const dormRows = Array.isArray(out?.gelirler?.dormitory?.rows) ? out.gelirler.dormitory.rows : [];
+
+    const nonEdByKey = new Map(nonEdRows.map((r) => [String(r?.key || ""), r]));
+    const dormByKey = new Map(dormRows.map((r) => [String(r?.key || ""), r]));
+
+    // Services giderler (ÖĞRENİM DIŞI...)
+    if (out?.giderler?.ogrenimDisi?.items) {
+      for (const [expKey, incomeKey] of Object.entries(SERVICE_TO_INCOME_KEY)) {
+        const incRow = nonEdByKey.get(incomeKey);
+        const sc = safeNum(incRow?.studentCount); // already per-year for this yearKey
+        const prev = out.giderler.ogrenimDisi.items[expKey] || {};
+        out.giderler.ogrenimDisi.items[expKey] = { ...prev, studentCount: sc };
+
+        // Manual unit costs per year:
+        // y1 uses unitCost (already inflated by f)
+        // y2 uses unitCostY2 (NO inflation)
+        // y3 uses unitCostY3 (NO inflation)
+        const baseRow = baseInput?.giderler?.ogrenimDisi?.items?.[expKey] || {};
+        if (yearKey === "y2" && baseRow.unitCostY2 != null) {
+          out.giderler.ogrenimDisi.items[expKey].unitCost = safeNum(baseRow.unitCostY2);
+        }
+        if (yearKey === "y3" && baseRow.unitCostY3 != null) {
+          out.giderler.ogrenimDisi.items[expKey].unitCost = safeNum(baseRow.unitCostY3);
+        }
+      }
+    }
+
+    // Dorm giderler (YURT/KONAKLAMA)
+    if (out?.giderler?.yurt?.items) {
+      for (const [expKey, incomeKey] of Object.entries(DORM_TO_INCOME_KEY)) {
+        const incRow = dormByKey.get(incomeKey);
+        const sc = safeNum(incRow?.studentCount); // already per-year for this yearKey
+        const prev = out.giderler.yurt.items[expKey] || {};
+        out.giderler.yurt.items[expKey] = { ...prev, studentCount: sc };
+      }
+    }
+  } catch (_) {
+    // ignore
+  }
+
+  // --- NEW: Per-year burs value/ratio selection for report alignment ---
+  try {
+    // Estimate tuitionStudents for ratio-from-count if needed
+    const tuitionRows = Array.isArray(out?.gelirler?.tuition?.rows) ? out.gelirler.tuition.rows : [];
+    const tuitionStudents = tuitionRows.length
+      ? tuitionRows.reduce((s, r) => s + safeNum(r?.studentCount), 0)
+      : (out?.grades || []).reduce((s, g) => s + safeNum(g?.studentsPerBranch), 0);
+
+    out.discounts = (out.discounts || []).map((d) => {
+      if (!d) return d;
+
+      const value =
+        yearKey === "y2"
+          ? (d.valueY2 != null ? safeNum(d.valueY2) : safeNum(d.value))
+          : yearKey === "y3"
+            ? (d.valueY3 != null ? safeNum(d.valueY3) : safeNum(d.value))
+            : safeNum(d.value);
+
+      const ratio =
+        yearKey === "y2"
+          ? (d.ratioY2 != null ? safeNum(d.ratioY2) : safeNum(d.ratio))
+          : yearKey === "y3"
+            ? (d.ratioY3 != null ? safeNum(d.ratioY3) : safeNum(d.ratio))
+            : safeNum(d.ratio);
+
+      const count =
+        yearKey === "y2" ? d.studentCountY2 :
+          yearKey === "y3" ? d.studentCountY3 :
+            d.studentCount;
+
+      const ratioFromCount =
+        count != null && tuitionStudents > 0 ? clamp(safeNum(count) / tuitionStudents, 0, 1) : null;
+
+      return {
+        ...d,
+        value,
+        ratio: ratioFromCount != null ? ratioFromCount : clamp(ratio, 0, 1),
+      };
+    });
+  } catch (_) {
+    // ignore
+  }
 
   // --- Capacity per-year selection (NEW) ---
   // capacity is NOT inflated; it's selected by year:
@@ -715,6 +835,8 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
 
   return out;
 }
+
+
 
 // -----------------------------------------------------------------------------
 // Single-year calculation (previous behavior)
