@@ -14,6 +14,7 @@ import IncomeEditor from "../components/IncomeEditor";
 import ExpensesEditor from "../components/ExpensesEditor";
 import NormConfigEditor from "../components/NormConfigEditor";
 import ReportView from "../components/ReportView";
+import DetailedReportView from "../components/DetailedReportView";
 import HREditorIK from "../components/HREditorIK";
 import CapacityEditor from "../components/CapacityEditor";
 import TemelBilgilerEditor from "../components/TemelBilgilerEditor";
@@ -37,6 +38,7 @@ const TABS = [
   { key: "hr", label: "İK (HR)" },
   { key: "income", label: "Gelirler" },
   { key: "expenses", label: "Giderler" },
+  { key: "detailedReport", label: "Detaylı Rapor" },
   { key: "report", label: "Rapor" },
 ];
 
@@ -49,7 +51,7 @@ const UI_TAB_PROGRESS_KEYS = {
   expenses: ["giderler", "indirimler"],
 };
 
-const INPUT_HEADER_TABS = new Set(["basics", "kapasite", "income", "expenses", "norm", "hr", "report"]);
+const INPUT_HEADER_TABS = new Set(["basics", "kapasite", "income", "expenses", "norm", "hr", "detailedReport", "report"]);
 
 const DEFAULT_START_YEAR = "2026";
 const DEFAULT_END_YEAR = "2027";
@@ -203,6 +205,7 @@ export default function SchoolPage() {
   );
   const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
   const [tab, setTab] = useScenarioUiString("school.activeTab", "scenarios", { scope: uiScopeKey });
+  const [detailedReportMode, setDetailedReportMode] = useScenarioUiString("school.detailedReportMode", "detailed", { scope: uiScopeKey });
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     if (params.get("open") !== "1") return;
@@ -2324,7 +2327,7 @@ export default function SchoolPage() {
               const active = tab === t.key;
 
 
-              const showBadge = showScenarioProgress && !["scenarios", "report"].includes(t.key);
+              const showBadge = showScenarioProgress && !["scenarios", "detailedReport", "report"].includes(t.key);
               const tabProgress = showBadge
                 ? uiTabProgress[t.key] || { done: true, missingReasons: [] }
                 : { done: true, missingReasons: [] };
@@ -2724,6 +2727,48 @@ export default function SchoolPage() {
               />
             </TabProgressHeatmap>
           ) : null}
+        </div>
+      )}
+
+      {tab === "detailedReport" && (
+        <div style={{ marginTop: 12 }}>
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 900 }}>Görünüm</div>
+                <div className="small" style={{ marginTop: 4, opacity: 0.85 }}>
+                  İstersen tek sayfa özet görünümünü, istersen Excel RAPOR iskeletini kullan.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <button
+                  className={detailedReportMode === "onepager" ? "btn primary" : "btn"}
+                  onClick={() => setDetailedReportMode("onepager")}
+                >
+                  Tek Sayfa (Özet)
+                </button>
+                <button
+                  className={detailedReportMode === "detailed" ? "btn primary" : "btn"}
+                  onClick={() => setDetailedReportMode("detailed")}
+                >
+                  Detaylı (RAPOR)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div ref={reportExportRef} data-report-export="1" className="report-export">
+            <DetailedReportView
+              mode={detailedReportMode}
+              school={school}
+              scenario={selectedScenario}
+              inputs={inputs}
+              report={report}
+              prevReport={prevReport}
+              reportCurrency={reportCurrency}
+              currencyMeta={selectedScenario}
+            />
+          </div>
         </div>
       )}
 

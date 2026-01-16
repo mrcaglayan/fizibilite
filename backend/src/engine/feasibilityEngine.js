@@ -669,9 +669,9 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
     }
 
     const pickManualStudentCount = (r) => {
-      if (yearKey === "y2") return safeNum(r?.studentCountY2 ?? r?.studentCount);
-      if (yearKey === "y3") return safeNum(r?.studentCountY3 ?? r?.studentCountY2 ?? r?.studentCount);
-      return safeNum(r?.studentCount);
+      if (yearKey === "y2") return isProvided(row.studentCountY2) ? safeNum(row.studentCountY2) : base;
+      if (yearKey === "y3") return isProvided(row.studentCountY3) ? safeNum(row.studentCountY3) : base;
+      return base;
     };
 
     if (out?.gelirler?.nonEducationFees?.rows) {
@@ -836,7 +836,8 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
   return out;
 }
 
-
+// --- ADD HELPER ---
+const isProvided = (v) => v !== null && v !== undefined && !(typeof v === "string" && v.trim() === "");
 
 // -----------------------------------------------------------------------------
 // Single-year calculation (previous behavior)

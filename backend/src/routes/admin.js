@@ -49,6 +49,19 @@ function parseAcademicYearFilter(value) {
   return v ? v : null;
 }
 
+
+function parseAcademicYearPrefix(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const m = raw.match(/\d{4}/); // first 4-digit year
+  return m ? m[0] : raw;
+}
+
+function escapeLike(value) {
+  // Escape LIKE wildcards so user input can't act as a pattern
+  return String(value || "").replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
 function toNumberOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -540,11 +553,11 @@ router.delete("/users/:id", async (req, res) => {
 
 /**
  * GET /admin/scenarios/queue
- * Query: status=submitted (default), academicYear, region, countryId
+ * Query: status (optional, empty = all), academicYear, region, countryId
  */
 router.get("/scenarios/queue", async (req, res) => {
   try {
-    const status = String(req.query?.status || "submitted").trim();
+    const status = String(req.query?.status ?? "").trim();
     const academicYear = parseAcademicYearFilter(req.query?.academicYear);
     const region = String(req.query?.region || "").trim();
     const countryId = toNumberOrNull(req.query?.countryId ?? req.query?.country_id);
@@ -753,9 +766,10 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
  */
 router.get("/reports/rollup", async (req, res) => {
   try {
-    const academicYear = parseAcademicYearFilter(req.query?.academicYear);
-    if (!academicYear) return res.status(400).json({ error: "academicYear is required" });
+    const yearPrefix = parseAcademicYearPrefix(req.query?.academicYear);
+    if (!yearPrefix) return res.status(400).json({ error: "academicYear is required" });
 
+    const academicYearLike = `${escapeLike(yearPrefix)}%`;
     const pool = getPool();
     const [mappings] = await pool.query(
       `SELECT
@@ -770,8 +784,8 @@ router.get("/reports/rollup", async (req, res) => {
        FROM school_reporting_scenarios srs
        JOIN schools s ON s.id = srs.school_id
        JOIN countries c ON c.id = s.country_id
-       WHERE srs.academic_year = :academic_year`,
-      { academic_year: academicYear }
+       WHERE srs.academic_year LIKE :academic_year_like ESCAPE '\\\\'`,
+      { academic_year_like: academicYearLike }
     );
 
     const scenarioIds = mappings.map((m) => m.scenario_id);
@@ -913,14 +927,14 @@ router.get("/reports/rollup", async (req, res) => {
        FROM schools s
        JOIN countries c ON c.id = s.country_id
        LEFT JOIN school_reporting_scenarios srs
-         ON srs.school_id = s.id AND srs.academic_year = :academic_year
+         ON srs.school_id = s.id AND srs.academic_year LIKE :academic_year_like ESCAPE '\\\\'
        WHERE srs.school_id IS NULL
        ORDER BY c.region, c.name, s.name`,
-      { academic_year: academicYear }
+      { academic_year_like: academicYearLike }
     );
 
     return res.json({
-      academicYear,
+      academicYear: yearPrefix,
       totals,
       regions,
       missingNoApproved,
