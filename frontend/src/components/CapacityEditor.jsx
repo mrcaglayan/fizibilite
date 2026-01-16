@@ -8,6 +8,7 @@ import {
   normalizeKademeConfig,
   summarizeGradesByKademe,
 } from "../utils/kademe";
+import { isKademeKeyVisible, mapBaseKademeToVariant, PROGRAM_TYPES } from "../utils/programType";
 
 const n0 = (v) => {
   const n = Number(v);
@@ -61,16 +62,23 @@ export default function CapacityEditor({
   plannedGrades,
   currentGrades,
   kademeConfig,
+  programType,
   onChange,
   dirtyPaths,
   onDirty,
 }) {
   const cap = kapasite && typeof kapasite === "object" ? kapasite : {};
   const kademeler = useMemo(() => normalizeKademeConfig(kademeConfig), [kademeConfig]);
+  const resolvedProgramType = programType || PROGRAM_TYPES.LOCAL;
 
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const activeKademeler = kademeDefs.filter((d) => kademeler?.[d.key]?.enabled);
-  const visibleKademeler = activeKademeler.length ? activeKademeler : kademeDefs;
+  const variantCandidates = activeKademeler.length ? activeKademeler : kademeDefs;
+  let visibleKademeler = variantCandidates.filter((d) => {
+    const variantKey = mapBaseKademeToVariant(d.key, resolvedProgramType);
+    return isKademeKeyVisible(variantKey, resolvedProgramType);
+  });
+  if (!visibleKademeler.length) visibleKademeler = variantCandidates;
 
   // Students (derived from Norm/Grades)
   const planningByYear = useMemo(() => normalizePlanningGrades(plannedGrades), [plannedGrades]);

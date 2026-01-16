@@ -1,6 +1,8 @@
 // frontend/src/components/DetailedReportView.jsx
 
 import React, { useMemo } from "react";
+import { getProgramType, isKademeKeyVisible } from "../utils/programType";
+import { buildDetailedReportModel } from "../utils/buildDetailedReportModel";
 
 function isFiniteNumber(v) {
   const n = Number(v);
@@ -49,6 +51,43 @@ function fmtPct(v, digits = 2) {
       minimumFractionDigits: 0,
     }) + "%"
   );
+}
+
+const LEVEL_VARIANT_BASES = [
+  { key: "okulOncesi", match: "okul oncesi" },
+  { key: "ilkokul", match: "ilkokul" },
+  { key: "ortaokul", match: "ortaokul" },
+  { key: "lise", match: "lise" },
+];
+
+function normalizeString(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9 ]/gi, " ")
+    .toLowerCase();
+}
+
+function inferTuitionVariantKey(row) {
+  const explicitKey = String(row?.key || "").trim();
+  if (explicitKey) return explicitKey;
+  const label = normalizeString(row?.level);
+  if (!label) return null;
+  for (const def of LEVEL_VARIANT_BASES) {
+    if (label.includes(def.match)) {
+      if (def.key === "okulOncesi") return "okulOncesi";
+      if (label.includes("yerel")) return `${def.key}Yerel`;
+      if (label.includes("int") || label.includes("international")) return `${def.key}Int`;
+      return null;
+    }
+  }
+  return null;
+}
+
+function isTuitionRowVisible(row, programType) {
+  const variantKey = inferTuitionVariantKey(row);
+  if (!variantKey) return true;
+  return isKademeKeyVisible(variantKey, programType);
 }
 
 function Section({ title, children, subtitle }) {
@@ -133,39 +172,47 @@ export default function DetailedReportView(props) {
   const {
     school,
     scenario,
-    data,
     mode = "detailed",
 
-    // ileride veri bağlamak için şimdiden alıyoruz (şimdilik opsiyonel)
+    // ileride veri baglamak i??n simdiden aliyoruz (simdilik opsiyonel)
     inputs,
     report,
     prevReport,
-    reportCurrency,
-    currencyMeta,
+    programType: programTypeProp,
   } = props || {};
 
-  const model = data || {};
+  const model = useMemo(
+    () =>
+      buildDetailedReportModel({
+        school,
+        scenario,
+        inputs,
+        report,
+        prevReport,
+        programType: programTypeProp,
+      }),
+    [school, scenario, inputs, report, prevReport, programTypeProp]
+  );
+
+
+  const activeProgramType = useMemo(
+    () => programTypeProp || getProgramType(inputs, scenario),
+    [programTypeProp, inputs, scenario]
+  );
 
   const header = useMemo(() => {
+    if (model.headerLabel) return model.headerLabel;
     const schoolName = school?.name || school?.school_name || "Okul";
     const year = scenario?.academic_year || "";
     const scenarioName = scenario?.name || "";
     const parts = [schoolName, scenarioName, year].filter(Boolean);
-    return parts.join(" • ");
-  }, [school, scenario]);
+    return parts.join(" › ");
+  }, [model.headerLabel, school, scenario]);
 
-  // currencyCode (ileride rakamlar bağlanınca money formatı için)
-  const currencyCode = useMemo(() => {
-    const c1 = String(currencyMeta?.local_currency_code || "").trim();
-    const c2 = String(currencyMeta?.input_currency || "").trim();
-    const c3 = String(reportCurrency || "").trim();
-    const c4 = String(model?.currencyCode || "").trim();
-    // reportCurrency bazen "usd" olabilir, format için büyük harf
-    const pick = (c4 || c2 || c1 || c3 || "").toUpperCase();
-    return pick;
-  }, [currencyMeta, reportCurrency, model]);
 
-  // ------------------ Detailed (Excel-like) model rows ------------------
+  const currencyCode = model.currencyCode || "USD";
+
+// ------------------ Detailed (Excel-like) model rows ------------------
   const educationInfoRows = useMemo(
     () =>
       [
@@ -303,6 +350,11 @@ export default function DetailedReportView(props) {
     ];
   }, [model]);
 
+  const filteredTuitionRows = useMemo(
+    () => tuitionRows.filter((row) => isTuitionRowVisible(row, activeProgramType)),
+    [tuitionRows, activeProgramType]
+  );
+
   const paramsRows = useMemo(() => {
     const base = model.parameters || [];
     if (Array.isArray(base) && base.length) return base;
@@ -313,7 +365,24 @@ export default function DetailedReportView(props) {
       { no: "4", desc: "Gider Planlaması", value: "—" },
       { no: "", desc: "Gelir - Gider Farkı", value: "—" },
     ];
-  }, [model]);
+  }, [model.parameters]);
+
+  const formatParamValue = (param) => {
+    if (!param) return "—";
+    const { value, valueType } = param;
+    if (typeof value === "string" && !valueType) return value;
+    if (value == null) return "—";
+    switch (valueType) {
+      case "percent":
+        return fmtPct(value);
+      case "currency":
+        return fmtMoney(value, currencyCode);
+      case "number":
+        return fmtNumber(value);
+      default:
+        return typeof value === "string" ? value : isFiniteNumber(value) ? fmtNumber(value) : "—";
+    }
+  };
 
   const capacityStudentRows = useMemo(() => {
     const v = model.capacity || {};
@@ -542,17 +611,17 @@ export default function DetailedReportView(props) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
           <div className="card">
             <div style={{ fontWeight: 900, marginBottom: 8 }}>Ücret Özeti</div>
-            <SimpleTable
-              columns={[
-                { key: "level", label: "Kademe" },
-                { key: "edu", label: "Eğitim" , thStyle: { width: 140 } },
-                { key: "total", label: "Toplam" , thStyle: { width: 140 } },
-              ]}
-              rows={tuitionRows
-                .filter((r) => !/TOPLAM|ORTALAMA/i.test(String(r.level || "")))
-                .slice(0, 7)
-                .map((r, i) => ({ key: String(i), level: r.level, edu: r.edu, total: r.total }))}
-            />
+              <SimpleTable
+                columns={[
+                  { key: "level", label: "Kademe" },
+                  { key: "edu", label: "Eğitim" , thStyle: { width: 140 } },
+                  { key: "total", label: "Toplam" , thStyle: { width: 140 } },
+                ]}
+                rows={filteredTuitionRows
+                  .filter((r) => !/TOPLAM|ORTALAMA/i.test(String(r.level || "")))
+                  .slice(0, 7)
+                  .map((r, i) => ({ key: String(i), level: r.level, edu: r.edu, total: r.total }))}
+              />
             <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
               Not: Paket ücretler ve artış oranları bir sonraki adımda otomatik bağlanacak.
             </div>
@@ -713,7 +782,7 @@ export default function DetailedReportView(props) {
             { key: "raisePct", label: "Artış Oranı" },
             { key: "total", label: "Total Ücret" },
           ]}
-          rows={tuitionRows.map((r, i) => ({ key: String(i), ...r }))}
+          rows={filteredTuitionRows.map((r, i) => ({ key: String(i), ...r }))}
         />
         <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
           (*) Yemek ve diğer paket kalemleri okula göre değişebilir. Detaylar ileride veri bağlanınca otomatik gelecektir.
@@ -727,7 +796,12 @@ export default function DetailedReportView(props) {
             { key: "desc", label: "Parametre" },
             { key: "value", label: "Veri", thStyle: { width: 220 } },
           ]}
-          rows={paramsRows.map((r, i) => ({ key: String(i), ...r }))}
+          rows={paramsRows.map((r, i) => ({
+            key: String(i),
+            no: r.no,
+            desc: r.desc,
+            value: formatParamValue(r),
+          }))}
         />
 
         <div style={{ marginTop: 12 }}>

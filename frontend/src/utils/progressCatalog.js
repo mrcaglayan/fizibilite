@@ -1,4 +1,5 @@
 import { getGradeOptions, normalizeKademeConfig } from "./kademe";
+import { getProgramType, getVariantKeysForProgramType } from "./programType";
 
 const YEAR_KEYS = ["y1", "y2", "y3"];
 
@@ -190,6 +191,8 @@ function buildKademeContext(inputs) {
   const gradeIndex = new Map(gradeOptions.map((g, idx) => [g, idx]));
   const enabledKademes = new Set();
   const enabledGrades = new Set();
+  const programType = getProgramType(inputs);
+  const variantKeys = getVariantKeysForProgramType(programType);
 
   KADEME_BASE_KEYS.forEach((key) => {
     const row = normalized[key];
@@ -206,7 +209,9 @@ function buildKademeContext(inputs) {
   });
 
   const enabledLevels = new Set(
-    IK_LEVEL_DEFS.filter((lvl) => enabledKademes.has(lvl.kademeKey)).map((lvl) => lvl.key)
+    IK_LEVEL_DEFS.filter(
+      (lvl) => enabledKademes.has(lvl.kademeKey) && variantKeys.has(lvl.key)
+    ).map((lvl) => lvl.key)
   );
 
   return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels };

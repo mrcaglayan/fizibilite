@@ -8,6 +8,11 @@ import {
   getGradeOptions,
   normalizeKademeConfig,
 } from "../utils/kademe";
+import {
+  getProgramType,
+  isKademeKeyVisible,
+  PROGRAM_TYPES,
+} from "../utils/programType";
 
 const KADeme_ROWS = [
   { key: "okulOncesi", label: "Okul Öncesi" },
@@ -44,6 +49,15 @@ const COMPETITOR_ROWS = [
   { key: "ilkokul", label: "İlkokul" },
   { key: "ortaokul", label: "Ortaokul" },
   { key: "lise", label: "Lise" },
+];
+
+const PROGRAM_TYPE_OPTIONS = [
+  { key: PROGRAM_TYPES.LOCAL, label: "Yerel", hint: "Yerel kademeleri planlayın" },
+  {
+    key: PROGRAM_TYPES.INTERNATIONAL,
+    label: "International",
+    hint: "Uluslararası kademeleri planlayın",
+  },
 ];
 
 function buildFeeParamRows(baseYear) {
@@ -154,6 +168,7 @@ export default function TemelBilgilerEditor({
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
   const kademeConfig = useMemo(() => normalizeKademeConfig(tb.kademeler), [tb]);
+  const programType = useMemo(() => getProgramType({ temelBilgiler: tb }), [tb]);
   const feeParamRows = useMemo(() => buildFeeParamRows(baseYear), [baseYear]);
 
   const makePath = (path) => `inputs.temelBilgiler.${Array.isArray(path) ? path.join(".") : path}`;
@@ -256,9 +271,10 @@ export default function TemelBilgilerEditor({
     () =>
       KADeme_ROWS.filter((r) => {
         const baseKey = kademeBaseByRow[r.key] || r.key;
-        return kademeConfig?.[baseKey]?.enabled !== false;
+        const baseEnabled = kademeConfig?.[baseKey]?.enabled !== false;
+        return baseEnabled && isKademeKeyVisible(r.key, programType);
       }),
-    [kademeBaseByRow, kademeConfig]
+    [kademeBaseByRow, kademeConfig, programType]
   );
   const visibleCompetitorRows = useMemo(
     () => COMPETITOR_ROWS.filter((r) => kademeConfig?.[r.key]?.enabled !== false),
@@ -363,6 +379,32 @@ export default function TemelBilgilerEditor({
                 value={get(tb, ["yetkililer", "raporuHazirlayan"], "")}
                 onChange={(e) => update(["yetkililer", "raporuHazirlayan"], e.target.value)}
               />
+            </div>
+          </div>
+        </section>
+
+        <section className="card tb-card tb-span-6">
+          <div className="tb-section-head">
+            <div className="tb-section-title">Program Türü</div>
+            <div className="tb-muted">Yerel ya da International kademeleri seçebilirsiniz.</div>
+          </div>
+          <div className="tb-grid" style={{ marginTop: 8 }}>
+            <div className="row" style={{ gap: 12 }}>
+              {PROGRAM_TYPE_OPTIONS.map((option) => {
+                const active = programType === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`btn ${active ? "primary" : "ghost"}`}
+                    onClick={() => update(["programType"], option.key)}
+                    aria-pressed={active}
+                  >
+                    <div style={{ fontWeight: 700 }}>{option.label}</div>
+                    <div className="small" style={{ opacity: 0.75 }}>{option.hint}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </section>

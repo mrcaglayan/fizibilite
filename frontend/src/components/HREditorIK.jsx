@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { formatKademeLabel, normalizeKademeConfig } from "../utils/kademe";
+import { isKademeKeyVisible } from "../utils/programType";
 import { useScenarioUiFlag } from "../hooks/useScenarioUIState";
 import NumberInput from "./NumberInput";
 
@@ -235,6 +236,7 @@ export default function HREditorIK({
   onChange,
   onSalaryComputed,
   currencyCode = "USD",
+  programType = "local",
   dirtyPaths,
   onDirty,
   uiScopeKey,
@@ -264,8 +266,13 @@ export default function HREditorIK({
   );
 
   const visibleLevels = useMemo(
-    () => levels.filter((lvl) => kademeler[lvl.kademeKey]?.enabled !== false),
-    [levels, kademeler]
+    () =>
+      levels.filter(
+        (lvl) =>
+          kademeler[lvl.kademeKey]?.enabled !== false &&
+          isKademeKeyVisible(lvl.key, programType)
+      ),
+    [levels, kademeler, programType]
   );
 
   useEffect(() => {

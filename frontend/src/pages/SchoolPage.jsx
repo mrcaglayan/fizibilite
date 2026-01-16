@@ -27,6 +27,12 @@ import {
 } from "../utils/kademe";
 import { computeScenarioProgress } from "../utils/scenarioProgress";
 import { useScenarioUiState, useScenarioUiString } from "../hooks/useScenarioUIState";
+import {
+  getProgramType,
+  PROGRAM_TYPES,
+  mapBaseKademeToVariant,
+  normalizeProgramType,
+} from "../utils/programType";
 
 
 
@@ -162,6 +168,7 @@ export default function SchoolPage() {
   const [newScenarioInputCurrency, setNewScenarioInputCurrency] = useState("USD");
   const [newScenarioLocalCurrencyCode, setNewScenarioLocalCurrencyCode] = useState("");
   const [newScenarioFxUsdToLocal, setNewScenarioFxUsdToLocal] = useState("");
+  const [newScenarioProgramType, setNewScenarioProgramType] = useState(null);
   const [newScenarioStep, setNewScenarioStep] = useState(0);
   const [scenarioWizardOpen, setScenarioWizardOpen] = useState(false);
   const [scenarioWizardMode, setScenarioWizardMode] = useState("create");
@@ -326,11 +333,19 @@ export default function SchoolPage() {
     !yearConflict &&
     hasEnabledKademe &&
     currencyStepOk;
-  const scenarioStepTotal = 5;
-  const scenarioStepLabels = ["Donem Turu", "Para Birimi", "Yil", "Kademeler", "Senaryo Adi"];
+  const scenarioStepTotal = 6;
+  const scenarioStepLabels = [
+    "Donem Turu",
+    "Para Birimi",
+    "Program Turu",
+    "Yil",
+    "Kademeler",
+    "Senaryo Adi",
+  ];
   const scenarioStepOk = [
     true,
     currencyStepOk,
+    Boolean(newScenarioProgramType),
     Boolean(draftAcademicYear) && draftRangeOk && !yearConflict,
     hasEnabledKademe,
     draftReady,
@@ -342,6 +357,7 @@ export default function SchoolPage() {
 
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
+  const programType = useMemo(() => getProgramType(inputs, selectedScenario), [inputs, selectedScenario]);
 
   const scenarioProgress = useMemo(
     () => computeScenarioProgress({ inputs, norm, config: progressConfig }),
@@ -561,6 +577,7 @@ export default function SchoolPage() {
         uygulananProgram: "",
       },
       kademeler: normalizeKademeConfig(t.kademeler),
+      programType: normalizeProgramType(t.programType),
       okulUcretleriHesaplama: typeof t.okulUcretleriHesaplama === "boolean" ? t.okulUcretleriHesaplama : true,
       ucretArtisOranlari: t.ucretArtisOranlari || {
         okulOncesi: 0,
@@ -677,16 +694,20 @@ export default function SchoolPage() {
   const applyTuitionStudentCounts = (src) => {
     const s = src && typeof src === "object" ? src : {};
     const grades = s?.gradesYears?.y1 || s?.grades || [];
-    const sums = summarizeGradesByKademe(grades, s?.temelBilgiler?.kademeler);
-    const map = {
-      okulOncesi: Number(sums.okulOncesi || 0),
-      ilkokulYerel: Number(sums.ilkokul || 0),
-      ortaokulYerel: Number(sums.ortaokul || 0),
-      liseYerel: Number(sums.lise || 0),
-      ilkokulInt: 0,
-      ortaokulInt: 0,
-      liseInt: 0,
-    };
+  const sums = summarizeGradesByKademe(grades, s?.temelBilgiler?.kademeler);
+  const programType = getProgramType(s);
+  const variantCounts = {
+    okulOncesi: Number(sums.okulOncesi || 0),
+    ilkokulYerel: 0,
+    ilkokulInt: 0,
+    ortaokulYerel: 0,
+    ortaokulInt: 0,
+    liseYerel: 0,
+    liseInt: 0,
+  };
+  variantCounts[mapBaseKademeToVariant("ilkokul", programType)] = Number(sums.ilkokul || 0);
+  variantCounts[mapBaseKademeToVariant("ortaokul", programType)] = Number(sums.ortaokul || 0);
+  variantCounts[mapBaseKademeToVariant("lise", programType)] = Number(sums.lise || 0);
 
     const syncRows = (rows, getCount) => {
       if (!Array.isArray(rows)) return { rows, changed: false };
@@ -704,7 +725,7 @@ export default function SchoolPage() {
     };
 
     const tuitionSync = syncRows(s?.gelirler?.tuition?.rows, (key) =>
-      Object.prototype.hasOwnProperty.call(map, key) ? map[key] : null
+      Object.prototype.hasOwnProperty.call(variantCounts, key) ? variantCounts[key] : null
     );
 
     if (!tuitionSync.changed) return s;
@@ -890,12 +911,15 @@ export default function SchoolPage() {
       }
     }
     if (step === 2) {
-      if (!draftAcademicYear) return "Lütfen geçerli bir akademik yıl girin.";
-      if (!draftRangeOk) return "Bitiş yılı, başlangıç yılından 1 fazla olmalı.";
-      if (yearConflict) return "Bu yıl türü için zaten bir senaryo var. Lütfen başka bir yıl seçin.";
+      if (!newScenarioProgramType) return "Program Turu secilmelidir.";
     }
-    if (step === 3 && !hasEnabledKademe) return "En az bir kademe seçmelisiniz.";
-    if (step === 4 && !newScenarioName.trim()) return "Senaryo adı zorunludur.";
+    if (step === 3) {
+      if (!draftAcademicYear) return "Lutfen gecerli bir akademik yil girin.";
+      if (!draftRangeOk) return "Bitis yili, baslangic yilindan 1 fazla olmali.";
+      if (yearConflict) return "Bu yil turu icin zaten bir senaryo var. Lutfen baska bir yil secin.";
+    }
+    if (step === 4 && !hasEnabledKademe) return "En az bir kademe secmelisiniz.";
+    if (step === 5 && !newScenarioName.trim()) return "Senaryo adi zorunludur.";
     return "";
   }
 
@@ -928,6 +952,7 @@ export default function SchoolPage() {
     setNewScenarioInputCurrency("USD");
     setNewScenarioLocalCurrencyCode("");
     setNewScenarioFxUsdToLocal("");
+    setNewScenarioProgramType(null);
     setNewScenarioStep(0);
   }
 
@@ -990,6 +1015,7 @@ export default function SchoolPage() {
       setNewScenarioFxUsdToLocal(
         scenario.fx_usd_to_local != null ? String(scenario.fx_usd_to_local) : ""
       );
+      setNewScenarioProgramType(scenario.program_type || PROGRAM_TYPES.LOCAL);
     } catch (e) {
       setErr(e.message || "Senaryo yüklenemedi.");
       setScenarioWizardOpen(false);
@@ -1038,6 +1064,7 @@ export default function SchoolPage() {
     setErr("");
     setScenarioWizardSaving(true);
     try {
+      const scenarioProgramType = newScenarioProgramType || PROGRAM_TYPES.LOCAL;
       const kademeConfig = normalizeKademeConfig(newScenarioKademeler);
       const created = await api.createScenario(schoolId, {
         name,
@@ -1046,6 +1073,7 @@ export default function SchoolPage() {
         inputCurrency: newScenarioInputCurrency,
         localCurrencyCode: newScenarioInputCurrency === "LOCAL" ? normalizedLocalCode : null,
         fxUsdToLocal: newScenarioInputCurrency === "LOCAL" ? newScenarioFxUsdToLocal : null,
+        programType: scenarioProgramType,
       });
       setNewScenarioName("");
       const sc = await api.listScenarios(schoolId);
@@ -1094,11 +1122,13 @@ export default function SchoolPage() {
     setErr("");
     setScenarioWizardSaving(true);
     try {
+      const scenarioProgramType = newScenarioProgramType || PROGRAM_TYPES.LOCAL;
       const kademeConfig = normalizeKademeConfig(newScenarioKademeler);
       await api.updateScenario(schoolId, scenarioWizardScenario.id, {
         name,
         academicYear: draftAcademicYear,
         kademeConfig,
+        programType: scenarioProgramType,
         localCurrencyCode:
           scenarioWizardScenario?.input_currency === "LOCAL" ? normalizedLocalCode : undefined,
         fxUsdToLocal:
@@ -1111,13 +1141,14 @@ export default function SchoolPage() {
       setSelectedScenario((prev) =>
         prev && prev.id === scenarioWizardScenario.id
           ? {
-            ...prev,
-            name,
-            academic_year: draftAcademicYear,
-            ...(scenarioWizardScenario?.input_currency === "LOCAL"
-              ? { local_currency_code: normalizedLocalCode, fx_usd_to_local: fxValue }
-              : {}),
-          }
+              ...prev,
+              name,
+              academic_year: draftAcademicYear,
+              program_type: scenarioProgramType,
+              ...(scenarioWizardScenario?.input_currency === "LOCAL"
+                ? { local_currency_code: normalizedLocalCode, fx_usd_to_local: fxValue }
+                : {}),
+            }
           : prev
       );
       setInputs((prev) => {
@@ -1125,6 +1156,7 @@ export default function SchoolPage() {
         const next = structuredClone(prev);
         next.temelBilgiler = next.temelBilgiler || {};
         next.temelBilgiler.kademeler = kademeConfig;
+        next.temelBilgiler.programType = scenarioProgramType;
         return next;
       });
       setBaselineInputs((prev) => {
@@ -1132,9 +1164,11 @@ export default function SchoolPage() {
         const next = structuredClone(prev);
         next.temelBilgiler = next.temelBilgiler || {};
         next.temelBilgiler.kademeler = kademeConfig;
+        next.temelBilgiler.programType = scenarioProgramType;
         return next;
       });
       clearDirtyPrefix("inputs.temelBilgiler.kademeler");
+      clearDirtyPrefix("inputs.temelBilgiler.programType");
       setScenarioWizardOpen(false);
       setNewScenarioStep(0);
     } catch (e) {
@@ -1364,6 +1398,7 @@ export default function SchoolPage() {
           selectedScenario.input_currency === "LOCAL" ? selectedScenario.local_currency_code || "" : null,
         fxUsdToLocal:
           selectedScenario.input_currency === "LOCAL" ? selectedScenario.fx_usd_to_local : null,
+        programType: selectedScenario?.program_type || PROGRAM_TYPES.LOCAL,
       });
 
       let clonedInputs = structuredClone(inputs);
@@ -2153,7 +2188,38 @@ export default function SchoolPage() {
                 )}
                 {newScenarioStep === 2 && (
                   <div style={{ marginTop: 10 }}>
-                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Yıl</div>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Program Turu</div>
+                    <div className="row" style={{ gap: 12 }}>
+                      {[
+                        {
+                          key: PROGRAM_TYPES.LOCAL,
+                          label: "Yerel",
+                          hint: "Yerel kademeleri planlayin",
+                        },
+                        {
+                          key: PROGRAM_TYPES.INTERNATIONAL,
+                          label: "International",
+                          hint: "Uluslararasi kademeleri planlayin",
+                        },
+                      ].map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          className={`btn ${newScenarioProgramType === option.key ? "primary" : "ghost"}`}
+                          aria-pressed={newScenarioProgramType === option.key}
+                          onClick={() => setNewScenarioProgramType(option.key)}
+                        >
+                          <div style={{ fontWeight: 700 }}>{option.label}</div>
+                          <div className="small" style={{ opacity: 0.75 }}>{option.hint}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {newScenarioStep === 3 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Yil</div>
                     {newScenarioPeriod === "full" ? (
                       <input
                         className="input sm"
@@ -2179,22 +2245,22 @@ export default function SchoolPage() {
                       </div>
                     )}
                     <div className="small muted" style={{ marginTop: 6 }}>
-                      Akademik yıl: {draftAcademicYear || "-"}
+                      Akademik yil: {draftAcademicYear || "-"}
                       {newScenarioPeriod === "split" && draftAcademicYear && !draftRangeOk ? (
                         <span style={{ color: "#b91c1c", marginLeft: 8 }}>
-                          Bitiş yılı, başlangıç yılından 1 fazla olmalı.
+                          Bitis yili, baslangic yilindan 1 fazla olmali.
                         </span>
                       ) : null}
                       {draftAcademicYear && yearConflict ? (
                         <span style={{ color: "#b91c1c", marginLeft: 8 }}>
-                          Bu yıl türü için zaten bir senaryo var.
+                          Bu yil turu icin zaten bir senaryo var.
                         </span>
                       ) : null}
                     </div>
                   </div>
                 )}
 
-                {newScenarioStep === 3 && (
+                {newScenarioStep === 4 && (
                   <div style={{ marginTop: 10 }}>
                     <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Kademeler</div>
                     <table className="table">
@@ -2202,8 +2268,8 @@ export default function SchoolPage() {
                         <tr>
                           <th>Kademe</th>
                           <th style={{ width: 120 }}>Aktif</th>
-                          <th style={{ width: 160 }}>Başlangıç</th>
-                          <th style={{ width: 160 }}>Bitiş</th>
+                          <th style={{ width: 160 }}>Baslangic</th>
+                          <th style={{ width: 160 }}>Bitis</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2249,28 +2315,27 @@ export default function SchoolPage() {
                       </tbody>
                     </table>
                     {!hasEnabledKademe ? (
-                      <div className="small" style={{ color: "#b91c1c" }}>En az bir kademe seçmelisiniz.</div>
+                      <div className="small" style={{ color: "#b91c1c" }}>En az bir kademe secmelisiniz.</div>
                     ) : null}
                   </div>
                 )}
 
-                {newScenarioStep === 4 && (
+                {newScenarioStep === 5 && (
                   <div style={{ marginTop: 10 }}>
-                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Senaryo Adı</div>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Senaryo Adi</div>
                     <div className="row">
                       <input
                         className="input"
-                        placeholder="Senaryo adı"
+                        placeholder="Senaryo adi"
                         value={newScenarioName}
                         onChange={(e) => setNewScenarioName(e.target.value)}
                       />
                     </div>
                     {!newScenarioName.trim() ? (
-                      <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>Senaryo adı zorunludur.</div>
+                      <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>Senaryo adi zorunludur.</div>
                     ) : null}
                   </div>
                 )}
-
                 <div className="row" style={{ justifyContent: "space-between", marginTop: 12 }}>
                   <button
                     className="btn"
@@ -2529,6 +2594,7 @@ export default function SchoolPage() {
                 ik={inputs.ik}
                 prevReport={prevReport}
                 dirtyPaths={dirtyPaths}
+                programType={programType}
                 currencyCode={inputCurrencyCode}
                 onDirty={markDirty}
               />
@@ -2554,6 +2620,7 @@ export default function SchoolPage() {
                 plannedGrades={inputs.gradesYears || inputs.grades}
                 currentGrades={inputs.gradesCurrent}
                 kademeConfig={inputs.temelBilgiler?.kademeler}
+                programType={programType}
                 onChange={(v) => {
                   setField("kapasite", v);
                 }}
@@ -2660,6 +2727,7 @@ export default function SchoolPage() {
               }
               onCurrentGradesChange={inputs ? (v) => setField("gradesCurrent", v) : null}
               kademeConfig={inputs?.temelBilgiler?.kademeler}
+              programType={programType}
               dirtyPaths={dirtyPaths}
               onDirty={markDirty}
             />
@@ -2681,6 +2749,7 @@ export default function SchoolPage() {
                 value={inputs.ik}
                 kademeConfig={inputs.temelBilgiler?.kademeler}
                 currencyCode={inputCurrencyCode}
+                programType={programType}
                 onChange={(v) => {
                   setField("ik", v);
                 }}
@@ -2767,6 +2836,7 @@ export default function SchoolPage() {
               prevReport={prevReport}
               reportCurrency={reportCurrency}
               currencyMeta={selectedScenario}
+              programType={programType}
             />
           </div>
         </div>

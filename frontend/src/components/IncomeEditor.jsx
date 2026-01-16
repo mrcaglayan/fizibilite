@@ -2,6 +2,7 @@
 
 import React, { useCallback, useMemo } from "react";
 import { formatKademeLabel, summarizeGradesByKademe } from "../utils/kademe";
+import { getProgramType, isKademeKeyVisible } from "../utils/programType";
 import NumberInput from "./NumberInput";
 
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
@@ -284,6 +285,7 @@ export default function IncomeEditor({
     () => normalizeGelirler(gelirler, normalizedGradesYears.y1, temelBilgiler?.kademeler),
     [gelirler, normalizedGradesYears, temelBilgiler?.kademeler]
   );
+  const programType = useMemo(() => getProgramType({ temelBilgiler }), [temelBilgiler]);
   const kademeLabels = useMemo(
     () => ({
       okulOncesi: formatKademeLabel("Okul Öncesi", temelBilgiler?.kademeler, "okulOncesi"),
@@ -321,10 +323,10 @@ export default function IncomeEditor({
     () =>
       tuitionRows.filter((r) => {
         const baseKey = tuitionBaseByKey[r.key];
-        if (!baseKey) return true;
-        return temelBilgiler?.kademeler?.[baseKey]?.enabled !== false;
+        const baseEnabled = !baseKey || temelBilgiler?.kademeler?.[baseKey]?.enabled !== false;
+        return baseEnabled && isKademeKeyVisible(r.key, programType);
       }),
-    [tuitionRows, tuitionBaseByKey, temelBilgiler?.kademeler]
+    [tuitionRows, tuitionBaseByKey, temelBilgiler?.kademeler, programType]
   );
   const nonEdRows = useMemo(() => g.nonEducationFees?.rows || EMPTY_ROWS, [g.nonEducationFees?.rows]);
   const dormRows = useMemo(() => g.dormitory?.rows || EMPTY_ROWS, [g.dormitory?.rows]);
