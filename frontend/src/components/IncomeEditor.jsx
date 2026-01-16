@@ -358,10 +358,10 @@ export default function IncomeEditor({
     (key, yearKey) => {
       const s = suggestedByYear?.[yearKey] || suggestedByYear?.y1 || suggested;
       if (key === "okulOncesi") return s.kg;
-      if (key === "ilkokulYerel") return s.ilkokul;
-      if (key === "ortaokulYerel") return s.ortaokul;
-      if (key === "liseYerel") return s.lise;
-      return 0; // INT. rows default 0
+      if (key === "ilkokulYerel" || key === "ilkokulInt") return s.ilkokul;
+      if (key === "ortaokulYerel" || key === "ortaokulInt") return s.ortaokul;
+      if (key === "liseYerel" || key === "liseInt") return s.lise;
+      return 0;
     },
     [suggested, suggestedByYear]
   );

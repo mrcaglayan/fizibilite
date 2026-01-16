@@ -1,27 +1,30 @@
 import { getProgramType, isKademeKeyVisible } from "./programType";
 
-const DISCOUNT_DEFAULT_NAMES = [
-  "MAGIS BASARI BURSU",
-  "MAARIF YETENEK BURSU",
-  "IHTIYAC BURSU",
-  "OKUL BASARI BURSU",
-  "TAM EGITIM BURSU",
-  "BARINMA BURSU",
-  "TURKCE BASARI BURSU",
-  "VAKFIN ULUSLARARASI YUKUMLULUKLERINDEN KAYNAKLI INDIRIM",
-  "VAKIF CALISANI INDIRIMI",
-  "KARDES INDIRIMI",
-  "ERKEN KAYIT INDIRIMI",
-  "PESIN ODEME INDIRIMI",
-  "KADEME GECIS INDIRIMI",
-  "TEMSIL INDIRIMI",
-  "KURUM INDIRIMI",
-  "ISTISNAI INDIRIM",
-  "YEREL MEVZUATIN SART KOSTUGU INDIRIM",
+const DISCOUNT_DEFS = [
+  { key: "magisBasariBursu", name: "MAGIS BASARI BURSU" },
+  { key: "maarifYetenekBursu", name: "MAARIF YETENEK BURSU" },
+  { key: "ihtiyacBursu", name: "IHTIYAC BURSU" },
+  { key: "okulBasariBursu", name: "OKUL BASARI BURSU" },
+  { key: "tamEgitimBursu", name: "TAM EGITIM BURSU" },
+  { key: "barinmaBursu", name: "BARINMA BURSU" },
+  { key: "turkceBasariBursu", name: "TURKCE BASARI BURSU" },
+  {
+    key: "uluslararasiYukumlulukIndirimi",
+    name: "VAKFIN ULUSLARARASI YUKUMLULUKLERINDEN KAYNAKLI INDIRIM",
+  },
+  { key: "vakifCalisaniIndirimi", name: "VAKIF CALISANI INDIRIMI" },
+  { key: "kardesIndirimi", name: "KARDES INDIRIMI" },
+  { key: "erkenKayitIndirimi", name: "ERKEN KAYIT INDIRIMI" },
+  { key: "pesinOdemeIndirimi", name: "PESIN ODEME INDIRIMI" },
+  { key: "kademeGecisIndirimi", name: "KADEME GECIS INDIRIMI" },
+  { key: "temsilIndirimi", name: "TEMSIL INDIRIMI" },
+  { key: "kurumIndirimi", name: "KURUM INDIRIMI" },
+  { key: "istisnaiIndirim", name: "ISTISNAI INDIRIM" },
+  { key: "yerelMevzuatIndirimi", name: "YEREL MEVZUATIN SART KOSTUGU INDIRIM" },
 ];
 
-const SCHOLARSHIP_NAMES = DISCOUNT_DEFAULT_NAMES.slice(0, 7);
-const OTHER_DISCOUNT_NAMES = DISCOUNT_DEFAULT_NAMES.slice(7);
+const SCHOLARSHIP_DEFS = DISCOUNT_DEFS.slice(0, 7);
+const OTHER_DISCOUNT_DEFS = DISCOUNT_DEFS.slice(7);
 
 function safeNum(value) {
   const n = Number(value);
@@ -85,7 +88,15 @@ function buildTuitionRowCosts(row, uniformFee, booksFee, transportFee, mealFee, 
   };
 }
 
-function buildDiscountRow({ name, tuitionStudents, grossTuition, toUsd, inputDiscounts, prevDiscounts }) {
+function buildDiscountRow({
+  name,
+  tuitionStudents,
+  grossTuition,
+  toUsd,
+  inputDiscounts,
+  prevDiscounts,
+  currentCount,
+}) {
   const normalized = normalizeName(name);
   const entry = inputDiscounts.get(normalized);
   const ratio = entry ? clamp0(entry.ratio) : 0;
@@ -109,7 +120,7 @@ function buildDiscountRow({ name, tuitionStudents, grossTuition, toUsd, inputDis
     name,
     planned: plannedRatio,
     cost: plannedCostUsd,
-    cur: prev?.effectiveRatePart ?? null,
+    cur: currentCount ?? null,
     currentCost: prev?.amount ?? null,
   };
 }
@@ -149,6 +160,7 @@ export function buildDetailedReportModel({
   const performans = temel?.performans?.gerceklesen || {};
   const rakipAnalizi = temel?.rakipAnalizi || {};
   const inflation = temel?.inflation || {};
+  const bursIndirimCounts = temel?.bursIndirimOgrenciSayilari || {};
 
   const kapasite = inputs?.kapasite || {};
   const byKademe = kapasite?.byKademe || {};
@@ -351,24 +363,26 @@ export function buildDetailedReportModel({
   const discountInputLookup = buildDiscountLookup(inputs?.discounts || []);
   const prevDiscountLookup = buildDiscountLookup(prevReport?.years?.y1?.income?.discountsDetail || []);
 
-  const scholarships = SCHOLARSHIP_NAMES.map((name) =>
+  const scholarships = SCHOLARSHIP_DEFS.map((def) =>
     buildDiscountRow({
-      name,
+      name: def.name,
       tuitionStudents: tuitionStudentsForDiscounts,
       grossTuition: grossTuitionForDiscount,
       toUsd,
       inputDiscounts: discountInputLookup,
       prevDiscounts: prevDiscountLookup,
+      currentCount: clamp0(bursIndirimCounts?.[def.key]),
     })
   );
-  const discounts = OTHER_DISCOUNT_NAMES.map((name) =>
+  const discounts = OTHER_DISCOUNT_DEFS.map((def) =>
     buildDiscountRow({
-      name,
+      name: def.name,
       tuitionStudents: tuitionStudentsForDiscounts,
       grossTuition: grossTuitionForDiscount,
       toUsd,
       inputDiscounts: discountInputLookup,
       prevDiscounts: prevDiscountLookup,
+      currentCount: clamp0(bursIndirimCounts?.[def.key]),
     })
   );
 

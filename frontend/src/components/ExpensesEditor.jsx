@@ -133,7 +133,7 @@ const BURS_DEFAULTS = [
   { name: "BARINMA BURSU" },
   { name: "TÜRKÇE BAŞARI BURSU" },
   { name: "VAKFIN ULUSLARARASI YÜKÜMLÜLÜKLERİNDEN KAYNAKLI İNDİRİM" },
-  { name: "VAAKIF ÇALIŞANI İNDİRİMİ" },
+  { name: "VAKIF ÇALIŞANI İNDİRİMİ" },
   { name: "KARDEŞ İNDİRİMİ" },
   { name: "ERKEN KAYIT İNDİRİMİ" },
   { name: "PEŞİN ÖDEME İNDİRİMİ" },
