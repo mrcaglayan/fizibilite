@@ -556,7 +556,7 @@ export default function TemelBilgilerEditor({
                         <select
                           className={inputClass("input xxs", ["kademeler", def.key, "from"])}
                           value={row?.from || ""}
-                          onChange={(value) => updateKademe(def.key, { from: value })}
+                          onChange={(e) => updateKademe(def.key, { from: e.target.value })}
                           disabled={!row?.enabled}
                         >
                           {gradeOptions.map((g) => (
@@ -568,7 +568,7 @@ export default function TemelBilgilerEditor({
                         <select
                           className={inputClass("input xxs", ["kademeler", def.key, "to"])}
                           value={row?.to || ""}
-                          onChange={(value) => updateKademe(def.key, { to: value })}
+                          onChange={(e) => updateKademe(def.key, { to: e.target.value })}
                           disabled={!row?.enabled}
                         >
                           {gradeOptions.map((g) => (

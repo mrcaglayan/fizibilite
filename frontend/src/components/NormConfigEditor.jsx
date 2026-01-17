@@ -209,13 +209,14 @@ function GradeTable({
   const rowLabelStyle = { fontWeight: 800, whiteSpace: "nowrap" };
 
   const LABEL_COL_W = 150;
-  const GRADE_COL_W = Number.isFinite(gradeColWidth) ? gradeColWidth : 44;
+  const GRADE_COL_W = Number.isFinite(gradeColWidth) ? gradeColWidth : 36;
   const TOTAL_COL_W = 78;
+  const SINGLE_SEGMENT_MIN_W = 100;
 
   const compactInputStyle = {
-    width: Number.isFinite(inputWidth) ? inputWidth : GRADE_COL_W - 4,
+    width: Number.isFinite(inputWidth) ? inputWidth : GRADE_COL_W - 14,
     boxSizing: "border-box",
-    textAlign: "right",
+    textAlign: "center",
     paddingLeft: 4,
     paddingRight: 4,
   };
@@ -260,7 +261,17 @@ function GradeTable({
                     paddingTop: 6,
                     paddingBottom: 6,
                     ...(idx === 0 ? {} : dividerStyle),
-                    background: "rgba(15, 23, 42, 0.03)",
+                    background: "rgba(22, 87, 238, 0.03)",
+                    minWidth:
+                      seg.grades.length === 1
+                        ? SINGLE_SEGMENT_MIN_W
+                        : seg.grades.length * GRADE_COL_W,
+                    width:
+                      seg.grades.length === 1
+                        ? SINGLE_SEGMENT_MIN_W
+                        : seg.grades.length * GRADE_COL_W,
+                    whiteSpace: "normal",
+                    lineHeight: 1.2,
                   }}
                   title={seg.label}
                 >
@@ -270,7 +281,7 @@ function GradeTable({
               <th
                 rowSpan={2}
                 style={{
-                  textAlign: "right",
+                  textAlign: "center",
                   minWidth: TOTAL_COL_W,
                   width: TOTAL_COL_W,
                   maxWidth: TOTAL_COL_W,
@@ -290,7 +301,7 @@ function GradeTable({
                 <th
                   key={r.grade}
                   style={{
-                    textAlign: "right",
+                    textAlign: "center",
                     minWidth: GRADE_COL_W,
                     width: GRADE_COL_W,
                     maxWidth: GRADE_COL_W,
@@ -1013,33 +1024,39 @@ export default function NormConfigEditor({
         </div>
       </div>
 
-      <GradeTable
-        title="PLANLANAN DÖNEM BİLGİLERİ"
-        subtitle="Her sınıf düzeyi için şube sayısı ve öğrenci sayısı (senaryo)."
-        grades={activePlanningGrades}
-        onChange={setPlanningGrades}
-        dirtyPaths={dirtyPaths}
-        onDirty={onDirty}
-        pathPrefix={planningPath}
-        gradeColWidth={34}
-        inputWidth={24}
-        gradeOrder={visibleGrades}
-        allGrades={ALL_GRADES}
-        kademeConfig={kademeConfig}
-      />
+      <div className="row" style={{ alignItems: "stretch" }}>
+        <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+          <GradeTable
+            title="PLANLANAN DÖNEM BİLGİLERİ"
+            subtitle="Her sınıf düzeyi için şube sayısı ve öğrenci sayısı (senaryo)."
+            grades={activePlanningGrades}
+            onChange={setPlanningGrades}
+            dirtyPaths={dirtyPaths}
+            onDirty={onDirty}
+            pathPrefix={planningPath}
+            gradeColWidth={34}
+            inputWidth={24}
+            gradeOrder={visibleGrades}
+            allGrades={ALL_GRADES}
+            kademeConfig={kademeConfig}
+          />
+        </div>
 
-      <GradeTable
-        title="MEVCUT DÖNEM BİLGİLERİ"
-        subtitle="Mevcut dönem şube ve toplam öğrenci sayıları (karşılaştırma için)."
-        grades={currentGrades}
-        onChange={canEditCurrent ? onCurrentGradesChange : null}
-        dirtyPaths={dirtyPaths}
-        onDirty={onDirty}
-        pathPrefix="inputs.gradesCurrent"
-        gradeOrder={visibleGrades}
-        allGrades={ALL_GRADES}
-        kademeConfig={kademeConfig}
-      />
+        <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+          <GradeTable
+            title="MEVCUT DÖNEM BİLGİLERİ"
+            subtitle="Mevcut dönem şube ve toplam öğrenci sayıları (karşılaştırma için)."
+            grades={currentGrades}
+            onChange={canEditCurrent ? onCurrentGradesChange : null}
+            dirtyPaths={dirtyPaths}
+            onDirty={onDirty}
+            pathPrefix="inputs.gradesCurrent"
+            gradeOrder={visibleGrades}
+            allGrades={ALL_GRADES}
+            kademeConfig={kademeConfig}
+          />
+        </div>
+      </div>
 
       {!canEditCurrent ? (
         <div className="small" style={{ marginTop: 6 }}>
