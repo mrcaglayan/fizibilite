@@ -4,12 +4,12 @@ import React, { useEffect, useMemo, useState } from "react";
 
 const fmt = (v) =>
   typeof v === "number" && Number.isFinite(v)
-    ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    ? v.toLocaleString(undefined, { maximumFractionDigits: 0 })
     : "-";
 
 const fmtPct = (v) =>
   typeof v === "number" && Number.isFinite(v)
-    ? (v * 100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + "%"
+    ? (v * 100).toLocaleString(undefined, { maximumFractionDigits: 0 }) + "%"
     : "-";
 
 const SERVICE_LABELS = {

@@ -32,6 +32,11 @@ function safeNum(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function clamp(value, min, max) {
+  const n = safeNum(value);
+  return Math.min(max, Math.max(min, n));
+}
+
 function clamp0(value) {
   return Math.max(0, safeNum(value));
 }
@@ -117,40 +122,31 @@ function buildTuitionRowCosts(row, uniformFee, booksFee, transportFee, mealFee, 
   };
 }
 
-function buildDiscountRow({
-  name,
-  tuitionStudents,
-  grossTuition,
-  toUsd,
-  inputDiscounts,
-  prevDiscounts,
-  currentCount,
-}) {
+function buildDiscountPlanRowY1({ name, key, tuitionStudents, avgTuition, toUsd, inputDiscounts, currentCount }) {
   const normalized = normalizeName(name);
   const entry = inputDiscounts.get(normalized);
-  const ratio = entry ? clamp0(entry.ratio) : 0;
-  let plannedRatio = 0;
-  let plannedCostUsd = 0;
+  const row = entry || { name, mode: "percent", value: 0, ratio: 0 };
 
-  if (entry) {
-    const mode = String(entry.mode || "percent").trim().toLowerCase();
-    if (mode === "fixed") {
-      plannedRatio = ratio;
-      plannedCostUsd = tuitionStudents * ratio * toUsd(entry.value);
-    } else {
-      const pct = clamp0(entry.value);
-      plannedRatio = ratio * pct;
-      plannedCostUsd = grossTuition * plannedRatio;
-    }
-  }
+  const hasCount = row.studentCount != null && row.studentCount !== "";
+  const count = hasCount ? Math.max(0, Math.round(safeNum(row.studentCount))) : null;
+  const ratio = clamp(row.ratio, 0, 1);
+  const derived = tuitionStudents > 0 ? Math.round((count != null ? count : ratio * tuitionStudents)) : 0;
+  const plannedCount = tuitionStudents > 0 ? Math.min(derived, tuitionStudents) : count != null ? count : 0;
 
-  const prev = prevDiscounts.get(normalized);
+  const mode = String(row.mode || "percent").trim().toLowerCase();
+  const value = safeNum(row.value);
+  const pct = clamp(value, 0, 1);
+  const cost =
+    mode === "fixed"
+      ? plannedCount * Math.max(0, toUsd(value))
+      : safeNum(avgTuition) * plannedCount * pct;
+
   return {
     name,
-    planned: plannedRatio,
-    cost: plannedCostUsd,
+    planned: plannedCount,
+    cost,
     cur: currentCount ?? null,
-    currentCost: prev?.amount ?? null,
+    key,
   };
 }
 
@@ -292,7 +288,6 @@ export function buildDetailedReportModel({
   const reportExpenses = report?.years?.y1?.expenses || {};
 
   const reportGrossTuition = safeNum(reportIncome?.grossTuition) || totalTuitionEdu;
-  const reportTuitionStudents = safeNum(reportIncome?.tuitionStudents) || totalTuitionStudents;
   const nonEducationTotal =
     safeNum(reportIncome?.nonEducationFeesTotal) ||
     nonEducationRows.reduce((sum, row) => sum + toUsd(row?.unitFee) * safeNum(row?.studentCount), 0);
@@ -389,31 +384,35 @@ export function buildDetailedReportModel({
     },
   ];
 
-  const tuitionStudentsForDiscounts =
-    reportTuitionStudents || totalTuitionStudents || currentStudents || 0;
-  const grossTuitionForDiscount = reportGrossTuition || totalTuitionEdu;
+  const tuitionStudentsForDiscounts = tuitionInputRows.length
+    ? tuitionInputRows.reduce((sum, row) => sum + safeNum(row?.studentCount), 0)
+    : plannedStudents || currentStudents || 0;
+  const grossTuitionForDiscounts = tuitionInputRows.length
+    ? tuitionInputRows.reduce((sum, row) => sum + safeNum(row?.studentCount) * toUsd(row?.unitFee), 0)
+    : tuitionStudentsForDiscounts * toUsd(inputs?.gelirler?.tuitionFeePerStudentYearly ?? 0);
+  const avgTuitionForDiscounts =
+    tuitionStudentsForDiscounts > 0 ? grossTuitionForDiscounts / tuitionStudentsForDiscounts : 0;
   const discountInputLookup = buildDiscountLookup(inputs?.discounts || []);
-  const prevDiscountLookup = buildDiscountLookup(prevReport?.years?.y1?.income?.discountsDetail || []);
 
   const scholarships = SCHOLARSHIP_DEFS.map((def) =>
-    buildDiscountRow({
+    buildDiscountPlanRowY1({
       name: def.name,
+      key: def.key,
       tuitionStudents: tuitionStudentsForDiscounts,
-      grossTuition: grossTuitionForDiscount,
+      avgTuition: avgTuitionForDiscounts,
       toUsd,
       inputDiscounts: discountInputLookup,
-      prevDiscounts: prevDiscountLookup,
       currentCount: clamp0(bursIndirimCounts?.[def.key]),
     })
   );
   const discounts = OTHER_DISCOUNT_DEFS.map((def) =>
-    buildDiscountRow({
+    buildDiscountPlanRowY1({
       name: def.name,
+      key: def.key,
       tuitionStudents: tuitionStudentsForDiscounts,
-      grossTuition: grossTuitionForDiscount,
+      avgTuition: avgTuitionForDiscounts,
       toUsd,
       inputDiscounts: discountInputLookup,
-      prevDiscounts: prevDiscountLookup,
       currentCount: clamp0(bursIndirimCounts?.[def.key]),
     })
   );

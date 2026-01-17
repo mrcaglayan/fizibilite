@@ -53,6 +53,46 @@ function fmtPct(v, digits = 2) {
   );
 }
 
+const NUM_CELL_STYLE = { textAlign: "right" };
+
+function fmtInt(v) {
+  if (!isFiniteNumber(v)) return "—";
+  return fmtNumber(v, { maximumFractionDigits: 0, minimumFractionDigits: 0 });
+}
+
+function formatTuitionRow(row, currencyCode) {
+  if (!row || typeof row !== "object") return row;
+  return {
+    ...row,
+    edu: isFiniteNumber(row.edu) ? fmtMoney(row.edu, currencyCode) : row.edu ?? "—",
+    uniform: isFiniteNumber(row.uniform) ? fmtMoney(row.uniform, currencyCode) : row.uniform ?? "—",
+    books: isFiniteNumber(row.books) ? fmtMoney(row.books, currencyCode) : row.books ?? "—",
+    transport: isFiniteNumber(row.transport) ? fmtMoney(row.transport, currencyCode) : row.transport ?? "—",
+    meal: isFiniteNumber(row.meal) ? fmtMoney(row.meal, currencyCode) : row.meal ?? "—",
+    raisePct: isFiniteNumber(row.raisePct) ? fmtPct(row.raisePct, 0) : row.raisePct ?? "—",
+    total: isFiniteNumber(row.total) ? fmtMoney(row.total, currencyCode) : row.total ?? "—",
+  };
+}
+
+function formatAmountRatioRow(row, currencyCode) {
+  if (!row || typeof row !== "object") return row;
+  return {
+    ...row,
+    amount: isFiniteNumber(row.amount) ? fmtMoney(row.amount, currencyCode) : row.amount ?? "—",
+    ratio: isFiniteNumber(row.ratio) ? fmtPct(row.ratio, 0) : row.ratio ?? "—",
+  };
+}
+
+function formatScholarshipRow(row, currencyCode) {
+  if (!row || typeof row !== "object") return row;
+  return {
+    ...row,
+    cur: isFiniteNumber(row.cur) ? fmtInt(row.cur) : row.cur ?? "—",
+    planned: isFiniteNumber(row.planned) ? fmtInt(row.planned) : row.planned ?? "—",
+    cost: isFiniteNumber(row.cost) ? fmtMoney(row.cost, currencyCode) : row.cost ?? "—",
+  };
+}
+
 const LEVEL_VARIANT_BASES = [
   { key: "okulOncesi", match: "okul oncesi" },
   { key: "ilkokul", match: "ilkokul" },
@@ -354,6 +394,10 @@ export default function DetailedReportView(props) {
     () => tuitionRows.filter((row) => isTuitionRowVisible(row, activeProgramType)),
     [tuitionRows, activeProgramType]
   );
+  const formattedTuitionRows = useMemo(
+    () => filteredTuitionRows.map((row) => formatTuitionRow(row, currencyCode)),
+    [filteredTuitionRows, currencyCode]
+  );
 
   const paramsRows = useMemo(() => {
     const base = model.parameters || [];
@@ -472,6 +516,15 @@ export default function DetailedReportView(props) {
     ];
   }, [model]);
 
+  const formattedRevRows = useMemo(
+    () => revRows.map((row) => formatAmountRatioRow(row, currencyCode)),
+    [revRows, currencyCode]
+  );
+  const formattedExpRows = useMemo(
+    () => expRows.map((row) => formatAmountRatioRow(row, currencyCode)),
+    [expRows, currencyCode]
+  );
+
   const scholarshipsRows = useMemo(() => {
     const base = model.scholarships || [];
     if (Array.isArray(base) && base.length) return base;
@@ -509,6 +562,15 @@ export default function DetailedReportView(props) {
       { name: "Toplam", cur: "—", planned: "—", cost: "—" },
     ];
   }, [model]);
+
+  const formattedScholarshipsRows = useMemo(
+    () => scholarshipsRows.map((row) => formatScholarshipRow(row, currencyCode)),
+    [scholarshipsRows, currencyCode]
+  );
+  const formattedDiscountsRows = useMemo(
+    () => discountsRows.map((row) => formatScholarshipRow(row, currencyCode)),
+    [discountsRows, currencyCode]
+  );
 
   const perfRows = useMemo(() => {
     const base = model.performance || [];
@@ -611,13 +673,13 @@ export default function DetailedReportView(props) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
           <div className="card">
             <div style={{ fontWeight: 900, marginBottom: 8 }}>Ücret Özeti</div>
-              <SimpleTable
-                columns={[
-                  { key: "level", label: "Kademe" },
-                  { key: "edu", label: "Eğitim" , thStyle: { width: 140 } },
-                  { key: "total", label: "Toplam" , thStyle: { width: 140 } },
-                ]}
-                rows={filteredTuitionRows
+            <SimpleTable
+              columns={[
+                { key: "level", label: "Kademe" },
+                { key: "edu", label: "Eğitim" , thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "total", label: "Toplam" , thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              ]}
+                rows={formattedTuitionRows
                   .filter((r) => !/TOPLAM|ORTALAMA/i.test(String(r.level || "")))
                   .slice(0, 7)
                   .map((r, i) => ({ key: String(i), level: r.level, edu: r.edu, total: r.total }))}
@@ -632,7 +694,7 @@ export default function DetailedReportView(props) {
             <SimpleTable
               columns={[
                 { key: "item", label: "Kalem" },
-                { key: "planned", label: "Plan", thStyle: { width: 120 } },
+                { key: "planned", label: "Plan", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
               ]}
               rows={hrRows.slice(0, 7).map((r, i) => ({ key: String(i), item: r.item, planned: r.planned }))}
             />
@@ -648,10 +710,10 @@ export default function DetailedReportView(props) {
             <SimpleTable
               columns={[
                 { key: "name", label: "Gelir" },
-                { key: "amount", label: "Tutar", thStyle: { width: 160 } },
-                { key: "ratio", label: "%", thStyle: { width: 70 } },
+                { key: "amount", label: "Tutar", thStyle: { width: 160, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "ratio", label: "%", thStyle: { width: 70, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
               ]}
-              rows={revRows.slice(0, 7).map((r, i) => ({ key: String(i), ...r }))}
+              rows={formattedRevRows.slice(0, 7).map((r, i) => ({ key: String(i), ...r }))}
             />
           </div>
 
@@ -660,10 +722,10 @@ export default function DetailedReportView(props) {
             <SimpleTable
               columns={[
                 { key: "name", label: "Gider" },
-                { key: "amount", label: "Tutar", thStyle: { width: 160 } },
-                { key: "ratio", label: "%", thStyle: { width: 70 } },
+                { key: "amount", label: "Tutar", thStyle: { width: 160, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "ratio", label: "%", thStyle: { width: 70, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
               ]}
-              rows={expRows.slice(0, 7).map((r, i) => ({ key: String(i), ...r }))}
+              rows={formattedExpRows.slice(0, 7).map((r, i) => ({ key: String(i), ...r }))}
             />
           </div>
         </div>
@@ -674,10 +736,10 @@ export default function DetailedReportView(props) {
             <SimpleTable
               columns={[
                 { key: "name", label: "Burs" },
-                { key: "planned", label: "Plan", thStyle: { width: 90 } },
-                { key: "cost", label: "Maliyet", thStyle: { width: 120 } },
+                { key: "planned", label: "Plan", thStyle: { width: 90, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "cost", label: "Maliyet", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
               ]}
-              rows={scholarshipsRows.slice(0, 8).map((r, i) => ({ key: String(i), name: r.name, planned: r.planned, cost: r.cost }))}
+              rows={formattedScholarshipsRows.slice(0, 8).map((r, i) => ({ key: String(i), name: r.name, planned: r.planned, cost: r.cost }))}
             />
           </div>
 
@@ -686,10 +748,10 @@ export default function DetailedReportView(props) {
             <SimpleTable
               columns={[
                 { key: "name", label: "İndirim" },
-                { key: "planned", label: "Plan", thStyle: { width: 90 } },
-                { key: "cost", label: "Maliyet", thStyle: { width: 120 } },
+                { key: "planned", label: "Plan", thStyle: { width: 90, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "cost", label: "Maliyet", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
               ]}
-              rows={discountsRows.slice(0, 8).map((r, i) => ({ key: String(i), name: r.name, planned: r.planned, cost: r.cost }))}
+              rows={formattedDiscountsRows.slice(0, 8).map((r, i) => ({ key: String(i), name: r.name, planned: r.planned, cost: r.cost }))}
             />
           </div>
         </div>
@@ -698,9 +760,9 @@ export default function DetailedReportView(props) {
           <SimpleTable
             columns={[
               { key: "level", label: "Kademe" },
-              { key: "a", label: "A", thStyle: { width: 120 } },
-              { key: "b", label: "B", thStyle: { width: 120 } },
-              { key: "c", label: "C", thStyle: { width: 120 } },
+              { key: "a", label: "A", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "b", label: "B", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "c", label: "C", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
             ]}
             rows={competitorRows.map((r, i) => ({ key: String(i), ...r }))}
           />
@@ -764,7 +826,7 @@ export default function DetailedReportView(props) {
         <SimpleTable
           columns={[
             { key: "k", label: "Bilgi" },
-            { key: "v", label: "Değer", thStyle: { width: 240 } },
+            { key: "v", label: "Değer", thStyle: { width: 240, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
           ]}
           rows={educationInfoRows}
         />
@@ -774,15 +836,17 @@ export default function DetailedReportView(props) {
         <SimpleTable
           columns={[
             { key: "level", label: "Kademe" },
-            { key: "edu", label: "Eğitim Ücreti" },
-            { key: "uniform", label: "Üniforma" },
-            { key: "books", label: "Kitap Kırtasiye" },
-            { key: "transport", label: "Ulaşım" },
-            { key: "meal", label: "Yemek (*)" },
-            { key: "raisePct", label: "Artış Oranı" },
-            { key: "total", label: "Total Ücret" },
+            { key: "edu", label: "Eğitim Ücreti", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "uniform", label: "Üniforma", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "books", label: "Kitap Kırtasiye", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "transport", label: "Ulaşım", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "meal", label: "Yemek (*)", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "raisePct", label: "Artış Oranı", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "total", label: "Total Ücret", thStyle: { textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
           ]}
-          rows={filteredTuitionRows.map((r, i) => ({ key: String(i), ...r }))}
+          rows={formattedTuitionRows
+            .filter((r) => !/TOPLAM/i.test(String(r.level || "")))
+            .map((r, i) => ({ key: String(i), ...r }))}
         />
         <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
           (*) Yemek ve diğer paket kalemleri okula göre değişebilir. Detaylar ileride veri bağlanınca otomatik gelecektir.
@@ -794,7 +858,7 @@ export default function DetailedReportView(props) {
           columns={[
             { key: "no", label: "#", thStyle: { width: 40 } },
             { key: "desc", label: "Parametre" },
-            { key: "value", label: "Veri", thStyle: { width: 220 } },
+            { key: "value", label: "Veri", thStyle: { width: 220, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
           ]}
           rows={paramsRows.map((r, i) => ({
             key: String(i),
@@ -814,7 +878,7 @@ export default function DetailedReportView(props) {
               <SimpleTable
                 columns={[
                   { key: "k", label: "Bilgi" },
-                  { key: "v", label: "Değer", thStyle: { width: 180 } },
+                  { key: "v", label: "Değer", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
                 ]}
                 rows={capacityStudentRows.map((r, i) => ({ key: String(i), ...r }))}
               />
@@ -827,7 +891,7 @@ export default function DetailedReportView(props) {
               <SimpleTable
                 columns={[
                   { key: "k", label: "Bilgi" },
-                  { key: "v", label: "Değer", thStyle: { width: 180 } },
+                  { key: "v", label: "Değer", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
                 ]}
                 rows={capacityClassRows.map((r, i) => ({ key: String(i), ...r }))}
               />
@@ -845,8 +909,8 @@ export default function DetailedReportView(props) {
           <SimpleTable
             columns={[
               { key: "item", label: "Kalem" },
-              { key: "current", label: "Mevcut", thStyle: { width: 120 } },
-              { key: "planned", label: "Planlanan", thStyle: { width: 140 } },
+              { key: "current", label: "Mevcut", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "planned", label: "Planlanan", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
             ]}
             rows={hrRows.map((r, i) => ({ key: String(i), ...r }))}
           />
@@ -857,10 +921,10 @@ export default function DetailedReportView(props) {
           <SimpleTable
             columns={[
               { key: "name", label: "Gelir" },
-              { key: "amount", label: "Tutar", thStyle: { width: 180 } },
-              { key: "ratio", label: "% Oranı", thStyle: { width: 120 } },
+              { key: "amount", label: "Tutar", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "ratio", label: "% Oranı", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
             ]}
-            rows={revRows.map((r, i) => ({ key: String(i), ...r }))}
+            rows={formattedRevRows.map((r, i) => ({ key: String(i), ...r }))}
           />
         </div>
 
@@ -869,10 +933,10 @@ export default function DetailedReportView(props) {
           <SimpleTable
             columns={[
               { key: "name", label: "Gider" },
-              { key: "amount", label: "Tutar", thStyle: { width: 180 } },
-              { key: "ratio", label: "% Oranı", thStyle: { width: 120 } },
+              { key: "amount", label: "Tutar", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "ratio", label: "% Oranı", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
             ]}
-            rows={expRows.map((r, i) => ({ key: String(i), ...r }))}
+            rows={formattedExpRows.map((r, i) => ({ key: String(i), ...r }))}
           />
         </div>
 
@@ -903,11 +967,11 @@ export default function DetailedReportView(props) {
               <SimpleTable
                 columns={[
                   { key: "name", label: "Burs" },
-                  { key: "cur", label: "Mevcut", thStyle: { width: 90 } },
-                  { key: "planned", label: "Planlanan", thStyle: { width: 110 } },
-                  { key: "cost", label: "Maliyet", thStyle: { width: 120 } },
+                  { key: "cur", label: "Mevcut", thStyle: { width: 90, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                  { key: "planned", label: "Planlanan", thStyle: { width: 110, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                  { key: "cost", label: "Maliyet", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
                 ]}
-                rows={scholarshipsRows.map((r, i) => ({ key: String(i), ...r }))}
+                rows={formattedScholarshipsRows.map((r, i) => ({ key: String(i), ...r }))}
               />
             </div>
 
@@ -918,11 +982,11 @@ export default function DetailedReportView(props) {
               <SimpleTable
                 columns={[
                   { key: "name", label: "İndirim" },
-                  { key: "cur", label: "Mevcut", thStyle: { width: 90 } },
-                  { key: "planned", label: "Planlanan", thStyle: { width: 110 } },
-                  { key: "cost", label: "Maliyet", thStyle: { width: 120 } },
+                  { key: "cur", label: "Mevcut", thStyle: { width: 90, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                  { key: "planned", label: "Planlanan", thStyle: { width: 110, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                  { key: "cost", label: "Maliyet", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
                 ]}
-                rows={discountsRows.map((r, i) => ({ key: String(i), ...r }))}
+                rows={formattedDiscountsRows.map((r, i) => ({ key: String(i), ...r }))}
               />
             </div>
           </div>
@@ -942,9 +1006,9 @@ export default function DetailedReportView(props) {
           <SimpleTable
             columns={[
               { key: "level", label: "Kademe" },
-              { key: "a", label: "A Kurum Fiyatı", thStyle: { width: 140 } },
-              { key: "b", label: "B Kurum Fiyatı", thStyle: { width: 140 } },
-              { key: "c", label: "C Kurum Fiyatı", thStyle: { width: 140 } },
+              { key: "a", label: "A Kurum Fiyatı", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "b", label: "B Kurum Fiyatı", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              { key: "c", label: "C Kurum Fiyatı", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
             ]}
             rows={competitorRows.map((r, i) => ({ key: String(i), ...r }))}
           />
@@ -975,9 +1039,9 @@ export default function DetailedReportView(props) {
         <SimpleTable
           columns={[
             { key: "metric", label: "" },
-            { key: "planned", label: "Planlanan", thStyle: { width: 180 } },
-            { key: "actual", label: "Gerçekleşen", thStyle: { width: 180 } },
-            { key: "variance", label: "Sapma %", thStyle: { width: 120 } },
+            { key: "planned", label: "Planlanan", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "actual", label: "Gerçekleşen", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+            { key: "variance", label: "Sapma %", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
           ]}
           rows={perfRows.map((r, i) => ({ key: String(i), ...r }))}
         />
