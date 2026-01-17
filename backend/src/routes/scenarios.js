@@ -6,6 +6,7 @@ const { requireAuth, requireAssignedCountry } = require("../middleware/auth");
 const { calculateSchoolFeasibility } = require("../engine/feasibilityEngine");
 const { computeScenarioProgress } = require("../utils/scenarioProgress");
 const { getProgressConfig } = require("../utils/progressConfig");
+const { normalizeProgramType } = require("../utils/programType");
 const xlsx = require("xlsx");
 const crypto = require("crypto");
 
@@ -277,10 +278,10 @@ async function assertSchoolInUserCountry(pool, schoolId, countryId) {
 }
 
 async function assertScenarioInSchool(pool, scenarioId, schoolId) {
-  const [[s]] = await pool.query(
-    "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id AND school_id=:school_id",
-    { id: scenarioId, school_id: schoolId }
-  );
+    const [[s]] = await pool.query(
+      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id AND school_id=:school_id",
+      { id: scenarioId, school_id: schoolId }
+    );
   return s || null;
 }
 
@@ -311,6 +312,7 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       "input_currency",
       "local_currency_code",
       "fx_usd_to_local",
+      "program_type",
     ];
     const columns = fieldsParam === "brief" ? briefColumns : defaultColumns;
 
@@ -360,13 +362,22 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
 router.post("/schools/:schoolId/scenarios", async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
-    const { name, academicYear, kademeConfig, inputCurrency, localCurrencyCode, fxUsdToLocal } = req.body || {};
+  const {
+    name,
+    academicYear,
+    kademeConfig,
+    inputCurrency,
+    localCurrencyCode,
+    fxUsdToLocal,
+    programType: requestProgramType,
+  } = req.body || {};
     if (!name || !academicYear) return res.status(400).json({ error: "name and academicYear required" });
     const academicYearNorm = normalizeAcademicYear(academicYear);
     const inputCurrencyValue = String(inputCurrency || "USD").trim().toUpperCase();
     if (!["USD", "LOCAL"].includes(inputCurrencyValue)) {
       return res.status(400).json({ error: "Invalid inputCurrency" });
     }
+    const normalizedProgramType = normalizeProgramType(requestProgramType);
 
     let localCode = null;
     let fxValue = null;
@@ -400,20 +411,21 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
     let r;
     try {
       [r] = await pool.query(
-      `INSERT INTO school_scenarios
-        (school_id, name, academic_year, input_currency, local_currency_code, fx_usd_to_local, created_by)
-       VALUES
-        (:school_id,:name,:year,:input_currency,:local_currency_code,:fx_usd_to_local,:created_by)`,
-      {
-        school_id: schoolId,
-        name,
-        year: academicYearNorm,
-        input_currency: inputCurrencyValue,
-        local_currency_code: localCode,
-        fx_usd_to_local: fxValue,
-        created_by: req.user.id,
-      }
-    );
+        `INSERT INTO school_scenarios
+          (school_id, name, academic_year, input_currency, local_currency_code, fx_usd_to_local, program_type, created_by)
+         VALUES
+          (:school_id,:name,:year,:input_currency,:local_currency_code,:fx_usd_to_local,:program_type,:created_by)`,
+        {
+          school_id: schoolId,
+          name,
+          year: academicYearNorm,
+          input_currency: inputCurrencyValue,
+          local_currency_code: localCode,
+          fx_usd_to_local: fxValue,
+          program_type: normalizedProgramType,
+          created_by: req.user.id,
+        }
+      );
     } catch (e) {
       if (e && (e.code === "ER_DUP_ENTRY" || e.errno === 1062)) {
         return res.status(409).json({ error: "This academic year already has a scenario." });
@@ -491,6 +503,7 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
 
 
         kademeler: normalizeKademeConfig(kademeConfig),
+        programType: normalizedProgramType,
 
         // OKUL ÜCRETLERİ HESAPLAMA EVET/HAYIR
         okulUcretleriHesaplama: true,
@@ -622,7 +635,7 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
         { name: "BARINMA BURSU", mode: "percent", value: 0, ratio: 0 },
         { name: "TÜRKÇE BAŞARI BURSU", mode: "percent", value: 0, ratio: 0 },
         { name: "VAKFIN ULUSLARARASI YÜKÜMLÜLÜKLERİNDEN KAYNAKLI İNDİRİM", mode: "percent", value: 0, ratio: 0 },
-        { name: "VAAKIF ÇALIŞANI İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
+        { name: "VAKIF ÇALIŞANI İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
         { name: "KARDEŞ İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
         { name: "ERKEN KAYIT İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
         { name: "PEŞİN ÖDEME İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
@@ -692,6 +705,7 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
       input_currency: inputCurrencyValue,
       local_currency_code: localCode,
       fx_usd_to_local: fxValue,
+      program_type: normalizedProgramType,
     });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
@@ -712,6 +726,9 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
     const hasLocalCurrencyCode = req.body?.localCurrencyCode != null;
     const hasFxUsdToLocal = req.body?.fxUsdToLocal != null;
 
+    const programTypeRequest = req.body?.programType;
+    const hasProgramType = programTypeRequest != null;
+    const normalizedProgramType = hasProgramType ? normalizeProgramType(programTypeRequest) : null;
     const hasName = typeof name === "string";
     const hasYear = typeof academicYear === "string";
     const hasKademe = kademeConfig && typeof kademeConfig === "object";
@@ -747,6 +764,10 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
 
     const updates = [];
     const params = { id: scenarioId, school_id: schoolId };
+    if (hasProgramType) {
+      updates.push("program_type=:program_type");
+      params.program_type = normalizedProgramType;
+    }
     if (hasName) {
       updates.push("name=:name");
       params.name = String(name).trim();
@@ -834,7 +855,7 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
     }
 
     const [[updated]] = await pool.query(
-      "SELECT id, name, academic_year, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id",
+      "SELECT id, name, academic_year, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id",
       { id: scenarioId }
     );
 
@@ -1074,7 +1095,7 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
     );
 
     const [[updated]] = await pool.query(
-      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local FROM school_scenarios WHERE id=:id",
+      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id",
       { id: scenarioId }
     );
 
@@ -1579,7 +1600,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       "BARINMA BURSU",
       "TÜRKÇE BAŞARI BURSU",
       "VAKFIN ULUSLARARASI YÜKÜMLÜLÜKLERİNDEN KAYNAKLI İNDİRİM",
-      "VAAKIF ÇALIŞANI İNDİRİMİ",
+      "VAKIF ÇALIŞANI İNDİRİMİ",
       "KARDEŞ İNDİRİMİ",
       "ERKEN KAYIT İNDİRİMİ",
       "PEŞİN ÖDEME İNDİRİMİ",

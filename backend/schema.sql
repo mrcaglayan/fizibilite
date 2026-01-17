@@ -78,6 +78,7 @@ CREATE TABLE `school_scenarios` (
   `input_currency` enum('USD','LOCAL') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'USD',
   `local_currency_code` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `fx_usd_to_local` decimal(18,6) DEFAULT NULL,
+  `program_type` enum('local','international') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'local',
   `status` enum('draft','submitted','revision_requested','approved') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `submitted_at` timestamp NULL DEFAULT NULL,
   `submitted_by` bigint DEFAULT NULL,

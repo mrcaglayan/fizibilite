@@ -136,6 +136,8 @@ const SECTION_DEFS = [
   { id: "indirimler.discounts", tabKey: "indirimler", label: "Indirimler", modeDefault: "MIN", minDefault: 1 },
 ];
 
+const { getProgramType, getVariantKeysForProgramType } = require("./programType");
+
 const OKUL_EGITIM_FIELDS = [
   { key: "egitimBaslamaTarihi", label: "Egitim baslama tarihi", type: "string" },
   { key: "zorunluEgitimDonemleri", label: "Zorunlu egitim donemleri", type: "string" },
@@ -255,8 +257,12 @@ function buildKademeContext(inputs) {
     }
   });
 
+  const programType = getProgramType(inputs);
+  const variantKeys = getVariantKeysForProgramType(programType);
   const enabledLevels = new Set(
-    IK_LEVEL_DEFS.filter((lvl) => enabledKademes.has(lvl.kademeKey)).map((lvl) => lvl.key)
+    IK_LEVEL_DEFS.filter(
+      (lvl) => enabledKademes.has(lvl.kademeKey) && variantKeys.has(lvl.key)
+    ).map((lvl) => lvl.key)
   );
 
   return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels };

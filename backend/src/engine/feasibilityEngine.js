@@ -3,6 +3,7 @@
 const DEFAULT_GRADE_KEYS = ["KG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
 const DEFAULT_NORM_MAX_HOURS = 24;
 
+const { getProgramType, mapBaseKademeToVariant } = require("../utils/programType");
 const isFiniteNumber = (v) => Number.isFinite(v) && !Number.isNaN(v);
 const safeNum = (v) => (isFiniteNumber(Number(v)) ? Number(v) : 0);
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
@@ -654,17 +655,27 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
     const kademeSums = summarizeGradesByKademe(out.grades || [], baseInput?.temelBilgiler?.kademeler);
 
     if (out?.gelirler?.tuition?.rows) {
+      const programType = getProgramType(baseInput);
+      const variantCounts = {
+        okulOncesi: Number(kademeSums.okulOncesi || 0),
+        ilkokulYerel: 0,
+        ilkokulInt: 0,
+        ortaokulYerel: 0,
+        ortaokulInt: 0,
+        liseYerel: 0,
+        liseInt: 0,
+      };
+      variantCounts[mapBaseKademeToVariant("ilkokul", programType)] = Number(kademeSums.ilkokul || 0);
+      variantCounts[mapBaseKademeToVariant("ortaokul", programType)] = Number(kademeSums.ortaokul || 0);
+      variantCounts[mapBaseKademeToVariant("lise", programType)] = Number(kademeSums.lise || 0);
+
       out.gelirler.tuition.rows = (out.gelirler.tuition.rows || []).map((r) => {
         const key = String(r?.key ?? "");
-        let sc = null;
-
-        if (key === "okulOncesi") sc = kademeSums.okulOncesi;
-        else if (key === "ilkokulYerel") sc = kademeSums.ilkokul;
-        else if (key === "ortaokulYerel") sc = kademeSums.ortaokul;
-        else if (key === "liseYerel") sc = kademeSums.lise;
-        else if (key === "ilkokulInt" || key === "ortaokulInt" || key === "liseInt") sc = 0;
-
-        return sc == null ? r : { ...r, studentCount: safeNum(sc) };
+        if (!Object.prototype.hasOwnProperty.call(variantCounts, key)) return r;
+        const nextCount = Number(variantCounts[key] || 0);
+        const current = Number(r?.studentCount ?? 0);
+        if (Math.abs(current - nextCount) < 1e-6) return r;
+        return { ...r, studentCount: nextCount };
       });
     }
 
