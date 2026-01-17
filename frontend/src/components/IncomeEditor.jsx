@@ -3,9 +3,9 @@
 import React, { useCallback, useMemo } from "react";
 import { formatKademeLabel, summarizeGradesByKademe } from "../utils/kademe";
 import { getProgramType, isKademeKeyVisible } from "../utils/programType";
+import { computeDiscountTotalForYear } from "../utils/discounts";
 import NumberInput from "./NumberInput";
 
-const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -208,46 +208,6 @@ function getInflationFactors(temelBilgiler) {
   };
 }
 
-function computeDiscountPreview({ discounts, tuitionStudents, grossTuition }) {
-  const list = Array.isArray(discounts) ? discounts : [];
-  const students = toNum(tuitionStudents);
-  const gross = toNum(grossTuition);
-  if (gross <= 0 || students <= 0 || list.length === 0) return { totalDiscounts: 0, details: [] };
-
-  const avgTuitionFee = gross / students;
-
-  const details = [];
-  let avgRate = 0;
-
-  for (const d of list) {
-    if (!d) continue;
-    const name = String(d.name || "Discount");
-    const mode = String(d.mode || "percent");
-    const value = toNum(d.value);
-    const ratio = clamp(toNum(d.ratio), 0, 1);
-
-    let amount = 0;
-    let effectiveRatePart = 0;
-
-    if (mode === "fixed") {
-      amount = students * ratio * value;
-      if (avgTuitionFee > 0) effectiveRatePart = (ratio * value) / avgTuitionFee;
-    } else {
-      const pct = clamp(value, 0, 1);
-      amount = gross * ratio * pct;
-      effectiveRatePart = ratio * pct;
-    }
-
-    details.push({ name, mode, value, ratio, amount, effectiveRatePart });
-    avgRate += effectiveRatePart;
-  }
-
-  const capped = clamp(avgRate, 0, 1);
-  const totalDiscounts = Math.min(gross, gross * capped);
-
-  return { totalDiscounts, details };
-}
-
 export default function IncomeEditor({
   gelirler,
   temelBilgiler,
@@ -416,12 +376,15 @@ export default function IncomeEditor({
 
       const fallbackStudents = suggestedByYear?.[y]?.total ?? suggested.total;
       const tuitionBaseStudents = tuitionStudentsByYear?.[y] > 0 ? tuitionStudentsByYear[y] : fallbackStudents;
-      const discountPreview = computeDiscountPreview({
+      const avgTuitionFee = tuitionBaseStudents > 0 ? tuitionTotal / tuitionBaseStudents : 0;
+      const totalDiscounts = computeDiscountTotalForYear({
+        yearKey: y,
         discounts,
-        tuitionStudents: tuitionBaseStudents,
         grossTuition: tuitionTotal,
+        tuitionStudents: tuitionBaseStudents,
+        avgTuitionFee,
+        factor: f,
       });
-      const totalDiscounts = toNum(discountPreview.totalDiscounts);
 
       const netActivity = activityGross - totalDiscounts;
       const netIncome = grossTotal - totalDiscounts;
