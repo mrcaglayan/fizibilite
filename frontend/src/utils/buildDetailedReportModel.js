@@ -1,4 +1,5 @@
 import { getProgramType, isKademeKeyVisible } from "./programType";
+import { normalizeKademeConfig } from "./kademe";
 
 const DISCOUNT_DEFS = [
   { key: "magisBasariBursu", name: "MAGIS BASARI BURSU" },
@@ -61,6 +62,34 @@ function buildDiscountLookup(list) {
     map.set(key, row);
   }
   return map;
+}
+
+const TUITION_VARIANT_BASE = {
+  okuloncesi: "okulOncesi",
+  ilkokul: "ilkokul",
+  ilkokulyerel: "ilkokul",
+  ilkokulint: "ilkokul",
+  ortaokul: "ortaokul",
+  ortaokulyerel: "ortaokul",
+  ortaokulint: "ortaokul",
+  lise: "lise",
+  liseyerel: "lise",
+  liseint: "lise",
+};
+
+function normalizeTuitionVariant(value) {
+  if (value == null) return "";
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
+}
+
+function getTuitionBaseKey(row) {
+  const normalized = normalizeTuitionVariant(row?.key ?? row?.label ?? row?.level);
+  if (!normalized) return null;
+  return TUITION_VARIANT_BASE[normalized] || null;
 }
 
 function collectTuitionStudents(rows) {
@@ -154,6 +183,7 @@ export function buildDetailedReportModel({
   const headerLabel = headerParts.join(" > ");
 
   const temel = inputs?.temelBilgiler || {};
+  const kademeConfig = normalizeKademeConfig(temel?.kademeler);
   const okulEgitim = temel?.okulEgitimBilgileri || {};
   const ucretArtisOranlari = temel?.ucretArtisOranlari || {};
   const ikMevcut = temel?.ikMevcut || {};
@@ -198,9 +228,11 @@ export function buildDetailedReportModel({
     ? inputs.gelirler.otherInstitutionIncome.rows
     : [];
 
-  const tuitionVisibleRows = tuitionInputRows.filter((row) =>
-    isKademeKeyVisible(row?.key, resolvedProgramType)
-  );
+  const tuitionVisibleRows = tuitionInputRows.filter((row) => {
+    const baseKey = getTuitionBaseKey(row);
+    if (baseKey && kademeConfig[baseKey]?.enabled === false) return false;
+    return isKademeKeyVisible(row?.key, resolvedProgramType);
+  });
 
   const feeLookup = new Map();
   for (const row of nonEducationRows) {
