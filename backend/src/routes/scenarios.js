@@ -181,7 +181,11 @@ function normalizeInputsToUsd(inputsRaw, scenario) {
 
   const convertUnitCostItems = (items) => {
     if (!items || typeof items !== "object") return;
-    Object.values(items).forEach((row) => convert(row, "unitCost"));
+    Object.values(items).forEach((row) => {
+      convert(row, "unitCost");
+      convert(row, "unitCostY2");
+      convert(row, "unitCostY3");
+    });
   };
   convertUnitCostItems(giderler?.ogrenimDisi?.items);
   convertUnitCostItems(giderler?.yurt?.items);

@@ -8,6 +8,42 @@ const isFiniteNumber = (v) => Number.isFinite(v) && !Number.isNaN(v);
 const safeNum = (v) => (isFiniteNumber(Number(v)) ? Number(v) : 0);
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
+function parsePercentLike(v) {
+  if (v == null) return 0;
+  if (typeof v === "number") return isFiniteNumber(v) ? v : 0;
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (!trimmed) return 0;
+    const hasPercent = trimmed.includes("%");
+    const numericText = trimmed.replace("%", "").trim();
+    const parsed = Number(numericText);
+    if (!isFiniteNumber(parsed)) return 0;
+    return hasPercent ? parsed / 100 : parsed;
+  }
+  return safeNum(v);
+}
+
+const formatRatePercent = (rate) => {
+  if (!isFiniteNumber(rate)) return "0";
+  const pct = rate * 100;
+  const rounded = Math.round((pct + Number.EPSILON) * 100) / 100;
+  return String(rounded);
+};
+
+function normalizeRate(v, label) {
+  const original = v;
+  let value = parsePercentLike(v);
+  let normalized = false;
+  if (isFiniteNumber(value) && Math.abs(value) > 1 && Math.abs(value) <= 100) {
+    value = value / 100;
+    normalized = true;
+  }
+  const note = normalized
+    ? `Enflasyon ${label} değeri ${original} girildi -> %${formatRatePercent(value)} olarak düzeltildi`
+    : undefined;
+  return { value, original, normalized, note };
+}
+
 const GRADE_INDEX = new Map(DEFAULT_GRADE_KEYS.map((g, i) => [g, i]));
 
 const SERVICE_TO_INCOME_KEY = {
@@ -403,29 +439,49 @@ function calculateTotalExpensesFromExcelGiderler(giderler) {
 
   const serviceKeys = ["yemek", "uniforma", "kitapKirtasiye", "ulasimServis"];
   let servicesTotal = 0;
+  const servicesBreakdown = [];
   for (const k of serviceKeys) {
     const row = ogrenimDisi[k] || {};
     const sc = safeNum(row.studentCount);
     const uc = safeNum(row.unitCost);
     checkNonNeg(sc, `giderler.ogrenimDisi.items.${k}.studentCount`);
     checkNonNeg(uc, `giderler.ogrenimDisi.items.${k}.unitCost`);
-    servicesTotal += Math.max(0, sc) * Math.max(0, uc);
+    const scUsed = Math.max(0, sc);
+    const ucUsed = Math.max(0, uc);
+    const total = scUsed * ucUsed;
+    servicesTotal += total;
+    servicesBreakdown.push({ key: k, studentCount: scUsed, unitCost: ucUsed, total });
   }
 
   const dormKeys = ["yurtGiderleri", "digerYurt"];
   let dormTotal = 0;
+  const dormBreakdown = [];
   for (const k of dormKeys) {
     const row = yurt[k] || {};
     const sc = safeNum(row.studentCount);
     const uc = safeNum(row.unitCost);
     checkNonNeg(sc, `giderler.yurt.items.${k}.studentCount`);
     checkNonNeg(uc, `giderler.yurt.items.${k}.unitCost`);
-    dormTotal += Math.max(0, sc) * Math.max(0, uc);
+    const scUsed = Math.max(0, sc);
+    const ucUsed = Math.max(0, uc);
+    const total = scUsed * ucUsed;
+    dormTotal += total;
+    dormBreakdown.push({ key: k, studentCount: scUsed, unitCost: ucUsed, total });
   }
 
   const totalExpenses = operatingTotal + servicesTotal + dormTotal;
 
-  return { operatingTotal, servicesTotal, dormTotal, hrTotal, totalExpenses, errors, warnings };
+  return {
+    operatingTotal,
+    servicesTotal,
+    servicesBreakdown,
+    dormTotal,
+    dormBreakdown,
+    hrTotal,
+    totalExpenses,
+    errors,
+    warnings,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -436,11 +492,16 @@ function calculateTotalExpensesFromExcelGiderler(giderler) {
 function getInflationRates(input) {
   const t = input?.temelBilgiler || {};
   // allow a couple of shapes for backward compatibility
-  const y2 = safeNum(t?.inflation?.y2 ?? t?.inflationY2 ?? t?.inflation_rate_y2 ?? 0);
-  const y3 = safeNum(t?.inflation?.y3 ?? t?.inflationY3 ?? t?.inflation_rate_y3 ?? 0);
+  const rawY2 = t?.inflation?.y2 ?? t?.inflationY2 ?? t?.inflation_rate_y2 ?? 0;
+  const rawY3 = t?.inflation?.y3 ?? t?.inflationY3 ?? t?.inflation_rate_y3 ?? 0;
+  const normY2 = normalizeRate(rawY2, "Y2");
+  const normY3 = normalizeRate(rawY3, "Y3");
   return {
-    y2: clamp(y2, -0.99, 10),
-    y3: clamp(y3, -0.99, 10),
+    y2: clamp(normY2.value, -0.99, 10),
+    y3: clamp(normY3.value, -0.99, 10),
+    inflationRaw: { y2: rawY2, y3: rawY3 },
+    inflationNormalized: { y2: normY2.normalized, y3: normY3.normalized },
+    inflationNotes: [normY2.note, normY3.note].filter(Boolean),
   };
 }
 
@@ -449,7 +510,12 @@ function getInflationFactors(input) {
   const f1 = 1;
   const f2 = 1 + r.y2;
   const f3 = f2 * (1 + r.y3);
-  return { rates: r, factors: { y1: f1, y2: f2, y3: f3 } };
+  const inflationMeta = {
+    inflationRaw: r.inflationRaw,
+    inflationNormalized: r.inflationNormalized,
+    inflationNotes: r.inflationNotes,
+  };
+  return { rates: { y2: r.y2, y3: r.y3 }, factors: { y1: f1, y2: f2, y3: f3 }, inflationMeta };
 }
 
 function looksLikeCurriculumMap(obj) {
@@ -680,9 +746,17 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
     }
 
     const pickManualStudentCount = (r) => {
-      if (yearKey === "y2") return isProvided(row.studentCountY2) ? safeNum(row.studentCountY2) : base;
-      if (yearKey === "y3") return isProvided(row.studentCountY3) ? safeNum(row.studentCountY3) : base;
-      return base;
+      const base = safeNum(r?.studentCount);
+      if (yearKey === "y2") {
+        const next = isProvided(r?.studentCountY2) ? safeNum(r?.studentCountY2) : base;
+        return Math.max(0, next);
+      }
+      if (yearKey === "y3") {
+        if (isProvided(r?.studentCountY3)) return Math.max(0, safeNum(r?.studentCountY3));
+        if (isProvided(r?.studentCountY2)) return Math.max(0, safeNum(r?.studentCountY2));
+        return Math.max(0, base);
+      }
+      return Math.max(0, base);
     };
 
     if (out?.gelirler?.nonEducationFees?.rows) {
@@ -943,6 +1017,17 @@ function calculateOneYear(input, normConfig) {
   const discountToTuitionRatio = safeDiv(totalDiscounts, incomeBase.grossTuition);
   const hrShare = safeDiv(expenses.hrTotal, totalExpenses);
 
+  const mapBreakdown = (rows) =>
+    (rows || []).map((row) => ({
+      ...row,
+      studentCount: round2(safeNum(row?.studentCount)),
+      unitCost: round2(safeNum(row?.unitCost)),
+      total: round2(safeNum(row?.total)),
+    }));
+
+  const servicesBreakdown = Array.isArray(expenses.servicesBreakdown) ? expenses.servicesBreakdown : [];
+  const dormBreakdown = Array.isArray(expenses.dormBreakdown) ? expenses.dormBreakdown : [];
+
   // warnings
   if (utilizationRate != null) {
     if (utilizationRate < 0.6) warnings.push(`Low utilization (${round2(utilizationRate * 100)}%).`);
@@ -984,7 +1069,9 @@ function calculateOneYear(input, normConfig) {
     expenses: {
       operatingExpensesTotal: round2(safeNum(expenses.operatingTotal)),
       nonTuitionServicesCostTotal: round2(safeNum(expenses.servicesTotal)),
+      nonTuitionServicesBreakdown: mapBreakdown(servicesBreakdown),
       dormitoryCostTotal: round2(safeNum(expenses.dormTotal)),
+      dormitoryCostBreakdown: mapBreakdown(dormBreakdown),
       totalExpenses: round2(totalExpenses),
       hrTotal: round2(safeNum(expenses.hrTotal)),
       hrShare: hrShare == null ? null : round2(hrShare),
@@ -1017,7 +1104,7 @@ function calculateOneYear(input, normConfig) {
 // -----------------------------------------------------------------------------
 
 function calculateSchoolFeasibility(input, normConfig) {
-  const { rates, factors } = getInflationFactors(input);
+  const { rates, factors, inflationMeta } = getInflationFactors(input);
   const salaryByYear = computeIkSalaryMappingByYear(input?.ik || {});
 
   const y1Input = deriveInputForYear(input, "y1", factors, salaryByYear);
@@ -1041,6 +1128,9 @@ function calculateSchoolFeasibility(input, normConfig) {
       ...(input?.temelBilgiler || {}),
       inflation: { y2: rates.y2, y3: rates.y3 },
       inflationFactors: factors,
+      inflationRaw: inflationMeta?.inflationRaw,
+      inflationNormalized: inflationMeta?.inflationNormalized,
+      inflationNotes: inflationMeta?.inflationNotes,
     },
     multiYearValid,
   };

@@ -12,6 +12,13 @@ const fmtPct = (v) =>
     ? (v * 100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + "%"
     : "-";
 
+const SERVICE_LABELS = {
+  yemek: "Yemek",
+  uniforma: "Uniforma",
+  kitapKirtasiye: "Kitap/Kırtasiye",
+  ulasimServis: "Ulaşım/Servis",
+};
+
 function pickYearObj(results) {
   if (!results) return { years: {}, meta: {} };
   if (results?.years && typeof results.years === "object") {
@@ -78,6 +85,18 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
   const e = y.expenses || {};
   const r = y.result || {};
   const k = y.kpis || {};
+  const serviceRows = Array.isArray(e.nonTuitionServicesBreakdown) ? e.nonTuitionServicesBreakdown : [];
+  const getServiceRowTotal = (row) => {
+    const total = Number(row?.total);
+    if (Number.isFinite(total)) return total;
+    const sc = Number(row?.studentCount);
+    const uc = Number(row?.unitCost);
+    if (!Number.isFinite(sc) || !Number.isFinite(uc)) return 0;
+    return sc * uc;
+  };
+  const serviceTotal = serviceRows.length
+    ? serviceRows.reduce((sum, row) => sum + getServiceRowTotal(row), 0)
+    : undefined;
 
   const allErrors = ["y1", "y2", "y3"].flatMap(
     (ky) => years?.[ky]?.flags?.errors || []
@@ -88,6 +107,7 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
 
   const factors = meta?.inflationFactors;
   const infl = meta?.inflation;
+  const inflNotes = Array.isArray(meta?.inflationNotes) ? meta.inflationNotes : [];
 
   return (
     <div className="card" style={{ marginTop: 12 }}>
@@ -133,20 +153,40 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
         </div>
       </div>
 
-      {(infl || factors) && (
-        <div className="row" style={{ marginTop: 10 }}>
-          <span className="badge">
-            Enflasyon Y2: {infl?.y2 != null ? fmtPct(infl.y2) : "-"}
-          </span>
-          <span className="badge">
-            Enflasyon Y3: {infl?.y3 != null ? fmtPct(infl.y3) : "-"}
-          </span>
-          <span className="badge">
-            Faktör Y2: {factors?.y2 != null ? factors.y2.toFixed(4) : "-"}
-          </span>
-          <span className="badge">
-            Faktör Y3: {factors?.y3 != null ? factors.y3.toFixed(4) : "-"}
-          </span>
+      {(infl || factors || inflNotes.length > 0) && (
+        <div style={{ marginTop: 10 }}>
+          {(infl || factors) && (
+            <div className="row">
+              <span className="badge">
+                Enflasyon Y2: {infl?.y2 != null ? fmtPct(infl.y2) : "-"}
+              </span>
+              <span className="badge">
+                Enflasyon Y3: {infl?.y3 != null ? fmtPct(infl.y3) : "-"}
+              </span>
+              <span className="badge">
+                Faktör Y2: {factors?.y2 != null ? factors.y2.toFixed(4) : "-"}
+              </span>
+              <span className="badge">
+                Faktör Y3: {factors?.y3 != null ? factors.y3.toFixed(4) : "-"}
+              </span>
+            </div>
+          )}
+          {inflNotes.length > 0 && (
+            <div className="row" style={{ marginTop: 6, flexWrap: "wrap", gap: 6 }}>
+              {inflNotes.map((note, idx) => (
+                <span
+                  key={idx}
+                  className="badge"
+                  style={{
+                    background: "rgba(245,158,11,0.12)",
+                    border: "1px solid rgba(245,158,11,0.35)",
+                  }}
+                >
+                  ⚠️ {note}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -285,6 +325,51 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
             <tr>
               <td>Öğrenim Dışı Maliyetler Toplamı</td>
               <td className="num">{fmtMoney(e.nonTuitionServicesCostTotal)}</td>
+            </tr>
+            <tr>
+              <td colSpan={2} style={{ paddingTop: 0 }}>
+                <details>
+                  <summary style={{ cursor: "pointer" }}>Detayları göster</summary>
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>
+                      Öğrenim Dışı Maliyetler Detayı
+                    </div>
+                    {serviceRows.length > 0 ? (
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Kalem</th>
+                            <th style={{ textAlign: "right" }}>Öğrenci Sayısı</th>
+                            <th style={{ textAlign: "right" }}>Birim Maliyet</th>
+                            <th style={{ textAlign: "right" }}>Toplam</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {serviceRows.map((row, idx) => {
+                            const rowTotal = getServiceRowTotal(row);
+                            return (
+                              <tr key={row?.key || row?.id || idx}>
+                                <td>{SERVICE_LABELS[row?.key] || row?.key || "-"}</td>
+                                <td className="num">{fmt(row?.studentCount)}</td>
+                                <td className="num">{fmtMoney(row?.unitCost)}</td>
+                                <td className="num">{fmtMoney(rowTotal)}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ fontWeight: 800 }}>
+                            <td>Toplam</td>
+                            <td />
+                            <td />
+                            <td className="num">{fmtMoney(serviceTotal)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="small">Detay bulunamadı.</div>
+                    )}
+                  </div>
+                </details>
+              </td>
             </tr>
             <tr>
               <td>Yurt Giderleri Toplamı</td>
