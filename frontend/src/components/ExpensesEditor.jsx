@@ -627,10 +627,10 @@ export default function ExpensesEditor({
           "egitimAracGerec",
           "finansalGiderler",
           "egitimAmacliHizmet",
-          "temsilAgirlama",
-          "ulkeIciUlasim",
         ],
       },
+      { label: null, keys: ["temsilAgirlama"] },
+      { label: null, keys: ["ulkeIciUlasim"] },
       { label: null, keys: ["ulkeDisiUlasim"] },
       { label: "Vergiler", keys: ["vergilerResmiIslemler", "vergiler"] },
       { label: null, keys: ["demirbasYatirim", "rutinBakim"] },
@@ -765,7 +765,7 @@ export default function ExpensesEditor({
               <td className="cell-pct">{fmtPct(netCiro.y1 > 0 ? operatingTotals.y1 / netCiro.y1 : null)}</td>
 
               <td className="cell-pct sep-left">{fmtPct(yoy(operatingTotals.y2, operatingTotals.y1))}</td>
-              <td className="cell-num">{`Toplam (${currencyCode})`}</td>
+              <td className="cell-num">{fmtMoney(operatingTotals.y2)}</td>
               <td className="cell-pct">{fmtPct(1)}</td>
               <td className="cell-pct">{fmtPct(netCiro.y2 > 0 ? operatingTotals.y2 / netCiro.y2 : null)}</td>
 
@@ -830,10 +830,8 @@ export default function ExpensesEditor({
               const sc3 = toNum(incRow?.studentCountY3 ?? incRow?.studentCountY2 ?? incRow?.studentCount);
 
               const uc1 = toNum(row.unitCost);
-              const hasUc2 = row.unitCostY2 != null && row.unitCostY2 !== "";
-              const hasUc3 = row.unitCostY3 != null && row.unitCostY3 !== "";
-              const uc2 = hasUc2 ? toNum(row.unitCostY2) : uc1 * factors.y2;
-              const uc3 = hasUc3 ? toNum(row.unitCostY3) : uc1 * factors.y3;
+              const uc2 = uc1 * (factors.y2 ?? 1);
+              const uc3 = uc1 * (factors.y3 ?? 1);
 
               const t1 = sc1 * uc1;
               const t2 = sc2 * uc2;
@@ -860,43 +858,28 @@ export default function ExpensesEditor({
 
                   <td className="cell-num">{fmtMoney(t1)}</td>
 
-                  <td className="sep-left cell-count">
+                  <td className="cell-count sep-left">
                     <div className="cell-num">{fmtMoney(sc2)}</div>
                   </td>
 
                   <td className="cell-num">
-                    <NumberInput
-                      className={inputClass("input xs num", svcPath(it.key, "unitCostY2"))}
-                      min="0"
-                      step="0.01"
-                      value={uc2}
-                      onChange={(value) => setSvc(it.key, "unitCostY2", value)}
-                    />
-                    {!hasUc2 ? <div className="small">Varsayılan: Y1×enflasyon</div> : null}
+                    <div>{fmtMoney(uc2)}</div>
                   </td>
 
                   <td className="cell-num">{fmtMoney(t2)}</td>
 
-                  <td className="sep-left cell-count">
+                  <td className="cell-count sep-left">
                     <div className="cell-num">{fmtMoney(sc3)}</div>
                   </td>
 
                   <td className="cell-num">
-                    <NumberInput
-                      className={inputClass("input xs num", svcPath(it.key, "unitCostY3"))}
-                      min="0"
-                      step="0.01"
-                      value={uc3}
-                      onChange={(value) => setSvc(it.key, "unitCostY3", value)}
-                    />
-                    {!hasUc3 ? <div className="small">Varsayılan: Y1×enflasyon</div> : null}
+                    <div>{fmtMoney(uc3)}</div>
                   </td>
 
                   <td className="cell-num">{fmtMoney(t3)}</td>
                 </tr>
               );
             })}
-
             {(() => {
               const byKey = nonEdIncomeByKey;
 
@@ -921,10 +904,8 @@ export default function ExpensesEditor({
                   const sc3 = toNum(incRow?.studentCountY3 ?? incRow?.studentCountY2 ?? incRow?.studentCount);
 
                   const uc1 = toNum(row.unitCost);
-                  const hasUc2 = row.unitCostY2 != null && row.unitCostY2 !== "";
-                  const hasUc3 = row.unitCostY3 != null && row.unitCostY3 !== "";
-                  const uc2 = hasUc2 ? toNum(row.unitCostY2) : uc1 * factors.y2;
-                  const uc3 = hasUc3 ? toNum(row.unitCostY3) : uc1 * factors.y3;
+                  const uc2 = uc1 * (factors.y2 ?? 1);
+                  const uc3 = uc1 * (factors.y3 ?? 1);
 
                   acc.s1 += sc1;
                   acc.s2 += sc2;
@@ -941,21 +922,15 @@ export default function ExpensesEditor({
                 <tr className="row-group-start" style={{ fontWeight: 800 }}>
                   <td colSpan={showAccountCol ? 2 : 1}>TOPLAM</td>
 
-                  <td className="cell-count sep-left">
-                    <div className="cell-num">{fmtMoney(totals.s1)}</div>
-                  </td>
+                  <td className="cell-count sep-left" />
                   <td />
                   <td className="cell-num">{fmtMoney(totals.y1)}</td>
 
-                  <td className="cell-count sep-left">
-                    <div className="cell-num">{fmtMoney(totals.s2)}</div>
-                  </td>
+                  <td className="cell-count sep-left" />
                   <td />
                   <td className="cell-num">{fmtMoney(totals.y2)}</td>
 
-                  <td className="cell-count sep-left">
-                    <div className="cell-num">{fmtMoney(totals.s3)}</div>
-                  </td>
+                  <td className="cell-count sep-left" />
                   <td />
                   <td className="cell-num">{fmtMoney(totals.y3)}</td>
                 </tr>
@@ -1046,7 +1021,6 @@ export default function ExpensesEditor({
 
                   <td className="cell-num">
                     <div className="cell-num">{fmtMoney(uc2)}</div>
-                    <div className="small muted">Varsayılan: Y1×enflasyon</div>
                   </td>
 
                   <td className="cell-num">{fmtMoney(t2)}</td>
@@ -1057,7 +1031,6 @@ export default function ExpensesEditor({
 
                   <td className="cell-num">
                     <div className="cell-num">{fmtMoney(uc3)}</div>
-                    <div className="small muted">Varsayılan: Y1×enflasyon</div>
                   </td>
 
                   <td className="cell-num">{fmtMoney(t3)}</td>
@@ -1103,21 +1076,15 @@ export default function ExpensesEditor({
                 <tr className="row-group-start" style={{ fontWeight: 800 }}>
                   <td colSpan={showAccountCol ? 2 : 1}>TOPLAM</td>
 
-                  <td className="cell-count sep-left">
-                    <div className="cell-num">{fmtMoney(totals.s1)}</div>
-                  </td>
+                  <td className="cell-count sep-left" />
                   <td />
                   <td className="cell-num">{fmtMoney(totals.y1)}</td>
 
-                  <td className="cell-count sep-left">
-                    <div className="cell-num">{fmtMoney(totals.s2)}</div>
-                  </td>
+                  <td className="cell-count sep-left" />
                   <td />
                   <td className="cell-num">{fmtMoney(totals.y2)}</td>
 
-                  <td className="cell-count sep-left">
-                    <div className="cell-num">{fmtMoney(totals.s3)}</div>
-                  </td>
+                  <td className="cell-count sep-left" />
                   <td />
                   <td className="cell-num">{fmtMoney(totals.y3)}</td>
                 </tr>
@@ -1340,7 +1307,7 @@ export default function ExpensesEditor({
                         />
                       </td>
                       <td className="cell-num">
-                       
+
                         <NumberInput
                           className={inputClass("input xs num", discountPath(r.name, "valueY2"))}
                           min="0"

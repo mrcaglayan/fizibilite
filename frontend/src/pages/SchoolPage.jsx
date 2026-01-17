@@ -2750,6 +2750,7 @@ export default function SchoolPage() {
                 kademeConfig={inputs.temelBilgiler?.kademeler}
                 currencyCode={inputCurrencyCode}
                 programType={programType}
+                temelBilgiler={inputs.temelBilgiler}
                 onChange={(v) => {
                   setField("ik", v);
                 }}

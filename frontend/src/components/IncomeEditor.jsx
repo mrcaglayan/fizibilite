@@ -666,19 +666,25 @@ export default function IncomeEditor({
                 <td>TOPLAM</td>
 
                 {/* 1. Yıl */}
-                <td className="cell-count sep-left">{fmt0(totalStudents.y1)}</td>
-                <td />
-                <td className="cell-num">{fmtMoney(totals.y1)}</td>
+              <td className="cell-count sep-left">
+                {isTuitionSection ? fmt0(totalStudents.y1) : ""}
+              </td>
+              <td />
+              <td className="cell-num">{fmtMoney(totals.y1)}</td>
 
                 {/* 2. Yıl */}
-                <td className="cell-count muted sep-left">{fmt0(totalStudents.y2)}</td>
-                <td />
-                <td className="cell-num">{fmtMoney(totals.y2)}</td>
+              <td className="cell-count muted sep-left">
+                {isTuitionSection ? fmt0(totalStudents.y2) : ""}
+              </td>
+              <td />
+              <td className="cell-num">{fmtMoney(totals.y2)}</td>
 
                 {/* 3. Yıl */}
-                <td className="cell-count muted sep-left">{fmt0(totalStudents.y3)}</td>
-                <td />
-                <td className="cell-num">{fmtMoney(totals.y3)}</td>
+              <td className="cell-count muted sep-left">
+                {isTuitionSection ? fmt0(totalStudents.y3) : ""}
+              </td>
+              <td />
+              <td className="cell-num">{fmtMoney(totals.y3)}</td>
               </tr>
             </tbody>
           </table>

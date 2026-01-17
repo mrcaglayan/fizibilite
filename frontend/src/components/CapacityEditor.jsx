@@ -158,10 +158,28 @@ export default function CapacityEditor({
     const nextVal = n0(value);
 
     const prevRow = byKademe?.[lvlKey] || { caps: { cur: 0, y1: 0, y2: 0, y3: 0 } };
-    const nextRow = {
-      ...prevRow,
-      caps: { ...(prevRow.caps || {}), [periodKey]: nextVal },
-    };
+    const prevCaps = prevRow.caps || {};
+    const nextCaps = { ...prevCaps, [periodKey]: nextVal };
+
+    // Autofill future years when current is entered/updated, but keep them editable.
+    if (periodKey === "cur") {
+      const prevCur = n0(prevCaps?.cur);
+      const shouldFollowCur = (pk) => {
+        if (isDirty(`byKademe.${lvlKey}.caps.${pk}`)) return false;
+        const prev = n0(prevCaps?.[pk]);
+        // Fill if empty or still matching the previous cur (tracks cur until user overrides).
+        return prev === 0 || prev === prevCur;
+      };
+      const maybeFill = (pk) => {
+        if (!shouldFollowCur(pk)) return;
+        nextCaps[pk] = nextVal;
+      };
+      if (maybeFill("y1")) nextCaps.y1 = nextVal;
+      if (maybeFill("y2")) nextCaps.y2 = nextVal;
+      if (maybeFill("y3")) nextCaps.y3 = nextVal;
+    }
+
+    const nextRow = { ...prevRow, caps: nextCaps };
 
     const nextByKademe = { ...(byKademe || {}), [lvlKey]: nextRow };
 

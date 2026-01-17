@@ -922,7 +922,7 @@ export default function NormConfigEditor({
         <div className="grid2" style={{ alignItems: "start" }}>
           <div>
             <div style={{ fontWeight: 800 }}>Özet</div>
-            <div className="grid2" style={{ marginTop: 8 }}>
+            <div className="grid2 norm-summary-grid" style={{ marginTop: 8 }}>
               <div className="stat">
                 <div className="label">Toplam Ders Saati (Haftalık)</div>
                 <div className="value">{summary.totalTeachingHours.toFixed(2)}</div>

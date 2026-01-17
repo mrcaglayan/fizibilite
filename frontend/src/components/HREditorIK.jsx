@@ -24,6 +24,17 @@ const YEARS = [
 
 const DEFAULT_UNIT_COST_RATIO = 1;
 
+function getInflationFactors(temelBilgiler) {
+  const infl = temelBilgiler?.inflation || {};
+  const y2 = toNum(infl?.y2);
+  const y3 = toNum(infl?.y3);
+  return {
+    y1: 1,
+    y2: 1 + y2,
+    y3: (1 + y2) * (1 + y3),
+  };
+}
+
 const LEVEL_DEFS = [
   { key: "okulOncesi", baseLabel: "Okul Öncesi", kademeKey: "okulOncesi" },
   { key: "ilkokulYerel", baseLabel: "İlkokul", kademeKey: "ilkokul", suffix: "-YEREL" },
@@ -69,6 +80,7 @@ const ROLE_META = (() => {
     group.roles.forEach((role, roleIndex) => {
       out[role.key] = {
         groupIndex,
+        groupKey: group.groupKey,
         roleIndex,
         groupLen: group.roles.length,
         isGroupEnd: roleIndex === group.roles.length - 1,
@@ -150,8 +162,9 @@ function normalizeUnitCostRatio(value) {
   return n;
 }
 
-function applyUnitCostRatio(input, ratioValue) {
+function applyUnitCostGrowth(input, ratioValue, inflFactors) {
   const ratio = normalizeUnitCostRatio(ratioValue);
+  const factors = inflFactors || { y1: 1, y2: 1, y3: 1 };
   const next = structuredClone(input || {});
   next.unitCostRatio = ratio;
   next.years = next.years || {};
@@ -164,8 +177,10 @@ function applyUnitCostRatio(input, ratioValue) {
 
   for (const r of ALL_ROLES) {
     const base = toNum(next.years.y1.unitCosts?.[r.key]);
-    const y2 = base * ratio;
-    const y3 = y2 * ratio;
+    const meta = ROLE_META[r.key] || {};
+    const useInflation = meta.groupKey === "yerel";
+    const y2 = useInflation ? base * (factors.y2 ?? 1) : base * ratio;
+    const y3 = useInflation ? base * (factors.y3 ?? 1) : y2 * ratio;
     next.years.y2.unitCosts[r.key] = y2;
     next.years.y3.unitCosts[r.key] = y3;
   }
@@ -173,15 +188,18 @@ function applyUnitCostRatio(input, ratioValue) {
   return next;
 }
 
-function areUnitCostsSynced(input, ratioValue) {
+function areUnitCostsSynced(input, ratioValue, inflFactors) {
   const ratio = normalizeUnitCostRatio(ratioValue);
+  const factors = inflFactors || { y1: 1, y2: 1, y3: 1 };
   const y1 = input?.years?.y1?.unitCosts || {};
   const y2 = input?.years?.y2?.unitCosts || {};
   const y3 = input?.years?.y3?.unitCosts || {};
   for (const r of ALL_ROLES) {
     const base = toNum(y1?.[r.key]);
-    const expY2 = base * ratio;
-    const expY3 = expY2 * ratio;
+    const meta = ROLE_META[r.key] || {};
+    const useInflation = meta.groupKey === "yerel";
+    const expY2 = useInflation ? base * (factors.y2 ?? 1) : base * ratio;
+    const expY3 = useInflation ? base * (factors.y3 ?? 1) : expY2 * ratio;
     if (Math.abs(toNum(y2?.[r.key]) - expY2) > 1e-6) return false;
     if (Math.abs(toNum(y3?.[r.key]) - expY3) > 1e-6) return false;
   }
@@ -237,6 +255,7 @@ export default function HREditorIK({
   onSalaryComputed,
   currencyCode = "USD",
   programType = "local",
+  temelBilgiler,
   dirtyPaths,
   onDirty,
   uiScopeKey,
@@ -253,6 +272,7 @@ export default function HREditorIK({
     () => normalizeUnitCostRatio(ik?.unitCostRatio),
     [ik?.unitCostRatio]
   );
+  const inflationFactors = useMemo(() => getInflationFactors(temelBilgiler), [temelBilgiler]);
 
   const kademeler = useMemo(() => normalizeKademeConfig(kademeConfig), [kademeConfig]);
 
@@ -277,10 +297,10 @@ export default function HREditorIK({
 
   useEffect(() => {
     if (!ik) return;
-    if (areUnitCostsSynced(ik, unitCostRatio)) return;
-    const next = applyUnitCostRatio(ik, unitCostRatio);
+    if (areUnitCostsSynced(ik, unitCostRatio, inflationFactors)) return;
+    const next = applyUnitCostGrowth(ik, unitCostRatio, inflationFactors);
     onChange?.(next);
-  }, [ik, unitCostRatio, onChange]);
+  }, [ik, unitCostRatio, inflationFactors, onChange]);
 
   const unitCostPath = (yearKey, roleKey) => `inputs.ik.years.${yearKey}.unitCosts.${roleKey}`;
   const unitCostRatioPath = "inputs.ik.unitCostRatio";
@@ -292,7 +312,7 @@ export default function HREditorIK({
 
   const setUnitCostRatio = (v) => {
     const ratio = normalizeUnitCostRatio(v);
-    const next = applyUnitCostRatio(ik, ratio);
+    const next = applyUnitCostGrowth(ik, ratio, inflationFactors);
     onChange?.(next);
     onDirty?.(unitCostRatioPath, ratio);
   };
@@ -305,7 +325,7 @@ export default function HREditorIK({
     next.years.y1 = next.years.y1 || defaultYearIK();
     next.years.y1.unitCosts = next.years.y1.unitCosts || {};
     next.years.y1.unitCosts[roleKey] = nextValue;
-    const withGrowth = applyUnitCostRatio(next, unitCostRatio);
+    const withGrowth = applyUnitCostGrowth(next, unitCostRatio, inflationFactors);
     onChange?.(withGrowth);
     onDirty?.(unitCostPath("y1", roleKey), nextValue);
   };
