@@ -214,7 +214,7 @@ function GradeTable({
   const SINGLE_SEGMENT_MIN_W = 100;
 
   const compactInputStyle = {
-    width: Number.isFinite(inputWidth) ? inputWidth : GRADE_COL_W - 14,
+    width: Number.isFinite(inputWidth) ? inputWidth : GRADE_COL_W - 2,
     boxSizing: "border-box",
     textAlign: "center",
     paddingLeft: 4,
@@ -1035,7 +1035,7 @@ export default function NormConfigEditor({
             onDirty={onDirty}
             pathPrefix={planningPath}
             gradeColWidth={34}
-            inputWidth={24}
+            inputWidth={30}
             gradeOrder={visibleGrades}
             allGrades={ALL_GRADES}
             kademeConfig={kademeConfig}
