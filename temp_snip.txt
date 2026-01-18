@@ -1,0 +1,80 @@
+    const baseKey = getTuitionBaseKey(row);
+    if (baseKey && kademeConfig[baseKey]?.enabled === false) return false;
+    return isKademeKeyVisible(row?.key, resolvedProgramType);
+  });
+
+  const feeLookup = new Map();
+  for (const row of nonEducationRows) {
+    const key = String(row?.key || "").trim().toLowerCase();
+    if (key) feeLookup.set(key, row);
+  }
+
+  const uniformFee = toUsd(feeLookup.get("uniforma")?.unitFee ?? 0);
+  const booksFee = toUsd(feeLookup.get("kitap")?.unitFee ?? 0);
+  const transportFee = toUsd(feeLookup.get("ulasim")?.unitFee ?? 0);
+  const mealFee = toUsd(feeLookup.get("yemek")?.unitFee ?? 0);
+
+  const nonEduIncomeRows =
+    inputs?.gelirler?.nonEducationFees?.rows ||
+    inputs?.gelirler?.nonEducationFees?.items ||
+    [];
+  const dormIncomeRows =
+    inputs?.gelirler?.dormitory?.rows ||
+    inputs?.gelirler?.dormitory?.items ||
+    inputs?.gelirler?.yurt?.rows ||
+    inputs?.gelirler?.yurt?.items ||
+    [];
+  const MEAL_ALIASES = [
+    "yemek",
+    "ogrenci yemegi",
+    "ogrenci yemegi ucreti",
+    "ogrenci yemeği",
+    "yemek ucreti",
+    "lunch",
+    "meal",
+    "meal fee",
+    "food",
+  ];
+  const UNIFORM_ALIASES = [
+    "uniforma",
+    "okul uniformasi",
+    "okul üniformasi",
+    "forma",
+    "kiyafet",
+    "kıyafet",
+    "uniform",
+    "uniform fee",
+  ];
+  const BOOK_ALIASES = [
+    "kitap",
+    "kirtasiye",
+    "kırtasiye",
+    "kitap kirtasiye",
+    "kitap-kirtasiye",
+    "book",
+    "books",
+    "stationery",
+    "book stationery",
+  ];
+  const SERVICE_ALIASES = [
+    "servis",
+    "ogrenci servisi",
+    "ogrenci servis",
+    "ulasim",
+    "ulaşim",
+    "servis ucreti",
+    "transport",
+    "transportation",
+    "bus",
+    "school bus",
+  ];
+  const DORM_ALIASES = [
+    "yurt",
+    "yurt ucreti",
+    "yurt geliri",
+    "pansiyon",
+    "pansiyon ucreti",
+    "boarding",
+    "boarding fee",
+    "dorm",
+    "dormitory",

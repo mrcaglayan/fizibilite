@@ -804,6 +804,46 @@ export default function DetailedReportView(props) {
     () => discountsRows.map((row) => formatScholarshipRow(row, fmtMoneyDisplay)),
     [discountsRows, fmtMoneyDisplay]
   );
+  const scholarshipTotals = useMemo(() => {
+    const totals = scholarshipsRows.reduce(
+      (acc, row) => {
+        const cur = isFiniteNumber(row.cur) ? Number(row.cur) : 0;
+        const planned = isFiniteNumber(row.planned) ? Number(row.planned) : 0;
+        const cost = isFiniteNumber(row.cost) ? Number(row.cost) : 0;
+        return {
+          cur: acc.cur + cur,
+          planned: acc.planned + planned,
+          cost: acc.cost + cost,
+        };
+      },
+      { cur: 0, planned: 0, cost: 0 }
+    );
+    return {
+      cur: fmtInt(totals.cur),
+      planned: fmtInt(totals.planned),
+      cost: fmtMoneyDisplay(totals.cost),
+    };
+  }, [scholarshipsRows, fmtMoneyDisplay]);
+  const discountTotals = useMemo(() => {
+    const totals = discountsRows.reduce(
+      (acc, row) => {
+        const cur = isFiniteNumber(row.cur) ? Number(row.cur) : 0;
+        const planned = isFiniteNumber(row.planned) ? Number(row.planned) : 0;
+        const cost = isFiniteNumber(row.cost) ? Number(row.cost) : 0;
+        return {
+          cur: acc.cur + cur,
+          planned: acc.planned + planned,
+          cost: acc.cost + cost,
+        };
+      },
+      { cur: 0, planned: 0, cost: 0 }
+    );
+    return {
+      cur: fmtInt(totals.cur),
+      planned: fmtInt(totals.planned),
+      cost: fmtMoneyDisplay(totals.cost),
+    };
+  }, [discountsRows, fmtMoneyDisplay]);
 
   const perfRows = useMemo(() => {
     const base = model.performance || [];
@@ -1255,6 +1295,11 @@ export default function DetailedReportView(props) {
                 ]}
                 rows={formattedScholarshipsRows.map((r, i) => ({ key: String(i), ...r }))}
               />
+              <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end", gap: 12, fontWeight: 700 }}>
+                <div>Toplam Mevcut: {scholarshipTotals.cur}</div>
+                <div>Toplam Planlanan: {scholarshipTotals.planned}</div>
+                <div>Toplam Maliyet: {scholarshipTotals.cost}</div>
+              </div>
               <div style={{ marginTop: 8 }}>
                 <SimpleTable columns={MINI_ANALYSIS_COLUMNS} rows={scholarshipAnalysisRows} />
               </div>
@@ -1273,6 +1318,11 @@ export default function DetailedReportView(props) {
                 ]}
                 rows={formattedDiscountsRows.map((r, i) => ({ key: String(i), ...r }))}
               />
+              <div style={{ marginTop: 6, display: "flex", justifyContent: "flex-end", gap: 12, fontWeight: 700 }}>
+                <div>Toplam Mevcut: {discountTotals.cur}</div>
+                <div>Toplam Planlanan: {discountTotals.planned}</div>
+                <div>Toplam Maliyet: {discountTotals.cost}</div>
+              </div>
               <div style={{ marginTop: 8 }}>
                 <SimpleTable columns={MINI_ANALYSIS_COLUMNS} rows={discountAnalysisRows} />
               </div>
