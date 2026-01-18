@@ -1,6 +1,6 @@
 // frontend/src/components/DetailedReportView.jsx
 
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { getProgramType, isKademeKeyVisible } from "../utils/programType";
 import { buildDetailedReportModel } from "../utils/buildDetailedReportModel";
 
@@ -60,36 +60,36 @@ function fmtInt(v) {
   return fmtNumber(v, { maximumFractionDigits: 0, minimumFractionDigits: 0 });
 }
 
-function formatTuitionRow(row, currencyCode) {
+function formatTuitionRow(row, formatMoney) {
   if (!row || typeof row !== "object") return row;
   return {
     ...row,
-    edu: isFiniteNumber(row.edu) ? fmtMoney(row.edu, currencyCode) : row.edu ?? "—",
-    uniform: isFiniteNumber(row.uniform) ? fmtMoney(row.uniform, currencyCode) : row.uniform ?? "—",
-    books: isFiniteNumber(row.books) ? fmtMoney(row.books, currencyCode) : row.books ?? "—",
-    transport: isFiniteNumber(row.transport) ? fmtMoney(row.transport, currencyCode) : row.transport ?? "—",
-    meal: isFiniteNumber(row.meal) ? fmtMoney(row.meal, currencyCode) : row.meal ?? "—",
+    edu: isFiniteNumber(row.edu) ? formatMoney(row.edu) : row.edu ?? "—",
+    uniform: isFiniteNumber(row.uniform) ? formatMoney(row.uniform) : row.uniform ?? "—",
+    books: isFiniteNumber(row.books) ? formatMoney(row.books) : row.books ?? "—",
+    transport: isFiniteNumber(row.transport) ? formatMoney(row.transport) : row.transport ?? "—",
+    meal: isFiniteNumber(row.meal) ? formatMoney(row.meal) : row.meal ?? "—",
     raisePct: isFiniteNumber(row.raisePct) ? fmtPct(row.raisePct, 0) : row.raisePct ?? "—",
-    total: isFiniteNumber(row.total) ? fmtMoney(row.total, currencyCode) : row.total ?? "—",
+    total: isFiniteNumber(row.total) ? formatMoney(row.total) : row.total ?? "—",
   };
 }
 
-function formatAmountRatioRow(row, currencyCode) {
+function formatAmountRatioRow(row, formatMoney) {
   if (!row || typeof row !== "object") return row;
   return {
     ...row,
-    amount: isFiniteNumber(row.amount) ? fmtMoney(row.amount, currencyCode) : row.amount ?? "—",
+    amount: isFiniteNumber(row.amount) ? formatMoney(row.amount) : row.amount ?? "—",
     ratio: isFiniteNumber(row.ratio) ? fmtPct(row.ratio, 0) : row.ratio ?? "—",
   };
 }
 
-function formatScholarshipRow(row, currencyCode) {
+function formatScholarshipRow(row, formatMoney) {
   if (!row || typeof row !== "object") return row;
   return {
     ...row,
     cur: isFiniteNumber(row.cur) ? fmtInt(row.cur) : row.cur ?? "—",
     planned: isFiniteNumber(row.planned) ? fmtInt(row.planned) : row.planned ?? "—",
-    cost: isFiniteNumber(row.cost) ? fmtMoney(row.cost, currencyCode) : row.cost ?? "—",
+    cost: isFiniteNumber(row.cost) ? formatMoney(row.cost) : row.cost ?? "—",
   };
 }
 
@@ -219,6 +219,8 @@ export default function DetailedReportView(props) {
     report,
     prevReport,
     programType: programTypeProp,
+    reportCurrency = "usd",
+    currencyMeta,
   } = props || {};
 
   const model = useMemo(
@@ -251,6 +253,24 @@ export default function DetailedReportView(props) {
 
 
   const currencyCode = model.currencyCode || "USD";
+  const fx = Number(currencyMeta?.fx_usd_to_local || 0);
+  const canShowLocal =
+    currencyMeta?.input_currency === "LOCAL" && fx > 0 && currencyMeta?.local_currency_code;
+  const showLocal = reportCurrency === "local" && canShowLocal;
+  const localLabel = currencyMeta?.local_currency_code || "LOCAL";
+  const displayCurrencyCode = showLocal ? localLabel : currencyCode;
+  const displayMoney = useCallback(
+    (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return v;
+      return showLocal ? n * fx : n;
+    },
+    [showLocal, fx]
+  );
+  const fmtMoneyDisplay = useCallback(
+    (v) => fmtMoney(displayMoney(v), displayCurrencyCode),
+    [displayMoney, displayCurrencyCode]
+  );
 
 // ------------------ Detailed (Excel-like) model rows ------------------
   const educationInfoRows = useMemo(
@@ -395,8 +415,8 @@ export default function DetailedReportView(props) {
     [tuitionRows, activeProgramType]
   );
   const formattedTuitionRows = useMemo(
-    () => filteredTuitionRows.map((row) => formatTuitionRow(row, currencyCode)),
-    [filteredTuitionRows, currencyCode]
+    () => filteredTuitionRows.map((row) => formatTuitionRow(row, fmtMoneyDisplay)),
+    [filteredTuitionRows, fmtMoneyDisplay]
   );
 
   const paramsRows = useMemo(() => {
@@ -420,7 +440,7 @@ export default function DetailedReportView(props) {
       case "percent":
         return fmtPct(value);
       case "currency":
-        return fmtMoney(value, currencyCode);
+        return fmtMoneyDisplay(value);
       case "number":
         return fmtNumber(value);
       default:
@@ -517,12 +537,12 @@ export default function DetailedReportView(props) {
   }, [model]);
 
   const formattedRevRows = useMemo(
-    () => revRows.map((row) => formatAmountRatioRow(row, currencyCode)),
-    [revRows, currencyCode]
+    () => revRows.map((row) => formatAmountRatioRow(row, fmtMoneyDisplay)),
+    [revRows, fmtMoneyDisplay]
   );
   const formattedExpRows = useMemo(
-    () => expRows.map((row) => formatAmountRatioRow(row, currencyCode)),
-    [expRows, currencyCode]
+    () => expRows.map((row) => formatAmountRatioRow(row, fmtMoneyDisplay)),
+    [expRows, fmtMoneyDisplay]
   );
 
   const scholarshipsRows = useMemo(() => {
@@ -564,12 +584,12 @@ export default function DetailedReportView(props) {
   }, [model]);
 
   const formattedScholarshipsRows = useMemo(
-    () => scholarshipsRows.map((row) => formatScholarshipRow(row, currencyCode)),
-    [scholarshipsRows, currencyCode]
+    () => scholarshipsRows.map((row) => formatScholarshipRow(row, fmtMoneyDisplay)),
+    [scholarshipsRows, fmtMoneyDisplay]
   );
   const formattedDiscountsRows = useMemo(
-    () => discountsRows.map((row) => formatScholarshipRow(row, currencyCode)),
-    [discountsRows, currencyCode]
+    () => discountsRows.map((row) => formatScholarshipRow(row, fmtMoneyDisplay)),
+    [discountsRows, fmtMoneyDisplay]
   );
 
   const perfRows = useMemo(() => {
@@ -615,13 +635,13 @@ export default function DetailedReportView(props) {
       { label: "Mevcut Öğrenci", value: isFiniteNumber(students) ? fmtNumber(students) : "—" },
       { label: "Kapasite", value: isFiniteNumber(cap) ? fmtNumber(cap) : "—" },
       { label: "Kapasite Kullanım %", value: isFiniteNumber(util) ? fmtPct(util) : "—" },
-      { label: "Ortalama Ücret", value: isFiniteNumber(avgTuition) ? fmtMoney(avgTuition, currencyCode) : "—" },
-      { label: "Toplam Gelir", value: isFiniteNumber(revTotal) ? fmtMoney(revTotal, currencyCode) : "—" },
-      { label: "Toplam Gider", value: isFiniteNumber(expTotal) ? fmtMoney(expTotal, currencyCode) : "—" },
-      { label: "Net", value: isFiniteNumber(net) ? fmtMoney(net, currencyCode) : "—" },
+      { label: "Ortalama Ücret", value: isFiniteNumber(avgTuition) ? fmtMoneyDisplay(avgTuition) : "—" },
+      { label: "Toplam Gelir", value: isFiniteNumber(revTotal) ? fmtMoneyDisplay(revTotal) : "—" },
+      { label: "Toplam Gider", value: isFiniteNumber(expTotal) ? fmtMoneyDisplay(expTotal) : "—" },
+      { label: "Net", value: isFiniteNumber(net) ? fmtMoneyDisplay(net) : "—" },
       { label: "Marj", value: isFiniteNumber(margin) ? fmtPct(margin) : "—" },
     ];
-  }, [model, currencyCode]);
+  }, [model, fmtMoneyDisplay]);
 
   const viewMode = String(mode || "detailed").toLowerCase();
 
@@ -793,35 +813,6 @@ export default function DetailedReportView(props) {
   // ------------------ Detailed view (current skeleton) ------------------
   return (
     <div>
-      <div className="card" style={{ marginTop: 12 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 12,
-            alignItems: "flex-start",
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 900, fontSize: 18 }}>Detaylı Rapor</div>
-            <div className="small" style={{ marginTop: 2 }}>
-              {header || ""}
-            </div>
-          </div>
-          <div className="small" style={{ textAlign: "right", opacity: 0.8 }}>
-            <div>
-              Excel: <b>RAPOR</b> sayfası
-            </div>
-            <div>Şimdilik iskelet (UI), veri bağlama sonraki adım.</div>
-          </div>
-        </div>
-
-        <div className="small" style={{ marginTop: 10, lineHeight: 1.35 }}>
-          Not: Bu sayfa rapor sayfası olarak tasarlanmıştır, veri girişine kapalıdır. Temel Bilgiler, Kapasite, İnsan
-          Kaynakları, Gelir-Gider ve Norm Kadro sayfalarında doldurmanız gereken bölümleri lütfen doldurunuz.
-        </div>
-      </div>
-
       <Section title="A. OKUL EĞİTİM BİLGİLERİ">
         <SimpleTable
           columns={[
@@ -848,9 +839,6 @@ export default function DetailedReportView(props) {
             .filter((r) => !/TOPLAM/i.test(String(r.level || "")))
             .map((r, i) => ({ key: String(i), ...r }))}
         />
-        <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
-          (*) Yemek ve diğer paket kalemleri okula göre değişebilir. Detaylar ileride veri bağlanınca otomatik gelecektir.
-        </div>
       </Section>
 
       <Section title="C. OKUL ÜCRETİ HESAPLAMA PARAMETRELERİ">

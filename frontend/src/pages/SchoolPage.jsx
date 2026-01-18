@@ -2804,12 +2804,6 @@ export default function SchoolPage() {
         <div style={{ marginTop: 12 }}>
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontWeight: 900 }}>Görünüm</div>
-                <div className="small" style={{ marginTop: 4, opacity: 0.85 }}>
-                  İstersen tek sayfa özet görünümünü, istersen Excel RAPOR iskeletini kullan.
-                </div>
-              </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                 <button
                   className={detailedReportMode === "onepager" ? "btn primary" : "btn"}
@@ -2823,6 +2817,26 @@ export default function SchoolPage() {
                 >
                   Detaylı (RAPOR)
                 </button>
+                {selectedScenario?.input_currency === "LOCAL" &&
+                Number(selectedScenario?.fx_usd_to_local) > 0 &&
+                selectedScenario?.local_currency_code ? (
+                  <div className="tabs">
+                    <button
+                      type="button"
+                      className={`tab ${reportCurrency === "usd" ? "active" : ""}`}
+                      onClick={() => setReportCurrency("usd")}
+                    >
+                      USD
+                    </button>
+                    <button
+                      type="button"
+                      className={`tab ${reportCurrency === "local" ? "active" : ""}`}
+                      onClick={() => setReportCurrency("local")}
+                    >
+                      {selectedScenario.local_currency_code}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
