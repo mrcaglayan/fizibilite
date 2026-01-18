@@ -50,6 +50,109 @@ function safeDiv(numerator, denominator) {
   return num / denom;
 }
 
+function normalizeText(value) {
+  const map = {
+    ş: "s",
+    Ş: "s",
+    ı: "i",
+    İ: "i",
+    ğ: "g",
+    Ğ: "g",
+    ü: "u",
+    Ü: "u",
+    ö: "o",
+    Ö: "o",
+    ç: "c",
+    Ç: "c",
+  };
+  const replaced = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split("")
+    .map((ch) => map[ch] ?? ch)
+    .join("");
+  return replaced
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getRowLabel(row) {
+  return (
+    row?.key ||
+    row?.code ||
+    row?.name ||
+    row?.title ||
+    row?.label ||
+    row?.description ||
+    row?.item_name ||
+    ""
+  );
+}
+
+function getRowCount(row) {
+  return safeNum(
+    row?.studentCount ||
+      row?.count ||
+      row?.students ||
+      row?.qty ||
+      row?.quantity ||
+      0
+  );
+}
+
+function scoreMatch(normLabel, aliases) {
+  let best = 0;
+  for (const alias of aliases) {
+    if (!alias) continue;
+    if (normLabel === alias) best = Math.max(best, 100);
+    else if (normLabel.startsWith(alias)) best = Math.max(best, 80);
+    else if (normLabel.includes(alias)) best = Math.max(best, 60);
+    else if (new RegExp(`(^|\\s)${alias}(\\s|$)`).test(normLabel))
+      best = Math.max(best, 70);
+  }
+  return best;
+}
+
+function findBestCount(rows, aliases) {
+  const normalizedAliases = aliases.map(normalizeText);
+  let best = { score: 0, count: 0 };
+  for (const row of rows || []) {
+    const normLabel = normalizeText(getRowLabel(row));
+    const score = scoreMatch(normLabel, normalizedAliases);
+    const count = getRowCount(row);
+    if (
+      score > best.score ||
+      (score === best.score && count > best.count)
+    ) {
+      best = { score, count };
+    }
+  }
+  return best.count;
+}
+
+const numOrNull = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+function parseAcademicStartYear(academicYear) {
+  const raw = String(academicYear || "").trim();
+  const range = raw.match(/(\d{4})\s*-\s*(\d{4})/);
+  if (range) {
+    const start = Number(range[1]);
+    if (Number.isFinite(start)) return start;
+  }
+  const single = raw.match(/^(\d{4})$/);
+  if (single) {
+    const start = Number(single[1]);
+    if (Number.isFinite(start)) return start;
+  }
+  return null;
+}
+
 function normalizeName(value) {
   return String(value || "")
     .normalize("NFD")
@@ -158,6 +261,7 @@ export function buildDetailedReportModel({
   prevReport,
   programType,
 } = {}) {
+  const normKey = (k) => String(k || "").trim().toLowerCase();
   const resolvedProgramType = programType || getProgramType(inputs, scenario);
   const inputCurrency = String(scenario?.input_currency || "USD").toUpperCase();
   const fx = Number(scenario?.fx_usd_to_local || 0);
@@ -223,6 +327,12 @@ export function buildDetailedReportModel({
   const otherIncomeRows = Array.isArray(inputs?.gelirler?.otherInstitutionIncome?.rows)
     ? inputs.gelirler.otherInstitutionIncome.rows
     : [];
+  const dormIncomeRows = Array.isArray(inputs?.gelirler?.dormitory?.rows)
+    ? inputs.gelirler.dormitory.rows
+    : [];
+  const dormByKey = new Map(dormIncomeRows.map((r) => [normKey(r?.key), r]));
+  const yurtCount = safeNum(dormByKey.get("yurt")?.studentCount);
+  const yazOkuluCount = safeNum(dormByKey.get("yazokulu")?.studentCount);
 
   const tuitionVisibleRows = tuitionInputRows.filter((row) => {
     const baseKey = getTuitionBaseKey(row);
@@ -240,6 +350,59 @@ export function buildDetailedReportModel({
   const booksFee = toUsd(feeLookup.get("kitap")?.unitFee ?? 0);
   const transportFee = toUsd(feeLookup.get("ulasim")?.unitFee ?? 0);
   const mealFee = toUsd(feeLookup.get("yemek")?.unitFee ?? 0);
+
+  const nonEduIncomeRows =
+    inputs?.gelirler?.nonEducationFees?.rows ||
+    inputs?.gelirler?.nonEducationFees?.items ||
+    [];
+  const MEAL_ALIASES = [
+    "yemek",
+    "ogrenci yemegi",
+    "ogrenci yemegi ucreti",
+    "ogrenci yemeği",
+    "yemek ucreti",
+    "lunch",
+    "meal",
+    "meal fee",
+    "food",
+  ];
+  const UNIFORM_ALIASES = [
+    "uniforma",
+    "okul uniformasi",
+    "okul üniformasi",
+    "forma",
+    "kiyafet",
+    "kıyafet",
+    "uniform",
+    "uniform fee",
+  ];
+  const BOOK_ALIASES = [
+    "kitap",
+    "kirtasiye",
+    "kırtasiye",
+    "kitap kirtasiye",
+    "kitap-kirtasiye",
+    "book",
+    "books",
+    "stationery",
+    "book stationery",
+  ];
+  const SERVICE_ALIASES = [
+    "servis",
+    "ogrenci servisi",
+    "ogrenci servis",
+    "ulasim",
+    "ulaşim",
+    "servis ucreti",
+    "transport",
+    "transportation",
+    "bus",
+    "school bus",
+  ];
+  const mealCount = findBestCount(nonEduIncomeRows, MEAL_ALIASES);
+  const uniformCount = findBestCount(nonEduIncomeRows, UNIFORM_ALIASES);
+  const bookCount = findBestCount(nonEduIncomeRows, BOOK_ALIASES);
+  const serviceCount = findBestCount(nonEduIncomeRows, SERVICE_ALIASES);
 
   const tuitionRows = tuitionVisibleRows.map((row) => {
     const raisePct = clamp0(ucretArtisOranlari?.[row?.key]);
@@ -294,9 +457,9 @@ export function buildDetailedReportModel({
   const dormTotal =
     safeNum(reportIncome?.dormitoryRevenuesTotal) ||
     dormRows.reduce((sum, row) => sum + toUsd(row?.unitFee) * safeNum(row?.studentCount), 0);
-  const otherIncomeFromInputs =
-    otherIncomeRows.reduce((sum, row) => sum + toUsd(row?.amount), 0) +
-    toUsd(inputs?.gelirler?.governmentIncentives ?? 0);
+  const governmentIncentives = toUsd(inputs?.gelirler?.governmentIncentives ?? 0);
+  const otherIncomePure = otherIncomeRows.reduce((sum, row) => sum + toUsd(row?.amount), 0);
+  const otherIncomeFromInputs = otherIncomePure + governmentIncentives;
   const otherIncomeTotal =
     safeNum(reportIncome?.otherIncomeTotal) ||
     otherIncomeFromInputs;
@@ -304,30 +467,99 @@ export function buildDetailedReportModel({
     safeNum(reportIncome?.totalGrossIncome) ||
     reportGrossTuition + nonEducationTotal + dormTotal + otherIncomeTotal;
 
+  const calcNonEdRevenue = (key) => {
+    const row = feeLookup.get(key) || {};
+    return toUsd(row?.unitFee) * safeNum(row?.studentCount);
+  };
+  const nonEdRevenues = {
+    uniforma: calcNonEdRevenue("uniforma"),
+    kitap: calcNonEdRevenue("kitap"),
+    yemek: calcNonEdRevenue("yemek"),
+    ulasim: calcNonEdRevenue("ulasim"),
+  };
   const revenueRows = [
     { name: "Egitim Ucreti", amount: reportGrossTuition },
-    { name: "Egitim Disi Ucretler", amount: nonEducationTotal },
+    { name: "Uniforma", amount: nonEdRevenues.uniforma },
+    { name: "Kitap Kirtasiye", amount: nonEdRevenues.kitap },
+    { name: "Yemek", amount: nonEdRevenues.yemek },
+    { name: "Servis", amount: nonEdRevenues.ulasim },
     { name: "Yurt Gelirleri", amount: dormTotal },
-    { name: "Diger Gelirler", amount: otherIncomeTotal },
+    { name: "Diger (kantin, kira vb.)", amount: otherIncomePure },
+    { name: "Devlet Tesvikleri", amount: governmentIncentives },
   ].map((row) => ({
     name: row.name,
     amount: row.amount,
     ratio: safeDiv(row.amount, grossIncomeBase),
   }));
+  const revenuesDetailed = revenueRows;
+  const revenuesDetailedTotal =
+    grossIncomeBase ||
+    revenuesDetailed.reduce((sum, r) => (Number.isFinite(r.amount) ? sum + Number(r.amount) : sum), 0);
+  const nonEducationBreakdown = nonEducationRows
+    .map((row) => {
+      const name = row?.label || row?.name || row?.key || "";
+      const amount = toUsd(row?.unitFee) * safeNum(row?.studentCount);
+      return { name, amount };
+    })
+    .filter((row) => row.name && Number.isFinite(row.amount) && row.amount !== 0);
 
-  const expenseRows = [
-    { name: "IK Giderleri (Toplam)", amount: safeNum(reportExpenses?.hrTotal) },
-    {
-      name: "Isletme Giderleri (IK Haric)",
-      amount: Math.max(0, safeNum(reportExpenses?.operatingExpensesTotal) - safeNum(reportExpenses?.hrTotal)),
-    },
-    { name: "Egitim Disi Hizmet Maliyetleri", amount: safeNum(reportExpenses?.nonTuitionServicesCostTotal) },
-    { name: "Yurt Maliyetleri", amount: safeNum(reportExpenses?.dormitoryCostTotal) },
-  ].map((row) => ({
-    name: row.name,
-    amount: row.amount,
-    ratio: safeDiv(row.amount, safeNum(reportExpenses?.totalExpenses)),
-  }));
+  const otherIncomeBreakdown = [
+    ...otherIncomeRows
+      .map((row) => {
+        const name = row?.label || row?.name || row?.key || "";
+        const amount = toUsd(row?.amount);
+        return { name, amount };
+      })
+      .filter((row) => row.name && Number.isFinite(row.amount) && row.amount !== 0),
+    ...(inputs?.gelirler?.governmentIncentives
+      ? [{ name: "Devlet Tesvikleri", amount: toUsd(inputs?.gelirler?.governmentIncentives) }]
+      : []),
+  ];
+
+  const nonEduExpenseItems = inputs?.giderler?.ogrenimDisi?.items || {};
+  const unitMealUsd = toUsd(safeNum(nonEduExpenseItems?.yemek?.unitCost));
+  const unitUniformUsd = toUsd(safeNum(nonEduExpenseItems?.uniforma?.unitCost));
+  const unitBookUsd = toUsd(
+    safeNum(
+      nonEduExpenseItems?.kitapKirtasiye?.unitCost ??
+        nonEduExpenseItems?.kitap?.unitCost ??
+        nonEduExpenseItems?.kirtasiye?.unitCost
+    )
+  );
+  const unitServiceUsd = toUsd(
+    safeNum(
+      nonEduExpenseItems?.ulasimServis?.unitCost ??
+        nonEduExpenseItems?.servis?.unitCost ??
+        nonEduExpenseItems?.ulasim?.unitCost
+    )
+  );
+
+  const dormExpenseItems = inputs?.giderler?.yurt?.items || {};
+
+  const mealAmount = unitMealUsd * mealCount;
+  const uniformAmount = unitUniformUsd * uniformCount;
+  const bookAmount = unitBookUsd * bookCount;
+  const serviceAmount = unitServiceUsd * serviceCount;
+
+  const unitYurtUsd = toUsd(safeNum(dormExpenseItems?.yurtGiderleri?.unitCost));
+  const unitOtherUsd = toUsd(safeNum(dormExpenseItems?.digerYurt?.unitCost));
+  const dormYurtAmount = unitYurtUsd * yurtCount;
+  const dormOtherAmount = unitOtherUsd * yazOkuluCount;
+  const dormAmount = Math.max(0, dormYurtAmount + dormOtherAmount);
+
+  const serviceCosts = {
+    yemek: mealAmount,
+    uniforma: uniformAmount,
+    kitapKirtasiye: bookAmount,
+    ulasimServis: serviceAmount,
+    total: mealAmount + uniformAmount + bookAmount + serviceAmount,
+  };
+
+  const dormCosts = {
+    yurtGiderleri: dormYurtAmount,
+    digerYurt: dormOtherAmount,
+    total: dormAmount,
+  };
 
   const plannedHeadcountsByRole = (() => {
     const hc = inputs?.ik?.years?.y1?.headcountsByLevel || {};
@@ -345,6 +577,57 @@ export function buildDetailedReportModel({
       international: sumRole("int_yonetici_egitimci"),
     };
   })();
+  const isletmeItems = inputs?.giderler?.isletme?.items || {};
+  const OPERATING_KEYS = [
+    "ulkeTemsilciligi",
+    "genelYonetim",
+    "kira",
+    "emsalKira",
+    "enerjiKantin",
+    "turkPersonelMaas",
+    "turkDestekPersonelMaas",
+    "yerelPersonelMaas",
+    "yerelDestekPersonelMaas",
+    "internationalPersonelMaas",
+    "disaridanHizmet",
+    "egitimAracGerec",
+    "finansalGiderler",
+    "egitimAmacliHizmet",
+    "temsilAgirlama",
+    "ulkeIciUlasim",
+    "ulkeDisiUlasim",
+    "vergilerResmiIslemler",
+    "vergiler",
+    "demirbasYatirim",
+    "rutinBakim",
+    "pazarlamaOrganizasyon",
+    "reklamTanitim",
+    "tahsilEdilemeyenGelirler",
+  ];
+  const HR_KEYS = [
+    "turkPersonelMaas",
+    "turkDestekPersonelMaas",
+    "yerelPersonelMaas",
+    "yerelDestekPersonelMaas",
+    "internationalPersonelMaas",
+  ];
+  const operatingTotalUsd = OPERATING_KEYS.reduce(
+    (sum, k) => sum + toUsd(safeNum(isletmeItems?.[k])),
+    0
+  );
+  const hrTotalUsd = HR_KEYS.reduce((sum, k) => sum + toUsd(safeNum(isletmeItems?.[k])), 0);
+  const hrTurkCost =
+    toUsd(isletmeItems?.turkPersonelMaas) + toUsd(isletmeItems?.turkDestekPersonelMaas);
+  const hrYerelCost =
+    toUsd(isletmeItems?.yerelPersonelMaas) +
+    toUsd(isletmeItems?.yerelDestekPersonelMaas) +
+    toUsd(isletmeItems?.internationalPersonelMaas);
+  const badDebtAmount = toUsd(safeNum(isletmeItems?.tahsilEdilemeyenGelirler));
+  const uncollectableExpenseAmount = badDebtAmount;
+  const isletmeGiderleriInputsOnlyUsd = Math.max(
+    0,
+    operatingTotalUsd - hrTotalUsd - badDebtAmount
+  );
 
   const hrRows = [
     {
@@ -383,6 +666,17 @@ export function buildDetailedReportModel({
       planned: plannedHeadcountsByRole?.international,
     },
   ];
+
+  const expenseRows = [
+    { name: "IK Giderleri (Toplam)", amount: safeNum(reportExpenses?.hrTotal) },
+    { name: "Isletme Giderleri (IK Haric)", amount: isletmeGiderleriInputsOnlyUsd },
+    { name: "Egitim Disi Hizmet Maliyetleri", amount: safeNum(reportExpenses?.nonTuitionServicesCostTotal) },
+    { name: "Yurt Maliyetleri", amount: dormCosts.total },
+  ].map((row) => ({
+    name: row.name,
+    amount: row.amount,
+    ratio: safeDiv(row.amount, safeNum(reportExpenses?.totalExpenses)),
+  }));
 
   const tuitionStudentsForDiscounts = tuitionInputRows.length
     ? tuitionInputRows.reduce((sum, row) => sum + safeNum(row?.studentCount), 0)
@@ -474,6 +768,86 @@ export function buildDetailedReportModel({
     };
   });
 
+  const scholarshipsTotalCost = scholarships.reduce((sum, r) => sum + safeNum(r.cost), 0);
+  const discountsTotalCost = discounts.reduce((sum, r) => sum + safeNum(r.cost), 0);
+  const scholarshipDiscountCostTotal = scholarshipsTotalCost + discountsTotalCost;
+  const parentStudentRevenue =
+    reportGrossTuition +
+    nonEdRevenues.uniforma +
+    nonEdRevenues.kitap +
+    nonEdRevenues.yemek +
+    nonEdRevenues.ulasim +
+    dormTotal;
+  const sumPlanned = (rows) => rows.reduce((sum, r) => sum + safeNum(r.planned), 0);
+  const calcWeightedAvgRate = (rows, avgTuition) => {
+    if (!Number.isFinite(avgTuition) || avgTuition <= 0) return null;
+    const totalPlanned = sumPlanned(rows);
+    if (totalPlanned <= 0) return null;
+    const weighted = rows.reduce((sum, r) => {
+      const planned = safeNum(r.planned);
+      const cost = safeNum(r.cost);
+      if (planned > 0) {
+        const rate = clamp(cost / (planned * avgTuition), 0, 1);
+        return sum + planned * rate;
+      }
+      return sum;
+    }, 0);
+    return weighted / totalPlanned;
+  };
+  const buildGroupAnalysis = (rows, totalCost) => {
+    const plannedStudents = sumPlanned(rows);
+    const perTargetStudent =
+      tuitionStudentsForDiscounts > 0 ? totalCost / tuitionStudentsForDiscounts : null;
+    const studentShare =
+      tuitionStudentsForDiscounts > 0 ? plannedStudents / tuitionStudentsForDiscounts : null;
+    const revenueShare = parentStudentRevenue > 0 ? totalCost / parentStudentRevenue : null;
+    const weightedAvgRate = calcWeightedAvgRate(rows, avgTuitionForDiscounts);
+    return {
+      perTargetStudent,
+      studentShare,
+      revenueShare,
+      weightedAvgRate,
+      plannedStudents,
+      totalCost,
+    };
+  };
+  const discountAnalysis = {
+    targetStudents: tuitionStudentsForDiscounts,
+    parentStudentRevenue,
+    scholarships: buildGroupAnalysis(scholarships, scholarshipsTotalCost),
+    discounts: buildGroupAnalysis(discounts, discountsTotalCost),
+  };
+  const plannedRaiseAvg = (() => {
+    const rates = tuitionRows.map((r) => r.raisePct).filter((v) => Number.isFinite(v));
+    return rates.length ? rates.reduce((sum, v) => sum + v, 0) / rates.length : null;
+  })();
+  const competitorHasData = Object.values(rakipAnalizi || {}).some((row) =>
+    ["a", "b", "c"].some((key) => numOrNull(row?.[key]) != null)
+  );
+  const baseYear = parseAcademicStartYear(scenario?.academic_year);
+  const inflationYears = (() => {
+    const ref = Number.isFinite(baseYear) ? baseYear : 2026;
+    const yearList = [ref - 3, ref - 2, ref - 1];
+    const fallbackKeys = ["y2023", "y2024", "y2025"];
+    return yearList.map((year, idx) => {
+      const exact = numOrNull(inflation?.[`y${year}`]);
+      const fallback = numOrNull(inflation?.[fallbackKeys[idx]]);
+      return { year, value: exact != null ? exact : fallback };
+    });
+  })();
+  const inflationHistory = {
+    y2023: numOrNull(inflation?.y2023),
+    y2024: numOrNull(inflation?.y2024),
+    y2025: numOrNull(inflation?.y2025),
+  };
+  const rawCurrentSeasonAvgFee = numOrNull(inflation?.currentSeasonAvgFee);
+  const currentSeasonAvgFeeUsd = rawCurrentSeasonAvgFee == null ? null : toUsd(rawCurrentSeasonAvgFee);
+  const rawFinalFee = numOrNull(inflation?.finalFee);
+  const finalFeeUsd =
+    rawFinalFee != null ? toUsd(rawFinalFee) : Number.isFinite(averageRow?.total) ? averageRow.total : null;
+  const uncollectableRevenuePct = numOrNull(
+    inflation?.uncollectableRevenuePct ?? inflation?.badDebtPct ?? inflation?.tahsilEdilemeyenGelirPct
+  );
   const revenueTotal =
     safeNum(reportIncome?.netIncome) ||
     safeNum(reportIncome?.netActivityIncome) ||
@@ -481,6 +855,7 @@ export function buildDetailedReportModel({
   const expenseTotal = safeNum(reportExpenses?.totalExpenses);
   const netTotal = revenueTotal - expenseTotal;
   const margin = safeDiv(netTotal, revenueTotal);
+  const perStudentCost = plannedStudents > 0 ? safeDiv(expenseTotal, plannedStudents) : null;
 
   const parameters = [
     {
@@ -498,11 +873,80 @@ export function buildDetailedReportModel({
     { no: "3", desc: "Gelir Planlamasi", value: revenueTotal, valueType: "currency" },
     { no: "4", desc: "Gider Planlamasi", value: expenseTotal, valueType: "currency" },
     { no: "", desc: "Gelir - Gider Farki", value: netTotal, valueType: "currency" },
+    {
+      no: "5",
+      desc: "Tahsil Edilemeyecek Gelirler (Onceki Donemin Tahsil Edilemeyen yuzdelik rakami)",
+      value: uncollectableRevenuePct,
+      valueType: "percent",
+    },
+    {
+      no: "6",
+      desc: "Giderlerin Sapma Yuzdeligi (%... Olarak Hesaplanabilir)",
+      value: inflation?.expenseDeviationPct,
+      valueType: "percent",
+    },
+    {
+      no: "7",
+      desc: "Burs ve Indirim Giderleri (Fizibilite-G71)",
+      value: scholarshipDiscountCostTotal,
+      valueType: "currency",
+    },
+    {
+      no: "",
+      desc: "Ogrenci Basina Maliyet (Tum Giderler (Parametre 4 / Planlanan Ogrenci Sayisi))",
+      value: perStudentCost,
+      valueType: "currency",
+    },
+    {
+      no: "8",
+      desc: "Rakip Kurumlarin Analizi (VAR / YOK)",
+      value: competitorHasData ? "VAR" : "YOK",
+    },
+    {
+      no: "",
+      desc: "Planlanan Donem Egitim Ucretleri Artis Orani",
+      value: plannedRaiseAvg,
+      valueType: "percent",
+    },
+    {
+      no: "9",
+      desc:
+        "Yerel Mevzuatta uygunluk (yasal azami artis, Protokol Sinirliliklari, Son 3 yilin resmi enflasyon orn.)",
+      value: null,
+    },
+    { no: "10", desc: "Mevcut Egitim Sezonu Ucreti (ortalama)", value: currentSeasonAvgFeeUsd, valueType: "currency" },
+    { no: "", desc: "Nihai Ucret", value: finalFeeUsd, valueType: "currency" },
   ];
+
+  const detailedExpenses = (() => {
+    const rows = [
+      { name: "IK Giderleri (Turk Personel)", amount: hrTurkCost, targetPct: 0.15 },
+      { name: "IK (Yerel Personel)", amount: hrYerelCost, targetPct: 0.45 },
+      {
+        name: "Isletme Giderleri",
+        amount: isletmeGiderleriInputsOnlyUsd,
+      },
+      { name: "Yemek (Ogrenci Yemegi)", amount: serviceCosts.yemek },
+      { name: "Uniforma", amount: serviceCosts.uniforma },
+      { name: "Kitap- Kirtasiye", amount: serviceCosts.kitapKirtasiye },
+      { name: "Ogrenci Servisi", amount: serviceCosts.ulasimServis },
+      { name: "Yurt Giderleri", amount: dormCosts.total },
+      { name: "Indirimler", amount: discountsTotalCost, targetPct: 0.08 },
+      { name: "Burslar", amount: scholarshipsTotalCost, targetPct: 0.05 },
+      { name: "Tahsil Edilemeyecek Gelirler", amount: badDebtAmount, targetPct: 0.02 },
+    ];
+    const rowsSum = rows.reduce((sum, r) => (Number.isFinite(Number(r.amount)) ? sum + Number(r.amount) : sum), 0);
+    const total = rowsSum;
+    return rows.map((r) => ({
+      ...r,
+      ratio: Number.isFinite(Number(r.amount)) && total ? safeDiv(r.amount, total) : null,
+    }));
+  })();
 
   return {
     currencyCode: "USD",
     headerLabel,
+    academicStartYear: baseYear,
     programType: programTypeLabel,
     periodStartDate: okulEgitim?.egitimBaslamaTarihi || "",
     schoolCapacity,
@@ -530,11 +974,17 @@ export function buildDetailedReportModel({
     },
     hr: hrRows,
     revenues: revenueRows,
+    revenuesMeta: {
+      nonEducationBreakdown,
+      otherIncomeBreakdown,
+    },
     expenses: expenseRows,
     scholarships,
     discounts,
     performance: performanceRows,
     competitors: competitorRows,
+    revenuesDetailed,
+    revenuesDetailedTotal,
     revenueTotal,
     expenseTotal,
     netTotal,
@@ -542,7 +992,28 @@ export function buildDetailedReportModel({
     margin,
     parametersMeta: {
       expenseDeviationPct: inflation?.expenseDeviationPct,
-      currentSeasonAvgFeeUsd: toUsd(inflation?.currentSeasonAvgFee),
+      currentSeasonAvgFeeUsd,
+      perStudentCost,
+      plannedRaiseAvg,
+      scholarshipsAndDiscountsTotal: scholarshipDiscountCostTotal,
+      uncollectableRevenuePct,
+      uncollectableExpenseAmount,
+      inflationHistory,
+      inflationYears,
+      inflationBaseYear: baseYear,
+      competitorStatus: competitorHasData ? "VAR" : "YOK",
+      finalFeeUsd,
+      // detailed expense view helpers
+      serviceCosts,
+      dormCosts,
+      hrTurkCost,
+      hrYerelCost,
+      detailedExpenses,
+      detailedExpenseTotal: detailedExpenses.reduce(
+        (sum, r) => (Number.isFinite(Number(r.amount)) ? sum + Number(r.amount) : sum),
+        0
+      ),
+      discountAnalysis,
     },
   };
 }

@@ -272,7 +272,7 @@ export default function DetailedReportView(props) {
     [displayMoney, displayCurrencyCode]
   );
 
-// ------------------ Detailed (Excel-like) model rows ------------------
+  // ------------------ Detailed (Excel-like) model rows ------------------
   const educationInfoRows = useMemo(
     () =>
       [
@@ -428,10 +428,32 @@ export default function DetailedReportView(props) {
       { no: "3", desc: "Gelir Planlaması", value: "—" },
       { no: "4", desc: "Gider Planlaması", value: "—" },
       { no: "", desc: "Gelir - Gider Farkı", value: "—" },
+      {
+        no: "5",
+        desc: "Tahsil Edilemeyecek Gelirler (Önceki Dönemin Tahsil Edilemeyen yüzdelik rakamı)",
+        value: "—",
+      },
+      { no: "6", desc: "Giderlerin Sapma Yüzdeliği (%... Olarak Hesaplanabilir)", value: "—" },
+      { no: "7", desc: "Burs ve İndirim Giderleri (Fizibilite-G71)", value: "—" },
+      {
+        no: "",
+        desc: "Öğrenci Başına Maliyet (Tüm Giderler (Parametre 4 / Planlanan Öğrenci Sayısı))",
+        value: "—",
+      },
+      { no: "8", desc: "Rakip Kurumların Analizi (VAR / YOK)", value: "—" },
+      { no: "", desc: "Planlanan Dönem Eğitim Ücretleri Artış Oranı", value: "—" },
+      {
+        no: "9",
+        desc:
+          "Yerel Mevzuatta uygunluk (yasal azami artış, Protokol Sınırlılıkları, Son 3 yılın resmi enflasyon orn.)",
+        value: "—",
+      },
+      { no: "10", desc: "Mevcut Eğitim Sezonu Ücreti (ortalama)", value: "—" },
+      { no: "", desc: "Nihai Ücret", value: "—" },
     ];
   }, [model.parameters]);
 
-  const formatParamValue = (param) => {
+  const formatParamValue = useCallback((param) => {
     if (!param) return "—";
     const { value, valueType } = param;
     if (typeof value === "string" && !valueType) return value;
@@ -446,7 +468,86 @@ export default function DetailedReportView(props) {
       default:
         return typeof value === "string" ? value : isFiniteNumber(value) ? fmtNumber(value) : "—";
     }
-  };
+  }, [fmtMoneyDisplay]);
+
+  const PARAM_HEADER_CELLS = [
+    { key: "no", label: "#", colSpan: 1, thStyle: { width: 40 } },
+    { key: "desc", label: "Parametre", colSpan: 4 },
+    { key: "value", label: "Veri", colSpan: 1, thStyle: { width: 220, textAlign: "right" } },
+  ];
+
+  const inflationYearsMeta = model.parametersMeta?.inflationYears;
+  const inflationHistory = useMemo(() => model.parametersMeta?.inflationHistory || {}, [model.parametersMeta?.inflationHistory]);
+  const inflationBaseYear = Number(model.parametersMeta?.inflationBaseYear);
+
+  const inflationYearRows = useMemo(() => {
+    if (Array.isArray(inflationYearsMeta) && inflationYearsMeta.length === 3) {
+      return inflationYearsMeta.map((item) => ({
+        year: Number.isFinite(item?.year) ? Number(item.year) : null,
+        value: item?.value,
+      }));
+    }
+
+    if (Number.isFinite(inflationBaseYear)) {
+      const base = inflationBaseYear;
+      const years = [base - 3, base - 2, base - 1];
+      return years.map((year) => ({
+        year,
+        value: inflationHistory[`y${year}`],
+      }));
+    }
+
+    return [];
+  }, [inflationYearsMeta, inflationHistory, inflationBaseYear]);
+
+  const inflationYearLabels = inflationYearRows.map((item) => (item.year ? `${item.year} yılı oran` : ""));
+  const inflationYearValues = inflationYearRows.map((item) => item.value);
+
+  const paramTableRows = useMemo(() => {
+    const rows = [];
+
+    const pushRow = (row, idx) => {
+      rows.push({
+        key: row.key || `param-${idx}`,
+        cells: [
+          { content: row.no, colSpan: 1 },
+          { content: row.desc, colSpan: 4 },
+          { content: formatParamValue(row), colSpan: 1, align: "right" },
+        ],
+      });
+    };
+
+    paramsRows.forEach((row, idx) => {
+      pushRow(row, idx);
+
+      if (String(row.no || "") === "9") {
+        rows.push({
+          key: "param-inflation-head",
+          cells: [
+            { content: "", colSpan: 1 },
+            { content: "Son 3 Yılın Resmi Enflasyon Oranları", colSpan: 1 },
+            { content: inflationYearLabels[0], colSpan: 1, align: "center" },
+            { content: inflationYearLabels[1], colSpan: 1, align: "center" },
+            { content: inflationYearLabels[2], colSpan: 1, align: "center" },
+            { content: "", colSpan: 1 },
+          ],
+        });
+        rows.push({
+          key: "param-inflation-values",
+          cells: [
+            { content: "", colSpan: 1 },
+            { content: "", colSpan: 1 },
+            { content: formatParamValue({ value: inflationYearValues[0], valueType: "percent" }), colSpan: 1, align: "center" },
+            { content: formatParamValue({ value: inflationYearValues[1], valueType: "percent" }), colSpan: 1, align: "center" },
+            { content: formatParamValue({ value: inflationYearValues[2], valueType: "percent" }), colSpan: 1, align: "center" },
+            { content: "", colSpan: 1 },
+          ],
+        });
+      }
+    });
+
+    return rows;
+  }, [paramsRows, inflationYearLabels, inflationYearValues, formatParamValue]);
 
   const capacityStudentRows = useMemo(() => {
     const v = model.capacity || {};
@@ -472,6 +573,10 @@ export default function DetailedReportView(props) {
 
   const capacityClassRows = useMemo(() => {
     const v = model.capacity || {};
+    const plannedAvg =
+      isFiniteNumber(v.plannedStudents) && isFiniteNumber(v.plannedBranches) && Number(v.plannedBranches) !== 0
+        ? Number(v.plannedStudents) / Number(v.plannedBranches)
+        : v.avgStudentsPerClassPlanned;
     return [
       {
         k: "Binadaki Toplam Şube (Derslik) Sayısı",
@@ -487,8 +592,8 @@ export default function DetailedReportView(props) {
       },
       {
         k: "Sınıf Başına Düşen Ort. Öğrenci Sayısı",
-        v: isFiniteNumber(v.avgStudentsPerClass)
-          ? fmtNumber(v.avgStudentsPerClass, { maximumFractionDigits: 2 })
+        v: isFiniteNumber(plannedAvg)
+          ? fmtNumber(plannedAvg, { maximumFractionDigits: 2 })
           : "—",
       },
     ];
@@ -540,9 +645,117 @@ export default function DetailedReportView(props) {
     () => revRows.map((row) => formatAmountRatioRow(row, fmtMoneyDisplay)),
     [revRows, fmtMoneyDisplay]
   );
+  const revenuesDetailed = useMemo(() => model.revenuesDetailed || [], [model.revenuesDetailed]);
+  const revenuesDetailedTotal =
+    Number.isFinite(Number(model.revenuesDetailedTotal)) && Number(model.revenuesDetailedTotal) > 0
+      ? Number(model.revenuesDetailedTotal)
+      : null;
+  const revenueTable = useMemo(() => {
+    const filtered = revenuesDetailed.filter((r) => Number.isFinite(r.amount) && Number(r.amount) !== 0);
+    const total =
+      revenuesDetailedTotal ||
+      filtered.reduce((sum, r) => (Number.isFinite(r.amount) ? sum + Number(r.amount) : sum), 0);
+    if (!filtered.length || !Number.isFinite(total) || total === 0) return null;
+    const rows = filtered.map((r, idx) => {
+      const ratio = Number.isFinite(r.amount) && total ? r.amount / total : null;
+      return {
+        key: r.name || idx,
+        name: r.name,
+        amount: fmtMoneyDisplay(r.amount),
+        ratio: Number.isFinite(ratio) ? fmtPct(ratio, 2) : "—",
+      };
+    });
+    return { rows, total: fmtMoneyDisplay(total) };
+  }, [revenuesDetailed, revenuesDetailedTotal, fmtMoneyDisplay, fmtPct]);
+  const detailedExpenses = useMemo(() => model.parametersMeta?.detailedExpenses || [], [model.parametersMeta?.detailedExpenses]);
+  const detailedExpenseTotal =
+    Number(model.parametersMeta?.detailedExpenseTotal) || Number(model.expenseTotal) || 0;
   const formattedExpRows = useMemo(
     () => expRows.map((row) => formatAmountRatioRow(row, fmtMoneyDisplay)),
     [expRows, fmtMoneyDisplay]
+  );
+  const detailedExpenseRows = useMemo(() => {
+    if (!Array.isArray(detailedExpenses) || !detailedExpenses.length) return null;
+    const total = detailedExpenseTotal || detailedExpenses.reduce((sum, r) => (Number.isFinite(r.amount) ? sum + Number(r.amount) : sum), 0);
+    const rows = detailedExpenses.map((r, idx) => {
+      const ratioVal =
+        r.ratio != null
+          ? r.ratio
+          : Number.isFinite(r.amount) && total > 0
+          ? Number(r.amount) / total
+          : null;
+      const overTarget = Number.isFinite(r.targetPct) && Number.isFinite(ratioVal) && ratioVal > r.targetPct;
+      return {
+        key: r.name || idx,
+        name: r.name,
+        amount: Number.isFinite(r.amount) ? fmtMoneyDisplay(r.amount) : "—",
+        ratio: Number.isFinite(ratioVal) ? fmtPct(ratioVal, 2) : "—",
+        targetLabel: Number.isFinite(r.targetPct) ? `(Hedeflenen Maliyet ${fmtPct(r.targetPct, 0)})` : "",
+        highlight: overTarget,
+      };
+    });
+    const totalAmount = total > 0 ? fmtMoneyDisplay(total) : "—";
+    return { rows, total: totalAmount };
+  }, [detailedExpenses, detailedExpenseTotal, fmtMoneyDisplay, fmtPct]);
+
+  const discountAnalysis = model.discountAnalysis || {};
+  const scholarshipAnalysis = discountAnalysis.scholarships || {};
+  const discountAnalysisData = discountAnalysis.discounts || {};
+  const MINI_ANALYSIS_COLUMNS = [
+    { key: "label", label: "", thStyle: { width: 240 } },
+    { key: "value", label: "", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+  ];
+  const formatCurrencyOrDash = (v) => (Number.isFinite(Number(v)) ? fmtMoneyDisplay(v) : "—");
+  const formatPct0OrDash = (v) => (Number.isFinite(Number(v)) ? fmtPct(v, 0) : "—");
+  const scholarshipAnalysisRows = useMemo(
+    () => [
+      {
+        key: "sch-per-target",
+        label: "Toplam Burs Hedeflenen Öğrenci Sayısına Bölümü",
+        value: formatCurrencyOrDash(scholarshipAnalysis.perTargetStudent),
+      },
+      {
+        key: "sch-student-share",
+        label: "Burs Öğrencilerin Toplam Öğrenci içindeki %",
+        value: formatPct0OrDash(scholarshipAnalysis.studentShare),
+      },
+      {
+        key: "sch-revenue-share",
+        label: "Burs Velilerden Alınan Öğrenci Gelirleri içindeki %",
+        value: formatPct0OrDash(scholarshipAnalysis.revenueShare),
+      },
+      {
+        key: "sch-weighted",
+        label: "Ağırlıklı Burs Ortalaması %",
+        value: formatPct0OrDash(scholarshipAnalysis.weightedAvgRate),
+      },
+    ],
+    [scholarshipAnalysis, fmtMoneyDisplay, fmtPct]
+  );
+  const discountAnalysisRows = useMemo(
+    () => [
+      {
+        key: "disc-per-target",
+        label: "Toplam İndirimlerin Hedeflenen Öğrenci Sayısına Bölümü",
+        value: formatCurrencyOrDash(discountAnalysisData.perTargetStudent),
+      },
+      {
+        key: "disc-student-share",
+        label: "İndirimli Öğrencilerin Toplam Öğrenci içindeki %",
+        value: formatPct0OrDash(discountAnalysisData.studentShare),
+      },
+      {
+        key: "disc-revenue-share",
+        label: "İndirimlerin Velilerden Alınan Öğrenci Gelirleri içindeki %",
+        value: formatPct0OrDash(discountAnalysisData.revenueShare),
+      },
+      {
+        key: "disc-weighted",
+        label: "Ağırlıklı İndirim Ortalaması %",
+        value: formatPct0OrDash(discountAnalysisData.weightedAvgRate),
+      },
+    ],
+    [discountAnalysisData, fmtMoneyDisplay, fmtPct]
   );
 
   const scholarshipsRows = useMemo(() => {
@@ -696,14 +909,14 @@ export default function DetailedReportView(props) {
             <SimpleTable
               columns={[
                 { key: "level", label: "Kademe" },
-                { key: "edu", label: "Eğitim" , thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
-                { key: "total", label: "Toplam" , thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "edu", label: "Eğitim", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "total", label: "Toplam", thStyle: { width: 140, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
               ]}
-                rows={formattedTuitionRows
-                  .filter((r) => !/TOPLAM|ORTALAMA/i.test(String(r.level || "")))
-                  .slice(0, 7)
-                  .map((r, i) => ({ key: String(i), level: r.level, edu: r.edu, total: r.total }))}
-              />
+              rows={formattedTuitionRows
+                .filter((r) => !/TOPLAM|ORTALAMA/i.test(String(r.level || "")))
+                .slice(0, 7)
+                .map((r, i) => ({ key: String(i), level: r.level, edu: r.edu, total: r.total }))}
+            />
             <div className="small" style={{ marginTop: 8, opacity: 0.8 }}>
               Not: Paket ücretler ve artış oranları bir sonraki adımda otomatik bağlanacak.
             </div>
@@ -842,19 +1055,46 @@ export default function DetailedReportView(props) {
       </Section>
 
       <Section title="C. OKUL ÜCRETİ HESAPLAMA PARAMETRELERİ">
-        <SimpleTable
-          columns={[
-            { key: "no", label: "#", thStyle: { width: 40 } },
-            { key: "desc", label: "Parametre" },
-            { key: "value", label: "Veri", thStyle: { width: 220, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
-          ]}
-          rows={paramsRows.map((r, i) => ({
-            key: String(i),
-            no: r.no,
-            desc: r.desc,
-            value: formatParamValue(r),
-          }))}
-        />
+        <table className="table" style={{ width: "100%" }}>
+          <thead>
+            <tr>
+              {PARAM_HEADER_CELLS.map((c) => (
+                <th key={c.key} colSpan={c.colSpan} style={c.thStyle}>
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {paramTableRows.length ? (
+              paramTableRows.map((row, rowIdx) => (
+                <tr key={row.key || rowIdx}>
+                  {row.cells.map((cell, cellIdx) => (
+                    <td
+                      key={cellIdx}
+                      colSpan={cell.colSpan || 1}
+                      style={
+                        cell.align === "right"
+                          ? NUM_CELL_STYLE
+                          : cell.align === "center"
+                          ? { textAlign: "center" }
+                          : undefined
+                      }
+                    >
+                      {cell.content ?? ""}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={6} className="small">
+                  Veri yok.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
 
         <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>C.1. Kapasite Kullanımı</div>
@@ -906,26 +1146,80 @@ export default function DetailedReportView(props) {
 
         <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>C.3. Gelirler</div>
-          <SimpleTable
-            columns={[
-              { key: "name", label: "Gelir" },
-              { key: "amount", label: "Tutar", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
-              { key: "ratio", label: "% Oranı", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
-            ]}
-            rows={formattedRevRows.map((r, i) => ({ key: String(i), ...r }))}
-          />
+          {revenueTable ? (
+            <table className="table" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th>Gelir</th>
+                  <th style={{ width: 180, textAlign: "right" }}>Tutar</th>
+                  <th style={{ width: 120, textAlign: "right" }}>% Oranı</th>
+                </tr>
+              </thead>
+              <tbody>
+                {revenueTable.rows.map((row) => (
+                  <tr key={row.key}>
+                    <td>{row.name}</td>
+                    <td style={NUM_CELL_STYLE}>{row.amount}</td>
+                    <td style={NUM_CELL_STYLE}>{row.ratio}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 800 }}>
+                  <td>Toplam</td>
+                  <td style={NUM_CELL_STYLE}>{revenueTable.total}</td>
+                  <td style={NUM_CELL_STYLE}>{fmtPct(1, 2)}</td>
+                </tr>
+              </tbody>
+            </table>
+          ) : (
+            <SimpleTable
+              columns={[
+                { key: "name", label: "Gelir" },
+                { key: "amount", label: "Tutar", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "ratio", label: "% Oranı", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              ]}
+              rows={formattedRevRows.map((r, i) => ({ key: String(i), ...r }))}
+            />
+          )}
         </div>
 
         <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>C.4. Giderler</div>
-          <SimpleTable
-            columns={[
-              { key: "name", label: "Gider" },
-              { key: "amount", label: "Tutar", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
-              { key: "ratio", label: "% Oranı", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
-            ]}
-            rows={formattedExpRows.map((r, i) => ({ key: String(i), ...r }))}
-          />
+          {detailedExpenseRows ? (
+            <table className="table" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th>Giderler</th>
+                  <th style={{ width: 180, textAlign: "right" }}>Tutar</th>
+                  <th style={{ width: 120, textAlign: "right" }}>% Oranı</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailedExpenseRows.rows.map((row) => (
+                  <tr key={row.key}>
+                    <td>{row.name}</td>
+                    <td style={NUM_CELL_STYLE}>{row.amount}</td>
+                    <td style={row.highlight ? { ...NUM_CELL_STYLE, background: "#ffd9d9" } : NUM_CELL_STYLE}>
+                      {row.ratio}
+                    </td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 800 }}>
+                  <td>Toplam</td>
+                  <td style={NUM_CELL_STYLE}>{detailedExpenseRows.total}</td>
+                  <td style={NUM_CELL_STYLE}>{fmtPct(1, 2)}</td>
+                </tr>
+              </tbody>
+            </table>
+          ) : (
+            <SimpleTable
+              columns={[
+                { key: "name", label: "Gider" },
+                { key: "amount", label: "Tutar", thStyle: { width: 180, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+                { key: "ratio", label: "% Oranı", thStyle: { width: 120, textAlign: "right" }, tdStyle: NUM_CELL_STYLE },
+              ]}
+              rows={formattedExpRows.map((r, i) => ({ key: String(i), ...r }))}
+            />
+          )}
         </div>
 
         <div style={{ marginTop: 12 }}>
@@ -961,6 +1255,9 @@ export default function DetailedReportView(props) {
                 ]}
                 rows={formattedScholarshipsRows.map((r, i) => ({ key: String(i), ...r }))}
               />
+              <div style={{ marginTop: 8 }}>
+                <SimpleTable columns={MINI_ANALYSIS_COLUMNS} rows={scholarshipAnalysisRows} />
+              </div>
             </div>
 
             <div>
@@ -976,12 +1273,10 @@ export default function DetailedReportView(props) {
                 ]}
                 rows={formattedDiscountsRows.map((r, i) => ({ key: String(i), ...r }))}
               />
+              <div style={{ marginTop: 8 }}>
+                <SimpleTable columns={MINI_ANALYSIS_COLUMNS} rows={discountAnalysisRows} />
+              </div>
             </div>
-          </div>
-
-          <div className="small" style={{ marginTop: 8, opacity: 0.85 }}>
-            Alt metrikler (hedeflenen öğrenciye bölümü, ağırlıklı ortalama vb.) bir sonraki adımda hesaplanıp burada
-            gösterilecek.
           </div>
         </div>
 
