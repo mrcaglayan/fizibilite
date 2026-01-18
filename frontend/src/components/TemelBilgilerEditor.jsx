@@ -160,9 +160,11 @@ export default function TemelBilgilerEditor({
   gradesCurrent,
   ik,
   prevReport,
+  prevCurrencyMeta,
   dirtyPaths,
   onDirty,
   currencyCode,
+  isScenarioLocal,
 }) {
   const tb = useMemo(() => (value && typeof value === "object" ? value : {}), [value]);
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
@@ -286,20 +288,30 @@ export default function TemelBilgilerEditor({
     return rates.length ? fracToPercent(sum / rates.length) : 0;
   }, [tb, visibleUcretRows]);
 
+  const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
+  const canUsePrevFx = Boolean(isScenarioLocal) && prevFx > 0;
+
   const plannedPerf = useMemo(() => {
     // prevReport may be the whole report with years.y1
     const y1 = prevReport?.years?.y1 || prevReport?.y1 || null;
     if (!y1) return null;
 
     const pm = safeNum(y1?.kpis?.profitMargin) * 100; // ratio -> %
-    return {
+    const base = {
       ogrenci: safeNum(y1?.students?.totalStudents),
       gelirler: safeNum(y1?.income?.netIncome),
       giderler: safeNum(y1?.expenses?.totalExpenses),
       karZararOrani: pm,
       bursIndirim: safeNum(y1?.income?.totalDiscounts),
     };
-  }, [prevReport]);
+    if (!canUsePrevFx) return base;
+    return {
+      ...base,
+      gelirler: base.gelirler * prevFx,
+      giderler: base.giderler * prevFx,
+      bursIndirim: base.bursIndirim * prevFx,
+    };
+  }, [prevReport, canUsePrevFx, prevFx]);
 
   const scholarshipGroups = useMemo(() => {
     const burs = [];
@@ -925,7 +937,7 @@ export default function TemelBilgilerEditor({
                       <NumberInput
                         className="input tb-input tb-num"
                         value={plannedPerf ? plannedPerf.ogrenci : ""}
-                        disabled={!plannedPerf}
+                        disabled
                       />
                     </td>
                     <td className="num">
@@ -943,7 +955,7 @@ export default function TemelBilgilerEditor({
                       <NumberInput
                         className="input tb-input tb-num"
                         value={plannedPerf ? plannedPerf.gelirler : ""}
-                        disabled={!plannedPerf}
+                        disabled
                       />
                     </td>
                     <td className="num">
@@ -961,7 +973,7 @@ export default function TemelBilgilerEditor({
                       <NumberInput
                         className="input tb-input tb-num"
                         value={plannedPerf ? plannedPerf.giderler : ""}
-                        disabled={!plannedPerf}
+                        disabled
                       />
                     </td>
                     <td className="num">
@@ -979,7 +991,7 @@ export default function TemelBilgilerEditor({
                       <NumberInput
                         className="input tb-input tb-num"
                         value={plannedPerf ? plannedPerf.karZararOrani.toFixed(2) : ""}
-                        disabled={!plannedPerf}
+                        disabled
                       />
                     </td>
                     <td className="num">
@@ -997,7 +1009,7 @@ export default function TemelBilgilerEditor({
                       <NumberInput
                         className="input tb-input tb-num"
                         value={plannedPerf ? plannedPerf.bursIndirim : ""}
-                        disabled={!plannedPerf}
+                        disabled
                       />
                     </td>
                     <td className="num">

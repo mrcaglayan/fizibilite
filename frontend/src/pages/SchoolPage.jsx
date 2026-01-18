@@ -153,6 +153,7 @@ export default function SchoolPage() {
   // selected scenario meta + previous year report
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [prevReport, setPrevReport] = useState(null);
+  const [prevScenarioMeta, setPrevScenarioMeta] = useState(null);
 
   // norm
   const [norm, setNorm] = useState(null);
@@ -865,27 +866,27 @@ export default function SchoolPage() {
     }
   }, [selectedScenario?.input_currency, selectedScenario?.fx_usd_to_local, selectedScenario?.local_currency_code, reportCurrency, setReportCurrency]);
 
-  function getPrevAcademicYear(academicYear) {
-    const { startYear, endYear } = parseAcademicYear(academicYear);
-    if (!startYear) return "";
-    if (endYear && endYear !== startYear) return `${startYear - 1}-${endYear - 1}`;
-    return String(startYear - 1);
-  }
-
   // Load previous year's report (used in TEMEL BİLGİLER: performans planlanan)
   useEffect(() => {
     async function loadPrev() {
       try {
         setPrevReport(null);
+        setPrevScenarioMeta(null);
         const year = selectedScenario?.academic_year;
         if (!year || !scenarios?.length) return;
 
-        const prevYear = getPrevAcademicYear(year);
-        if (!prevYear) return;
+        const { startYear, endYear } = parseAcademicYear(year);
+        if (!startYear) return;
+        const prevStartYear = startYear - 1;
+        const prevEndYear = (endYear ?? startYear) - 1;
 
-        const prevScenario = scenarios.find((s) => String(s.academic_year) === String(prevYear));
+        const prevScenario = scenarios.find((s) => {
+          const parsed = parseAcademicYear(s?.academic_year);
+          return parsed.startYear === prevStartYear && parsed.endYear === prevEndYear;
+        });
         if (!prevScenario) return;
 
+        setPrevScenarioMeta(prevScenario);
         const data = await api.calculateScenario(schoolId, prevScenario.id);
         setPrevReport(data?.results || null);
       } catch (_) {
@@ -2593,9 +2594,11 @@ export default function SchoolPage() {
                 gradesCurrent={inputs.gradesCurrent}
                 ik={inputs.ik}
                 prevReport={prevReport}
+                prevCurrencyMeta={prevScenarioMeta}
                 dirtyPaths={dirtyPaths}
                 programType={programType}
                 currencyCode={inputCurrencyCode}
+                isScenarioLocal={selectedScenario?.input_currency === "LOCAL"}
                 onDirty={markDirty}
               />
             </TabProgressHeatmap>
@@ -2849,6 +2852,7 @@ export default function SchoolPage() {
               inputs={inputs}
               report={report}
               prevReport={prevReport}
+              prevCurrencyMeta={prevScenarioMeta}
               reportCurrency={reportCurrency}
               currencyMeta={selectedScenario}
               programType={programType}

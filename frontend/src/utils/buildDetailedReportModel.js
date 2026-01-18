@@ -1,5 +1,5 @@
 import { getProgramType, isKademeKeyVisible } from "./programType";
-import { normalizeKademeConfig } from "./kademe";
+import { formatKademeLabel, normalizeKademeConfig } from "./kademe";
 
 const DISCOUNT_DEFS = [
   { key: "magisBasariBursu", name: "MAGIS BASARI BURSU" },
@@ -239,9 +239,13 @@ function buildDiscountPlanRowY1({ name, key, tuitionStudents, avgTuition, toUsd,
   const mode = String(row.mode || "percent").trim().toLowerCase();
   const value = safeNum(row.value);
   const pct = clamp(value, 0, 1);
+  const fixedValueUsd = Math.max(0, toUsd(value));
+  const fixedRate =
+    Number.isFinite(avgTuition) && avgTuition > 0 ? clamp(fixedValueUsd / avgTuition, 0, 1) : null;
+  const rate = mode === "fixed" ? fixedRate : pct;
   const cost =
     mode === "fixed"
-      ? plannedCount * Math.max(0, toUsd(value))
+      ? plannedCount * fixedValueUsd
       : safeNum(avgTuition) * plannedCount * pct;
 
   return {
@@ -250,6 +254,7 @@ function buildDiscountPlanRowY1({ name, key, tuitionStudents, avgTuition, toUsd,
     cost,
     cur: currentCount ?? null,
     key,
+    rate,
   };
 }
 
@@ -259,6 +264,7 @@ export function buildDetailedReportModel({
   inputs,
   report,
   prevReport,
+  prevCurrencyMeta,
   programType,
 } = {}) {
   const normKey = (k) => String(k || "").trim().toLowerCase();
@@ -273,6 +279,14 @@ export function buildDetailedReportModel({
       return n / fx;
     }
     return n;
+  };
+  const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
+  const prevIsLocal =
+    String(scenario?.input_currency || "").toUpperCase() === "LOCAL" && prevFx > 0;
+  const toUsdPrev = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return prevIsLocal ? n / prevFx : n;
   };
 
   const headerParts = [
@@ -298,6 +312,11 @@ export function buildDetailedReportModel({
     safeNum(kapasite?.totals?.cur) ||
     Object.values(byKademe).reduce((sum, row) => sum + safeNum(row?.caps?.cur), 0);
   const schoolCapacity = derivedCapacity || safeNum(kapasite?.currentStudents);
+  const derivedCapacityY1 =
+    safeNum(kapasite?.years?.y1) ||
+    safeNum(kapasite?.totals?.y1) ||
+    Object.values(byKademe).reduce((sum, row) => sum + safeNum(row?.caps?.y1), 0);
+  const capacityYear1 = derivedCapacityY1 || schoolCapacity;
 
   const gradesCurrent = Array.isArray(inputs?.gradesCurrent) ? inputs?.gradesCurrent : [];
   const currentStudentsFromGrades = gradesCurrent.reduce((sum, row) => sum + safeNum(row?.studentsPerBranch), 0);
@@ -712,107 +731,133 @@ export function buildDetailedReportModel({
   );
 
   const plannedPerf = prevReport?.years?.y1 || {};
-  const actualPerf = {
-    ogrenciSayisi: safeNum(performans?.ogrenciSayisi),
-    gelirler: toUsd(performans?.gelirler),
-    giderler: toUsd(performans?.giderler),
-    karZararOrani: safeNum(performans?.karZararOrani),
-    bursVeIndirimler: toUsd(performans?.bursVeIndirimler),
+  const plannedStudentsPerf = numOrNull(plannedPerf?.students?.totalStudents);
+  const plannedIncome = numOrNull(plannedPerf?.income?.netIncome);
+  const plannedExpenses = numOrNull(plannedPerf?.expenses?.totalExpenses);
+  const plannedMargin = numOrNull(plannedPerf?.kpis?.profitMargin);
+  const plannedDiscounts = numOrNull(plannedPerf?.income?.totalDiscounts);
+
+  const toUsdPrevOrNull = (value) => {
+    const raw = numOrNull(value);
+    return raw == null ? null : toUsdPrev(raw);
   };
+  const actualStudents = numOrNull(performans?.ogrenciSayisi);
+  const actualIncome = toUsdPrevOrNull(performans?.gelirler);
+  const actualExpenses = toUsdPrevOrNull(performans?.giderler);
+  const actualDiscounts = toUsdPrevOrNull(performans?.bursVeIndirimler);
+  let actualMargin = numOrNull(performans?.karZararOrani);
+  if (actualMargin != null && Math.abs(actualMargin) > 1.5) {
+    actualMargin = actualMargin / 100;
+  }
+
+  const calcVariance = (planned, actual) =>
+    planned != null && actual != null && Number(planned) !== 0
+      ? (actual - planned) / planned
+      : null;
 
   const performanceRows = [
     {
       metric: "Ogrenci Sayisi",
-      planned: safeNum(plannedPerf?.students?.totalStudents),
-      actual: actualPerf.ogrenciSayisi,
+      planned: plannedStudentsPerf,
+      actual: actualStudents,
     },
     {
       metric: "Gelirler",
-      planned: safeNum(plannedPerf?.income?.netIncome),
-      actual: actualPerf.gelirler,
+      planned: plannedIncome,
+      actual: actualIncome,
     },
     {
       metric: "Giderler",
-      planned: safeNum(plannedPerf?.expenses?.totalExpenses),
-      actual: actualPerf.giderler,
+      planned: plannedExpenses,
+      actual: actualExpenses,
     },
     {
       metric: "Kar Zarar Orani",
-      planned: safeNum(plannedPerf?.kpis?.profitMargin),
-      actual: actualPerf.karZararOrani,
+      planned: plannedMargin,
+      actual: actualMargin,
     },
     {
       metric: "Burs ve Indirimler",
-      planned: safeNum(plannedPerf?.income?.totalDiscounts),
-      actual: actualPerf.bursVeIndirimler,
+      planned: plannedDiscounts,
+      actual: actualDiscounts,
     },
   ].map((row) => ({
     ...row,
-    variance: row.planned != null && row.actual != null ? row.actual - row.planned : null,
+    variance: calcVariance(row.planned, row.actual),
   }));
 
-  const competitorRows = ["okulOncesi", "ilkokul", "ortaokul", "lise"].map((key) => {
-    const source = rakipAnalizi?.[key] || {};
-    return {
-      level:
+  const programTypeSuffix = resolvedProgramType === "international" ? "INT." : "YEREL";
+  const competitorRows = ["okulOncesi", "ilkokul", "ortaokul", "lise"]
+    .filter((key) => kademeConfig?.[key]?.enabled !== false)
+    .map((key) => {
+      const source = rakipAnalizi?.[key] || {};
+      const baseLabel =
         key === "okulOncesi"
           ? "Okul Oncesi"
           : key === "ilkokul"
           ? "Ilkokul"
           : key === "ortaokul"
           ? "Ortaokul"
-          : "Lise",
-      a: toUsd(source?.a),
-      b: toUsd(source?.b),
-      c: toUsd(source?.c),
-    };
-  });
+          : "Lise";
+      const labelWithRange = formatKademeLabel(baseLabel, kademeConfig, key);
+      const level = key === "okulOncesi" ? labelWithRange : `${labelWithRange} - ${programTypeSuffix}`;
+      return {
+        level,
+        a: toUsd(source?.a),
+        b: toUsd(source?.b),
+        c: toUsd(source?.c),
+      };
+    });
 
   const scholarshipsTotalCost = scholarships.reduce((sum, r) => sum + safeNum(r.cost), 0);
   const discountsTotalCost = discounts.reduce((sum, r) => sum + safeNum(r.cost), 0);
   const scholarshipDiscountCostTotal = scholarshipsTotalCost + discountsTotalCost;
-  const parentStudentRevenue =
-    reportGrossTuition +
-    nonEdRevenues.uniforma +
-    nonEdRevenues.kitap +
-    nonEdRevenues.yemek +
-    nonEdRevenues.ulasim +
-    dormTotal;
+  const activityRevenueY1 = (() => {
+    const activityGross = safeNum(reportIncome?.activityGross);
+    if (activityGross > 0) return activityGross;
+    return reportGrossTuition + nonEducationTotal + dormTotal;
+  })();
+  const parentStudentRevenue = activityRevenueY1;
   const sumPlanned = (rows) => rows.reduce((sum, r) => sum + safeNum(r.planned), 0);
   const calcWeightedAvgRate = (rows, avgTuition) => {
-    if (!Number.isFinite(avgTuition) || avgTuition <= 0) return null;
     const totalPlanned = sumPlanned(rows);
     if (totalPlanned <= 0) return null;
     const weighted = rows.reduce((sum, r) => {
       const planned = safeNum(r.planned);
-      const cost = safeNum(r.cost);
-      if (planned > 0) {
-        const rate = clamp(cost / (planned * avgTuition), 0, 1);
-        return sum + planned * rate;
+      if (planned <= 0) return sum;
+      let rate = numOrNull(r.rate);
+      if (rate == null) {
+        if (!Number.isFinite(avgTuition) || avgTuition <= 0) return sum;
+        const cost = safeNum(r.cost);
+        rate = cost / (planned * avgTuition);
       }
-      return sum;
+      return sum + planned * clamp(rate, 0, 1);
     }, 0);
     return weighted / totalPlanned;
   };
+  const plannedStudentsTotal = plannedStudents;
+  const targetStudentsForCost =
+    plannedStudentsTotal > 0 ? plannedStudentsTotal : tuitionStudentsForDiscounts;
   const buildGroupAnalysis = (rows, totalCost) => {
-    const plannedStudents = sumPlanned(rows);
+    const plannedGroupStudents = sumPlanned(rows);
     const perTargetStudent =
-      tuitionStudentsForDiscounts > 0 ? totalCost / tuitionStudentsForDiscounts : null;
+      targetStudentsForCost > 0 ? totalCost / targetStudentsForCost : null;
     const studentShare =
-      tuitionStudentsForDiscounts > 0 ? plannedStudents / tuitionStudentsForDiscounts : null;
-    const revenueShare = parentStudentRevenue > 0 ? totalCost / parentStudentRevenue : null;
+      capacityYear1 > 0 ? plannedGroupStudents / capacityYear1 : null;
+    const revenueShare =
+      parentStudentRevenue > 0 ? (totalCost > 0 ? totalCost / parentStudentRevenue : 0) : null;
     const weightedAvgRate = calcWeightedAvgRate(rows, avgTuitionForDiscounts);
     return {
       perTargetStudent,
       studentShare,
       revenueShare,
       weightedAvgRate,
-      plannedStudents,
+      plannedStudents: plannedGroupStudents,
       totalCost,
     };
   };
   const discountAnalysis = {
-    targetStudents: tuitionStudentsForDiscounts,
+    targetStudents: targetStudentsForCost,
     parentStudentRevenue,
     scholarships: buildGroupAnalysis(scholarships, scholarshipsTotalCost),
     discounts: buildGroupAnalysis(discounts, discountsTotalCost),
@@ -981,6 +1026,7 @@ export function buildDetailedReportModel({
     expenses: expenseRows,
     scholarships,
     discounts,
+    discountAnalysis,
     performance: performanceRows,
     competitors: competitorRows,
     revenuesDetailed,
