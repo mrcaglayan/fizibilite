@@ -47,6 +47,25 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
   };
   const fmtMoney = (v) => fmt(money(v));
 
+  const yOf = (ky) => years?.[ky] || {};
+  const pnlOf = (ky) => yOf(ky)?.pnl || {};
+  const incOf = (ky) => yOf(ky)?.income || {};
+
+  const grossSalesRemainder = (ky) => {
+    const p = pnlOf(ky) || {};
+    const inc = incOf(ky) || {};
+    const gross = Number(p?.grossSales);
+    if (!Number.isFinite(gross)) return null;
+    const sum =
+      Number(inc?.grossTuition || 0) +
+      Number(inc?.nonEducationFeesTotal || 0) +
+      Number(inc?.dormitoryRevenuesTotal || 0) +
+      Number(inc?.otherInstitutionIncomeTotal || 0) +
+      Number(inc?.governmentIncentives || 0);
+    const rem = gross - sum;
+    return Math.abs(rem) > 0.01 ? rem : null;
+  };
+
   const available = useMemo(() => {
     const keys = ["y1", "y2", "y3"].filter((k) => years?.[k]);
     return keys.length ? keys : ["y1"];
@@ -85,6 +104,8 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
   const e = y.expenses || {};
   const r = y.result || {};
   const k = y.kpis || {};
+  const pnl = y.pnl || {};
+
   const serviceRows = Array.isArray(e.nonTuitionServicesBreakdown) ? e.nonTuitionServicesBreakdown : [];
   const getServiceRowTotal = (row) => {
     const total = Number(row?.total);
@@ -97,6 +118,14 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
   const serviceTotal = serviceRows.length
     ? serviceRows.reduce((sum, row) => sum + getServiceRowTotal(row), 0)
     : undefined;
+
+
+  const grossBreak = Array.isArray(pnl?.grossSalesBreakdown) ? pnl.grossSalesBreakdown : [];
+  const grossRem = grossSalesRemainder(activeYear);
+  const grossBreakFull = grossRem == null ? grossBreak : [...grossBreak, { label: "Diğer / Yuvarlama", value: grossRem }];
+  const discountsSplit = i?.discountsSplit || {};
+  const bursDetails = Array.isArray(discountsSplit?.bursDetails) ? discountsSplit.bursDetails : [];
+  const indirimDetails = Array.isArray(discountsSplit?.indirimDetails) ? discountsSplit.indirimDetails : [];
 
   const allErrors = ["y1", "y2", "y3"].flatMap(
     (ky) => years?.[ky]?.flags?.errors || []
@@ -238,6 +267,88 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
         </div>
       )}
 
+
+
+      {/* GELIR TABLOSU (Y1-Y2-Y3) */}
+      {available.length > 1 && (
+        <div style={{ marginTop: 14, overflowX: "auto" }}>
+          <div style={{ fontWeight: 900, marginBottom: 6 }}>Gelir Tablosu (Y1-Y2-Y3)</div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th />
+                <th style={{ width: 170, textAlign: "right" }}>Y1</th>
+                <th style={{ width: 170, textAlign: "right" }}>Y2</th>
+                <th style={{ width: 170, textAlign: "right" }}>Y3</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const y1 = years?.y1 || {};
+                const y2 = years?.y2 || {};
+                const y3 = years?.y3 || {};
+                const p1 = y1?.pnl || {};
+                const p2 = y2?.pnl || {};
+                const p3 = y3?.pnl || {};
+                const i1 = y1?.income || {};
+                const i2 = y2?.income || {};
+                const i3 = y3?.income || {};
+
+                const remV = [grossSalesRemainder("y1"), grossSalesRemainder("y2"), grossSalesRemainder("y3")];
+                const remRows = remV.some((v) => v != null)
+                  ? [{ type: "i", label: "Diğer / Yuvarlama", v: remV }]
+                  : [];
+
+                const rows = [
+                  { type: "h", label: "A. BRÜT SATIŞLAR", v: [p1.grossSales, p2.grossSales, p3.grossSales] },
+                  { type: "i", label: "Brüt Eğitim Geliri (Tuition)", v: [i1.grossTuition, i2.grossTuition, i3.grossTuition] },
+                  { type: "i", label: "Öğrenim Dışı Öğrenci Ücretleri (Brüt)", v: [i1.nonEducationFeesTotal, i2.nonEducationFeesTotal, i3.nonEducationFeesTotal] },
+                  { type: "i", label: "Yurt Gelirleri (Brüt)", v: [i1.dormitoryRevenuesTotal, i2.dormitoryRevenuesTotal, i3.dormitoryRevenuesTotal] },
+                  { type: "i", label: "Diğer Kurum Gelirleri", v: [i1.otherInstitutionIncomeTotal, i2.otherInstitutionIncomeTotal, i3.otherInstitutionIncomeTotal] },
+                  { type: "i", label: "Devlet Teşvikleri", v: [i1.governmentIncentives, i2.governmentIncentives, i3.governmentIncentives] },
+
+                  ...remRows,
+
+                  { type: "h", label: "B. SATIŞ İNDİRİMLERİ (-)", v: [p1.salesDiscounts, p2.salesDiscounts, p3.salesDiscounts] },
+                  { type: "i", label: "Burslar (-)", v: [p1.bursDiscounts, p2.bursDiscounts, p3.bursDiscounts] },
+                  { type: "i", label: "İndirimler (-)", v: [p1.indirimDiscounts, p2.indirimDiscounts, p3.indirimDiscounts] },
+
+                  { type: "h", label: "C. Net Satışlar", v: [p1.netSales, p2.netSales, p3.netSales] },
+
+                  { type: "h", label: "D. Satışların Maliyeti (-)", v: [p1.costOfSalesTotal, p2.costOfSalesTotal, p3.costOfSalesTotal] },
+                  { type: "i", label: "Satılan Ticari Mallar Maliyeti (-) (621)", v: [p1.costOfSalesGoods, p2.costOfSalesGoods, p3.costOfSalesGoods] },
+                  { type: "i", label: "Satılan Hizmet Maliyeti (-) (622)", v: [p1.costOfSalesServices, p2.costOfSalesServices, p3.costOfSalesServices] },
+
+                  { type: "h", label: "BRÜT SATIŞ KARI VEYA ZARARI", v: [p1.grossProfit, p2.grossProfit, p3.grossProfit] },
+
+                  { type: "h", label: "E. FAALİYET GİDERLERİ (-)", v: [p1.operatingTotal, p2.operatingTotal, p3.operatingTotal] },
+                  { type: "i", label: "Pazarlama Satış Dağıtım Giderleri (-) (631)", v: [p1.operatingMarketing, p2.operatingMarketing, p3.operatingMarketing] },
+                  { type: "i", label: "Genel Yönetim Giderleri (-) (632)", v: [p1.operatingGeneral, p2.operatingGeneral, p3.operatingGeneral] },
+
+                  { type: "f", label: "DÖNEM NET KARI VEYA ZARARI", v: [p1.periodNetProfit, p2.periodNetProfit, p3.periodNetProfit] },
+                ];
+
+                const styleFor = (t) => {
+                  if (t === "h") return { fontWeight: 800 };
+                  if (t === "f") return { fontWeight: 900 };
+                  return {};
+                };
+                const labelStyleFor = (t) => (t === "i" ? { paddingLeft: 18 } : {});
+
+                return rows.map((row, idx) => (
+                  <tr key={idx} style={styleFor(row.type)}>
+                    <td style={labelStyleFor(row.type)}>{row.label}</td>
+                    <td className="num">{fmtMoney(row.v[0])}</td>
+                    <td className="num">{fmtMoney(row.v[1])}</td>
+                    <td className="num">{fmtMoney(row.v[2])}</td>
+                  </tr>
+                ));
+              })()}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Students */}
       <div style={{ marginTop: 14, fontWeight: 900 }}>
         Kapasite • {yearLabel(activeYear)}
@@ -264,37 +375,105 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
       <div style={{ overflowX: "auto", marginTop: 6 }}>
         <table className="table">
           <tbody>
-            <tr>
-              <td>Brüt Eğitim Geliri (Tuition)</td>
-              <td className="num">{fmtMoney(i.grossTuition)}</td>
-            </tr>
-            <tr>
-              <td>Öğrenim Dışı Öğrenci Ücretleri (Brüt)</td>
-              <td className="num">{fmtMoney(i.nonEducationFeesTotal)}</td>
-            </tr>
-            <tr>
-              <td>Yurt Gelirleri (Brüt)</td>
-              <td className="num">{fmtMoney(i.dormitoryRevenuesTotal)}</td>
-            </tr>
             <tr style={{ fontWeight: 800 }}>
-              <td>Faaliyet Gelirleri (Brüt)</td>
-              <td className="num">{fmtMoney(i.activityGross)}</td>
+              <td>A. BRÜT SATIŞLAR</td>
+              <td className="num">{fmtMoney(pnl.grossSales)}</td>
+            </tr>
+            {grossBreakFull.map((row, idx) => (
+              <tr key={idx}>
+                <td style={{ paddingLeft: 18 }}>{row.label}</td>
+                <td className="num">{fmtMoney(row.value)}</td>
+              </tr>
+            ))}
+
+            <tr style={{ fontWeight: 800 }}>
+              <td>B. SATIŞ İNDİRİMLERİ (-)</td>
+              <td className="num">{fmtMoney(pnl.salesDiscounts)}</td>
             </tr>
             <tr>
-              <td>Burs ve İndirimler</td>
-              <td className="num">-{fmtMoney(i.totalDiscounts)}</td>
-            </tr>
-            <tr style={{ fontWeight: 800 }}>
-              <td>Net Faaliyet Gelirleri (Net Ciro)</td>
-              <td className="num">{fmtMoney(i.netActivityIncome)}</td>
+              <td style={{ paddingLeft: 18 }}>Burslar (-)</td>
+              <td className="num">{fmtMoney(pnl.bursDiscounts)}</td>
             </tr>
             <tr>
-              <td>Diğer Gelirler (Brüt + Devlet Teşvikleri)</td>
-              <td className="num">{fmtMoney(i.otherIncomeTotal)}</td>
+              <td style={{ paddingLeft: 18 }}>İndirimler (-)</td>
+              <td className="num">{fmtMoney(pnl.indirimDiscounts)}</td>
             </tr>
+            {(bursDetails.length > 0 || indirimDetails.length > 0) && (
+              <tr>
+                <td colSpan={2} style={{ paddingTop: 0 }}>
+                  <details>
+                    <summary className="small">Burs / İndirim detayları</summary>
+                    <div style={{ marginTop: 8, overflowX: "auto" }}>
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Tür</th>
+                            <th>Açıklama</th>
+                            <th style={{ width: 170, textAlign: "right" }}>Tutar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bursDetails.map((d, idx) => (
+                            <tr key={"b" + idx}>
+                              <td>Burs</td>
+                              <td>{d.name}</td>
+                              <td className="num">{fmtMoney(-Math.abs(d.amount))}</td>
+                            </tr>
+                          ))}
+                          {indirimDetails.map((d, idx) => (
+                            <tr key={"i" + idx}>
+                              <td>İndirim</td>
+                              <td>{d.name}</td>
+                              <td className="num">{fmtMoney(-Math.abs(d.amount))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                </td>
+              </tr>
+            )}
+
             <tr style={{ fontWeight: 800 }}>
-              <td>Net Toplam Gelir</td>
-              <td className="num">{fmtMoney(i.netIncome)}</td>
+              <td>C. Net Satışlar</td>
+              <td className="num">{fmtMoney(pnl.netSales)}</td>
+            </tr>
+
+            <tr style={{ fontWeight: 800 }}>
+              <td>D. Satışların Maliyeti (-)</td>
+              <td className="num">{fmtMoney(pnl.costOfSalesTotal)}</td>
+            </tr>
+            <tr>
+              <td style={{ paddingLeft: 18 }}>Satılan Ticari Mallar Maliyeti (-) (621)</td>
+              <td className="num">{fmtMoney(pnl.costOfSalesGoods)}</td>
+            </tr>
+            <tr>
+              <td style={{ paddingLeft: 18 }}>Satılan Hizmet Maliyeti (-) (622)</td>
+              <td className="num">{fmtMoney(pnl.costOfSalesServices)}</td>
+            </tr>
+
+            <tr style={{ fontWeight: 800 }}>
+              <td>BRÜT SATIŞ KARI VEYA ZARARI</td>
+              <td className="num">{fmtMoney(pnl.grossProfit)}</td>
+            </tr>
+
+            <tr style={{ fontWeight: 800 }}>
+              <td>E. FAALİYET GİDERLERİ (-)</td>
+              <td className="num">{fmtMoney(pnl.operatingTotal)}</td>
+            </tr>
+            <tr>
+              <td style={{ paddingLeft: 18 }}>Pazarlama Satış Dağıtım Giderleri (-) (631)</td>
+              <td className="num">{fmtMoney(pnl.operatingMarketing)}</td>
+            </tr>
+            <tr>
+              <td style={{ paddingLeft: 18 }}>Genel Yönetim Giderleri (-) (632)</td>
+              <td className="num">{fmtMoney(pnl.operatingGeneral)}</td>
+            </tr>
+
+            <tr style={{ fontWeight: 900 }}>
+              <td>DÖNEM NET KARI VEYA ZARARI</td>
+              <td className="num">{fmtMoney(pnl.periodNetProfit)}</td>
             </tr>
           </tbody>
         </table>

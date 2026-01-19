@@ -95,11 +95,11 @@ function getRowLabel(row) {
 function getRowCount(row) {
   return safeNum(
     row?.studentCount ||
-      row?.count ||
-      row?.students ||
-      row?.qty ||
-      row?.quantity ||
-      0
+    row?.count ||
+    row?.students ||
+    row?.qty ||
+    row?.quantity ||
+    0
   );
 }
 
@@ -433,8 +433,8 @@ export function buildDetailedReportModel({
   const avgTuition = totalTuitionStudents
     ? totalTuitionEdu / totalTuitionStudents
     : tuitionRows.length
-    ? tuitionRows.reduce((sum, r) => sum + r.edu, 0) / tuitionRows.length
-    : 0;
+      ? tuitionRows.reduce((sum, r) => sum + r.edu, 0) / tuitionRows.length
+      : 0;
 
   const totalRow = {
     key: "total",
@@ -541,15 +541,15 @@ export function buildDetailedReportModel({
   const unitBookUsd = toUsd(
     safeNum(
       nonEduExpenseItems?.kitapKirtasiye?.unitCost ??
-        nonEduExpenseItems?.kitap?.unitCost ??
-        nonEduExpenseItems?.kirtasiye?.unitCost
+      nonEduExpenseItems?.kitap?.unitCost ??
+      nonEduExpenseItems?.kirtasiye?.unitCost
     )
   );
   const unitServiceUsd = toUsd(
     safeNum(
       nonEduExpenseItems?.ulasimServis?.unitCost ??
-        nonEduExpenseItems?.servis?.unitCost ??
-        nonEduExpenseItems?.ulasim?.unitCost
+      nonEduExpenseItems?.servis?.unitCost ??
+      nonEduExpenseItems?.ulasim?.unitCost
     )
   );
 
@@ -686,15 +686,93 @@ export function buildDetailedReportModel({
     },
   ];
 
+
+
+  // compute tuition totals from inputs as fallback basis for discount calculations
+  const tuitionStudentsFromInputs = tuitionInputRows.length
+    ? tuitionInputRows.reduce((sum, r) => sum + safeNum(r?.studentCount), 0)
+    : 0;
+  const grossTuitionFromInputs = tuitionInputRows.length
+    ? tuitionInputRows.reduce((sum, r) => sum + safeNum(r?.studentCount) * toUsd(r?.unitFee), 0)
+    : 0;
+  const avgTuitionFromInputs =
+    tuitionStudentsFromInputs > 0
+      ? grossTuitionFromInputs / tuitionStudentsFromInputs
+      : toUsd(inputs?.gelirler?.tuitionFeePerStudentYearly ?? 0);
+
+  // categorize discount inputs into scholarships (first 7 defs) and others
+  const scholarshipNameSet = new Set(SCHOLARSHIP_DEFS.map((d) => normalizeName(d.name)));
+  const discountInputList = Array.isArray(inputs?.discounts) ? inputs.discounts : [];
+
+  let scholarshipsSumInputs = 0;
+  let discountsSumInputs = 0;
+
+  for (const d of discountInputList) {
+    const mode = String(d?.mode || "percent").trim().toLowerCase();
+    const value = safeNum(d?.value);
+    const pct = clamp(value, 0, 1);
+    const fixedValueUsd = Math.max(0, toUsd(value));
+    const hasCount = d?.studentCount != null && d?.studentCount !== "";
+    const count = hasCount ? Math.max(0, Math.round(safeNum(d?.studentCount))) : null;
+    const ratio = clamp(d?.ratio, 0, 1);
+    const derived = tuitionStudentsFromInputs > 0 ? Math.round((count != null ? count : ratio * tuitionStudentsFromInputs)) : 0;
+    const plannedCount =
+      tuitionStudentsFromInputs > 0
+        ? Math.min(derived, tuitionStudentsFromInputs)
+        : count != null
+          ? count
+          : 0;
+
+    const cost =
+      mode === "fixed"
+        ? plannedCount * fixedValueUsd
+        : avgTuitionFromInputs * plannedCount * pct;
+
+    const nameKey = normalizeName(d?.name || d?.key || "");
+    if (scholarshipNameSet.has(nameKey)) scholarshipsSumInputs += cost;
+    else discountsSumInputs += cost;
+  }
+
+  // allow report-provided values to override
+  const scholarshipsAmount =
+    numOrNull(reportExpenses?.scholarshipsTotal) != null
+      ? safeNum(reportExpenses?.scholarshipsTotal)
+      : scholarshipsSumInputs;
+  const discountsAmount =
+    numOrNull(reportExpenses?.discountsTotal) != null
+      ? safeNum(reportExpenses?.discountsTotal)
+      : discountsSumInputs;
+
+  const expenseTotal =
+    safeNum(operatingTotalUsd + serviceCosts.total + dormCosts.total + scholarshipsAmount + discountsAmount);
+
+
+
+  console.log("expenseTotal", expenseTotal)
+
   const expenseRows = [
-    { name: "IK Giderleri (Toplam)", amount: safeNum(reportExpenses?.hrTotal) },
+    {
+      name: "IK Giderleri (Toplam)",
+      amount:
+        numOrNull(reportExpenses?.hrTotal) != null
+          ? safeNum(reportExpenses?.hrTotal)
+          : hrTotalUsd,
+    },
     { name: "Isletme Giderleri (IK Haric)", amount: isletmeGiderleriInputsOnlyUsd },
-    { name: "Egitim Disi Hizmet Maliyetleri", amount: safeNum(reportExpenses?.nonTuitionServicesCostTotal) },
+    {
+      name: "Egitim Disi Hizmet Maliyetleri",
+      amount:
+        numOrNull(reportExpenses?.nonTuitionServicesCostTotal) != null
+          ? safeNum(reportExpenses?.nonTuitionServicesCostTotal)
+          : serviceCosts.total,
+    },
     { name: "Yurt Maliyetleri", amount: dormCosts.total },
+    { name: "Indirimler", amount: discountsAmount },
+    { name: "Burslar", amount: scholarshipsAmount },
   ].map((row) => ({
     name: row.name,
     amount: row.amount,
-    ratio: safeDiv(row.amount, safeNum(reportExpenses?.totalExpenses)),
+    ratio: safeDiv(row.amount, expenseTotal),
   }));
 
   const tuitionStudentsForDiscounts = tuitionInputRows.length
@@ -795,10 +873,10 @@ export function buildDetailedReportModel({
         key === "okulOncesi"
           ? "Okul Oncesi"
           : key === "ilkokul"
-          ? "Ilkokul"
-          : key === "ortaokul"
-          ? "Ortaokul"
-          : "Lise";
+            ? "Ilkokul"
+            : key === "ortaokul"
+              ? "Ortaokul"
+              : "Lise";
       const labelWithRange = formatKademeLabel(baseLabel, kademeConfig, key);
       const level = key === "okulOncesi" ? labelWithRange : `${labelWithRange} - ${programTypeSuffix}`;
       return {
@@ -893,11 +971,9 @@ export function buildDetailedReportModel({
   const uncollectableRevenuePct = numOrNull(
     inflation?.uncollectableRevenuePct ?? inflation?.badDebtPct ?? inflation?.tahsilEdilemeyenGelirPct
   );
+
   const revenueTotal =
-    safeNum(reportIncome?.netIncome) ||
-    safeNum(reportIncome?.netActivityIncome) ||
     grossIncomeBase;
-  const expenseTotal = safeNum(reportExpenses?.totalExpenses);
   const netTotal = revenueTotal - expenseTotal;
   const margin = safeDiv(netTotal, revenueTotal);
   const perStudentCost = plannedStudents > 0 ? safeDiv(expenseTotal, plannedStudents) : null;

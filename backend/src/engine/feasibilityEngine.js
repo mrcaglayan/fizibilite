@@ -368,7 +368,7 @@ function calculateDiscounts({ tuitionStudents, grossTuition, tuitionAvgFee, disc
       amount = gross * effectiveRatePart;
     }
 
-    details.push({ name, mode, value, ratio: r, amount, effectiveRatePart });
+    details.push({ name, kind: d.kind, mode, value, ratio: r, amount, effectiveRatePart });
     avgDiscountRate += effectiveRatePart;
   }
 
@@ -377,6 +377,233 @@ function calculateDiscounts({ tuitionStudents, grossTuition, tuitionAvgFee, disc
   const capApplied = avgDiscountRate > 1 ? { originalAvgRate: avgDiscountRate, cappedAvgRate } : null;
 
   return { totalDiscounts, details, capApplied, errors, warnings };
+}
+
+
+// -----------------------------------------------------------------------------
+// Report (RAPOR) helpers: discounts split + expense totals by accounting code
+// Codes in this project:
+//  - 621: Satilan Ticari Mallar Maliyeti
+//  - 622: Satilan Hizmet Maliyeti
+//  - 631: Pazarlama Satis Dagitim Giderleri
+//  - 632: Genel Yonetim Giderleri
+// -----------------------------------------------------------------------------
+
+const OPERATING_KEYS = [
+  "ulkeTemsilciligi",
+  "genelYonetim",
+  "kira",
+  "emsalKira",
+  "enerjiKantin",
+  "turkPersonelMaas",
+  "turkDestekPersonelMaas",
+  "yerelPersonelMaas",
+  "yerelDestekPersonelMaas",
+  "internationalPersonelMaas",
+  "disaridanHizmet",
+  "egitimAracGerec",
+  "finansalGiderler",
+  "egitimAmacliHizmet",
+  "temsilAgirlama",
+  "ulkeIciUlasim",
+  "ulkeDisiUlasim",
+  "vergilerResmiIslemler",
+  "vergiler",
+  "demirbasYatirim",
+  "rutinBakim",
+  "pazarlamaOrganizasyon",
+  "reklamTanitim",
+  "tahsilEdilemeyenGelirler",
+];
+
+const SERVICE_KEYS = ["yemek", "uniforma", "kitapKirtasiye", "ulasimServis"];
+const DORM_KEYS = ["yurtGiderleri", "digerYurt"];
+
+const ISLETME_KEY_TO_CODE = {
+  ulkeTemsilciligi: 632,
+  genelYonetim: 632,
+
+  kira: 622,
+  emsalKira: 622,
+  enerjiKantin: 622,
+
+  turkPersonelMaas: 622,
+  turkDestekPersonelMaas: 622,
+  yerelPersonelMaas: 622,
+  yerelDestekPersonelMaas: 622,
+  internationalPersonelMaas: 622,
+
+  disaridanHizmet: 632,
+  egitimAracGerec: 622,
+  finansalGiderler: 632,
+  egitimAmacliHizmet: 622,
+
+  temsilAgirlama: 632,
+  ulkeIciUlasim: 622,
+  ulkeDisiUlasim: 632,
+
+  vergilerResmiIslemler: 632,
+  vergiler: 632,
+
+  demirbasYatirim: 622,
+  rutinBakim: 622,
+
+  pazarlamaOrganizasyon: 631,
+  reklamTanitim: 631,
+
+  tahsilEdilemeyenGelirler: 622,
+};
+
+const SERVICE_KEY_TO_CODE = {
+  yemek: 622,
+  uniforma: 621,
+  kitapKirtasiye: 621,
+  ulasimServis: 622,
+};
+
+const DORM_KEY_TO_CODE = {
+  yurtGiderleri: 622,
+  digerYurt: 622,
+};
+
+function normalizeUpperTr(s) {
+  return String(s || "")
+    .toUpperCase()
+    .replace(/İ/g, "İ")
+    .replace(/ı/g, "I");
+}
+
+function classifyDiscountKind(detail) {
+  const k = String(detail?.kind || "").toLowerCase();
+  if (k.includes("burs") || k.includes("scholar")) return "burs";
+  if (k.includes("indirim") || k.includes("discount")) return "indirim";
+
+  const nameU = normalizeUpperTr(detail?.name);
+  if (nameU.includes("BURS")) return "burs";
+  if (nameU.includes("İNDİR") || nameU.includes("INDIR") || nameU.includes("DISCOUNT")) return "indirim";
+  return "indirim";
+}
+
+function splitSalesDiscounts(details, totalDiscounts) {
+  const list = Array.isArray(details) ? details : [];
+  const sumDetails = list.reduce((s, d) => s + safeNum(d?.amount), 0);
+  const target = safeNum(totalDiscounts);
+  const scale = sumDetails > 0 ? target / sumDetails : 0;
+
+  let bursTotal = 0;
+  let indirimTotal = 0;
+  const bursDetails = [];
+  const indirimDetails = [];
+
+  for (const d of list) {
+    if (!d) continue;
+    const scaledAmount = safeNum(d.amount) * (scale > 0 && isFiniteNumber(scale) ? scale : 1);
+    const kind = classifyDiscountKind(d);
+    const row = { name: String(d.name || ""), amount: scaledAmount };
+    if (kind === "burs") {
+      bursTotal += scaledAmount;
+      bursDetails.push(row);
+    } else {
+      indirimTotal += scaledAmount;
+      indirimDetails.push(row);
+    }
+  }
+
+  return {
+    total: target,
+    bursTotal,
+    indirimTotal,
+    bursDetails,
+    indirimDetails,
+  };
+}
+
+function computeExpensesByCode({ isletmeItems, servicesBreakdown, dormBreakdown }) {
+  const byCode = { 621: 0, 622: 0, 631: 0, 632: 0 };
+  const add = (code, amount) => {
+    const c = Number(code);
+    if (![621, 622, 631, 632].includes(c)) return;
+    byCode[c] = safeNum(byCode[c]) + Math.max(0, safeNum(amount));
+  };
+
+  // isletme items: use same key list as totals
+  const it = isletmeItems && typeof isletmeItems === "object" ? isletmeItems : {};
+  for (const k of OPERATING_KEYS) {
+    const v = Math.max(0, safeNum(it?.[k]));
+    const code = ISLETME_KEY_TO_CODE[k] || 632;
+    add(code, v);
+  }
+
+  // service (ogrenimDisi) breakdown
+  for (const row of servicesBreakdown || []) {
+    const key = String(row?.key || "");
+    const total = safeNum(row?.total);
+    const code = SERVICE_KEY_TO_CODE[key] || 622;
+    add(code, total);
+  }
+
+  // dorm breakdown
+  for (const row of dormBreakdown || []) {
+    const key = String(row?.key || "");
+    const total = safeNum(row?.total);
+    const code = DORM_KEY_TO_CODE[key] || 622;
+    add(code, total);
+  }
+
+  return { ...byCode, total: byCode[621] + byCode[622] + byCode[631] + byCode[632] };
+}
+
+function buildGrossSalesBreakdown(incomeBase) {
+  const b = [
+    { label: "Brüt Eğitim Geliri (Tuition)", value: safeNum(incomeBase?.grossTuition) },
+    { label: "Öğrenim Dışı Öğrenci Ücretleri (Brüt)", value: safeNum(incomeBase?.nonEducationFeesTotal) },
+    { label: "Yurt Gelirleri (Brüt)", value: safeNum(incomeBase?.dormitoryRevenuesTotal) },
+    { label: "Diğer Kurum Gelirleri", value: safeNum(incomeBase?.otherInstitutionIncomeTotal) },
+    { label: "Devlet Teşvikleri", value: safeNum(incomeBase?.governmentIncentives) },
+  ];
+  const sum = b.reduce((s, r) => s + safeNum(r.value), 0);
+  const gross = safeNum(incomeBase?.totalGrossIncome);
+  const rem = gross - sum;
+  if (Math.abs(rem) > 0.01) b.push({ label: "Diğer Gelirler", value: rem });
+  return b;
+}
+
+function buildIncomeStatement({ incomeBase, discountsSplit, expensesByCode }) {
+  const grossSales = safeNum(incomeBase?.totalGrossIncome);
+  const totalDisc = safeNum(discountsSplit?.total);
+
+  const netSales = grossSales - totalDisc;
+
+  const c621 = safeNum(expensesByCode?.[621]);
+  const c622 = safeNum(expensesByCode?.[622]);
+  const c631 = safeNum(expensesByCode?.[631]);
+  const c632 = safeNum(expensesByCode?.[632]);
+
+  const costOfSalesTotal = c621 + c622;
+  const grossProfit = netSales - costOfSalesTotal;
+
+  const operatingTotal = c631 + c632;
+  const periodNetProfit = grossProfit - operatingTotal;
+
+  return {
+    grossSales,
+    netSales,
+    salesDiscounts: -totalDisc,
+    bursDiscounts: -safeNum(discountsSplit?.bursTotal),
+    indirimDiscounts: -safeNum(discountsSplit?.indirimTotal),
+
+    costOfSalesGoods: -c621,
+    costOfSalesServices: -c622,
+    costOfSalesTotal: -costOfSalesTotal,
+
+    grossProfit,
+
+    operatingMarketing: -c631,
+    operatingGeneral: -c632,
+    operatingTotal: -operatingTotal,
+
+    periodNetProfit,
+  };
 }
 
 // --- Giderler (Excel "Giderler" – tek yıl hesap fonksiyonu) ---
@@ -393,7 +620,8 @@ function calculateTotalExpensesFromExcelGiderler(giderler) {
   const ogrenimDisi = giderler?.ogrenimDisi?.items || {};
   const yurt = giderler?.yurt?.items || {};
 
-  const operatingKeys = [
+  const operatingKeys = OPERATING_KEYS;
+  /*
     "ulkeTemsilciligi",
     "genelYonetim",
     "kira",
@@ -419,6 +647,7 @@ function calculateTotalExpensesFromExcelGiderler(giderler) {
     "reklamTanitim",
     "tahsilEdilemeyenGelirler",
   ];
+  */
 
   let operatingTotal = 0;
   for (const k of operatingKeys) {
@@ -437,7 +666,7 @@ function calculateTotalExpensesFromExcelGiderler(giderler) {
   let hrTotal = 0;
   for (const k of hrKeys) hrTotal += Math.max(0, safeNum(isletme[k]));
 
-  const serviceKeys = ["yemek", "uniforma", "kitapKirtasiye", "ulasimServis"];
+  const serviceKeys = SERVICE_KEYS;
   let servicesTotal = 0;
   const servicesBreakdown = [];
   for (const k of serviceKeys) {
@@ -453,7 +682,7 @@ function calculateTotalExpensesFromExcelGiderler(giderler) {
     servicesBreakdown.push({ key: k, studentCount: scUsed, unitCost: ucUsed, total });
   }
 
-  const dormKeys = ["yurtGiderleri", "digerYurt"];
+  const dormKeys = DORM_KEYS;
   let dormTotal = 0;
   const dormBreakdown = [];
   for (const k of dormKeys) {
@@ -1028,6 +1257,17 @@ function calculateOneYear(input, normConfig) {
   const servicesBreakdown = Array.isArray(expenses.servicesBreakdown) ? expenses.servicesBreakdown : [];
   const dormBreakdown = Array.isArray(expenses.dormBreakdown) ? expenses.dormBreakdown : [];
 
+  // RAPOR (Gelir Tablosu) – accounting-code split & income statement
+  const discountsSplit = splitSalesDiscounts(disc.details || [], totalDiscounts);
+  const expensesByCode = computeExpensesByCode({
+    isletmeItems: giderlerForCalc?.isletme?.items || {},
+    servicesBreakdown,
+    dormBreakdown,
+  });
+  const grossSalesBreakdown = buildGrossSalesBreakdown(incomeBase);
+  const pnlRaw = buildIncomeStatement({ incomeBase, discountsSplit, expensesByCode });
+
+
   // warnings
   if (utilizationRate != null) {
     if (utilizationRate < 0.6) warnings.push(`Low utilization (${round2(utilizationRate * 100)}%).`);
@@ -1064,7 +1304,16 @@ function calculateOneYear(input, normConfig) {
         amount: round2(d.amount),
         effectiveRatePart: round2(d.effectiveRatePart),
       })),
+
       discountsCapApplied: disc.capApplied,
+      discountsSplit: {
+        total: round2(discountsSplit.total),
+        bursTotal: round2(discountsSplit.bursTotal),
+        indirimTotal: round2(discountsSplit.indirimTotal),
+        bursDetails: (discountsSplit.bursDetails || []).map((d) => ({ name: d.name, amount: round2(d.amount) })),
+        indirimDetails: (discountsSplit.indirimDetails || []).map((d) => ({ name: d.name, amount: round2(d.amount) })),
+      },
+
     },
     expenses: {
       operatingExpensesTotal: round2(safeNum(expenses.operatingTotal)),
@@ -1074,7 +1323,15 @@ function calculateOneYear(input, normConfig) {
       dormitoryCostBreakdown: mapBreakdown(dormBreakdown),
       totalExpenses: round2(totalExpenses),
       hrTotal: round2(safeNum(expenses.hrTotal)),
+
       hrShare: hrShare == null ? null : round2(hrShare),
+      byCode: {
+        621: round2(expensesByCode[621]),
+        622: round2(expensesByCode[622]),
+        631: round2(expensesByCode[631]),
+        632: round2(expensesByCode[632]),
+      },
+
     },
     result: { netResult: round2(netResult) },
     kpis: {
@@ -1084,8 +1341,40 @@ function calculateOneYear(input, normConfig) {
       profitPerStudent: profitPerStudent == null ? null : round2(profitPerStudent),
       profitMargin: profitMargin == null ? null : round2(profitMargin),
       discountToTuitionRatio: discountToTuitionRatio == null ? null : round2(discountToTuitionRatio),
+
       hrShare: hrShare == null ? null : round2(hrShare),
+      byCode: {
+        621: round2(expensesByCode[621]),
+        622: round2(expensesByCode[622]),
+        631: round2(expensesByCode[631]),
+        632: round2(expensesByCode[632]),
+      },
+
     },
+
+    pnl: {
+      grossSales: round2(pnlRaw.grossSales),
+      grossSalesBreakdown: (grossSalesBreakdown || []).map((r) => ({ label: r.label, value: round2(r.value) })),
+
+      salesDiscounts: round2(pnlRaw.salesDiscounts),
+      bursDiscounts: round2(pnlRaw.bursDiscounts),
+      indirimDiscounts: round2(pnlRaw.indirimDiscounts),
+
+      netSales: round2(pnlRaw.netSales),
+
+      costOfSalesGoods: round2(pnlRaw.costOfSalesGoods),
+      costOfSalesServices: round2(pnlRaw.costOfSalesServices),
+      costOfSalesTotal: round2(pnlRaw.costOfSalesTotal),
+
+      grossProfit: round2(pnlRaw.grossProfit),
+
+      operatingMarketing: round2(pnlRaw.operatingMarketing),
+      operatingGeneral: round2(pnlRaw.operatingGeneral),
+      operatingTotal: round2(pnlRaw.operatingTotal),
+
+      periodNetProfit: round2(pnlRaw.periodNetProfit),
+    },
+
     norm: {
       totalTeachingHours: norm.totalTeachingHours == null ? null : round2(norm.totalTeachingHours),
       requiredTeachers: norm.requiredTeachers,
