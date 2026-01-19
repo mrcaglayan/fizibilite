@@ -1246,6 +1246,10 @@ function calculateOneYear(input, normConfig) {
   const discountToTuitionRatio = safeDiv(totalDiscounts, incomeBase.grossTuition);
   const hrShare = safeDiv(expenses.hrTotal, totalExpenses);
 
+  // Tahsil edilemeyen gelirler (bad debt) – KPI as % of Net Ciro
+  const uncollectableRevenueAmount = safeNum(giderlerForCalc?.isletme?.items?.tahsilEdilemeyenGelirler);
+  const uncollectableRevenuePct = safeDiv(uncollectableRevenueAmount, netActivityIncome);
+
   const mapBreakdown = (rows) =>
     (rows || []).map((row) => ({
       ...row,
@@ -1325,6 +1329,7 @@ function calculateOneYear(input, normConfig) {
       hrTotal: round2(safeNum(expenses.hrTotal)),
 
       hrShare: hrShare == null ? null : round2(hrShare),
+      uncollectableRevenuePct: uncollectableRevenuePct == null ? null : round2(uncollectableRevenuePct),
       byCode: {
         621: round2(expensesByCode[621]),
         622: round2(expensesByCode[622]),
@@ -1343,6 +1348,7 @@ function calculateOneYear(input, normConfig) {
       discountToTuitionRatio: discountToTuitionRatio == null ? null : round2(discountToTuitionRatio),
 
       hrShare: hrShare == null ? null : round2(hrShare),
+      uncollectableRevenuePct: uncollectableRevenuePct == null ? null : round2(uncollectableRevenuePct),
       byCode: {
         621: round2(expensesByCode[621]),
         622: round2(expensesByCode[622]),

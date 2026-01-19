@@ -1,7 +1,7 @@
 //frontend/src/components/TemelBilgilerEditor.jsx
 
 import React, { useMemo } from "react";
-import NumberInput  from "./NumberInput";
+import NumberInput from "./NumberInput";
 import {
   formatKademeLabel,
   getKademeDefinitions,
@@ -185,7 +185,6 @@ export default function TemelBilgilerEditor({
     onDirty?.(makePath(path), v);
   };
 
-  console.log("currencyCode in TemelBilgilerEditor:", currencyCode);
 
   const updateKademe = (key, patch) => {
     const nextConfig = normalizeKademeConfig(tb.kademeler);
@@ -449,7 +448,7 @@ export default function TemelBilgilerEditor({
             <div className="tb-field tb-col-3 tb-mini">
               <label>Bir Ders Süresi (dk)</label>
               <NumberInput
-               
+
                 className={inputClass("input tb-input tb-num", ["okulEgitimBilgileri", "birDersSuresiDakika"])}
                 value={safeNum(get(tb, ["okulEgitimBilgileri", "birDersSuresiDakika"], 0))}
                 onChange={(value) =>
@@ -460,7 +459,7 @@ export default function TemelBilgilerEditor({
             <div className="tb-field tb-col-3 tb-mini">
               <label>Günlük Ders Saati</label>
               <NumberInput
-               
+
                 className={inputClass("input tb-input tb-num", ["okulEgitimBilgileri", "gunlukDersSaati"])}
                 value={safeNum(get(tb, ["okulEgitimBilgileri", "gunlukDersSaati"], 0))}
                 onChange={(value) => update(["okulEgitimBilgileri", "gunlukDersSaati"], safeNum(value))}
@@ -469,7 +468,7 @@ export default function TemelBilgilerEditor({
             <div className="tb-field tb-col-3 tb-mini">
               <label>Haftalık Ders (Bir Sınıf)</label>
               <NumberInput
-               
+
                 className={inputClass("input tb-input tb-num", ["okulEgitimBilgileri", "haftalikDersSaatiToplam"])}
                 value={safeNum(get(tb, ["okulEgitimBilgileri", "haftalikDersSaatiToplam"], 0))}
                 onChange={(value) =>
@@ -480,7 +479,7 @@ export default function TemelBilgilerEditor({
             <div className="tb-field tb-col-3 tb-mini">
               <label>Öğretmen Haftalık Ortalama</label>
               <NumberInput
-               
+
                 className={inputClass("input tb-input tb-num", ["okulEgitimBilgileri", "ogretmenHaftalikDersOrt"])}
                 value={safeNum(get(tb, ["okulEgitimBilgileri", "ogretmenHaftalikDersOrt"], 0))}
                 onChange={(value) =>
@@ -630,7 +629,7 @@ export default function TemelBilgilerEditor({
                       <td style={{ fontWeight: 700 }}>{kademeLabels[r.key] || r.label}</td>
                       <td className="num">
                         <NumberInput
-                         
+
                           className={inputClass("input tb-input tb-num", ["ucretArtisOranlari", r.key])}
                           value={fracToPercent(frac)}
                           onChange={(value) =>
@@ -661,7 +660,6 @@ export default function TemelBilgilerEditor({
               </thead>
               <tbody>
                 {feeParamRows.map((row) => {
-                  console.log(feeParamRows);
                   const rawValue = get(tb, row.key, 0);
                   const isPercent = row.type === "percent";
                   const displayValue = isPercent ? fracToPercent(rawValue) : safeNum(rawValue);
@@ -673,7 +671,7 @@ export default function TemelBilgilerEditor({
                         {isPercent ? (
                           <div className="tb-affix">
                             <NumberInput
-                             
+
                               className={inputClass("input tb-input tb-num", row.key)}
                               value={displayValue}
                               onChange={(value) => update(row.key, percentToFrac(value))}
@@ -682,9 +680,9 @@ export default function TemelBilgilerEditor({
                           </div>
                         ) : (
                           <div className="tb-affix">
-                            
+
                             <NumberInput
-                             
+
                               className={inputClass("input tb-input tb-num", row.key)}
                               value={displayValue.toFixed(0)}
                               onChange={(value) => update(row.key, safeNum(value))}
@@ -721,7 +719,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>Türk Personel Yönetici ve Eğitimci Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "turkPersonelYoneticiEgitimci"])}
                       value={safeNum(get(tb, ["ikMevcut", "turkPersonelYoneticiEgitimci"], 0))}
                       onChange={(value) => update(["ikMevcut", "turkPersonelYoneticiEgitimci"], safeNum(value))}
@@ -735,7 +733,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>Türk Personel Temsilcilik Personeli Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "turkPersonelTemsilcilik"])}
                       value={safeNum(get(tb, ["ikMevcut", "turkPersonelTemsilcilik"], 0))}
                       onChange={(value) => update(["ikMevcut", "turkPersonelTemsilcilik"], safeNum(value))}
@@ -749,7 +747,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>Yerel Kadrolu Eğitimci Personel Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "yerelKadroluEgitimci"])}
                       value={safeNum(get(tb, ["ikMevcut", "yerelKadroluEgitimci"], 0))}
                       onChange={(value) => update(["ikMevcut", "yerelKadroluEgitimci"], safeNum(value))}
@@ -763,7 +761,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>Yerel Ücretli (Vakater) Eğitimci Personel Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "yerelUcretliVakaterEgitimci"])}
                       value={safeNum(get(tb, ["ikMevcut", "yerelUcretliVakaterEgitimci"], 0))}
                       onChange={(value) => update(["ikMevcut", "yerelUcretliVakaterEgitimci"], safeNum(value))}
@@ -777,7 +775,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>Yerel Destek Personel Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "yerelDestek"])}
                       value={safeNum(get(tb, ["ikMevcut", "yerelDestek"], 0))}
                       onChange={(value) => update(["ikMevcut", "yerelDestek"], safeNum(value))}
@@ -791,7 +789,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>Yerel Personel Temsilcilik Personeli Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "yerelTemsilcilik"])}
                       value={safeNum(get(tb, ["ikMevcut", "yerelTemsilcilik"], 0))}
                       onChange={(value) => update(["ikMevcut", "yerelTemsilcilik"], safeNum(value))}
@@ -805,7 +803,7 @@ export default function TemelBilgilerEditor({
                   <td style={{ fontWeight: 700 }}>International Personel Sayısı</td>
                   <td className="num">
                     <NumberInput
-                     
+
                       className={inputClass("input tb-input tb-num", ["ikMevcut", "international"])}
                       value={safeNum(get(tb, ["ikMevcut", "international"], 0))}
                       onChange={(value) => update(["ikMevcut", "international"], safeNum(value))}
@@ -846,7 +844,7 @@ export default function TemelBilgilerEditor({
                         <td style={{ fontWeight: 700 }}>{r.label}</td>
                         <td className="num">
                           <NumberInput
-                           
+
                             className={inputClass("input tb-input tb-num", ["bursIndirimOgrenciSayilari", r.key])}
                             value={safeNum(get(tb, ["bursIndirimOgrenciSayilari", r.key], 0))}
                             onChange={(value) =>
@@ -886,7 +884,7 @@ export default function TemelBilgilerEditor({
                       <td style={{ fontWeight: 700 }}>{kademeLabels[r.key] || r.label}</td>
                       <td className="num">
                         <NumberInput
-                         
+
                           className={inputClass("input tb-input tb-num", ["rakipAnalizi", r.key, "a"])}
                           value={safeNum(get(tb, ["rakipAnalizi", r.key, "a"], 0))}
                           onChange={(value) => update(["rakipAnalizi", r.key, "a"], safeNum(value))}
@@ -894,7 +892,7 @@ export default function TemelBilgilerEditor({
                       </td>
                       <td className="num">
                         <NumberInput
-                         
+
                           className={inputClass("input tb-input tb-num", ["rakipAnalizi", r.key, "b"])}
                           value={safeNum(get(tb, ["rakipAnalizi", r.key, "b"], 0))}
                           onChange={(value) => update(["rakipAnalizi", r.key, "b"], safeNum(value))}
@@ -902,7 +900,7 @@ export default function TemelBilgilerEditor({
                       </td>
                       <td className="num">
                         <NumberInput
-                         
+
                           className={inputClass("input tb-input tb-num", ["rakipAnalizi", r.key, "c"])}
                           value={safeNum(get(tb, ["rakipAnalizi", r.key, "c"], 0))}
                           onChange={(value) => update(["rakipAnalizi", r.key, "c"], safeNum(value))}
@@ -942,7 +940,7 @@ export default function TemelBilgilerEditor({
                     </td>
                     <td className="num">
                       <NumberInput
-                       
+
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "ogrenciSayisi"])}
                         value={safeNum(get(tb, ["performans", "gerceklesen", "ogrenciSayisi"], 0))}
                         onChange={(value) => update(["performans", "gerceklesen", "ogrenciSayisi"], safeNum(value))}
@@ -960,7 +958,7 @@ export default function TemelBilgilerEditor({
                     </td>
                     <td className="num">
                       <NumberInput
-                       
+
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "gelirler"])}
                         value={safeNum(get(tb, ["performans", "gerceklesen", "gelirler"], 0))}
                         onChange={(value) => update(["performans", "gerceklesen", "gelirler"], safeNum(value))}
@@ -978,7 +976,7 @@ export default function TemelBilgilerEditor({
                     </td>
                     <td className="num">
                       <NumberInput
-                       
+
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "giderler"])}
                         value={safeNum(get(tb, ["performans", "gerceklesen", "giderler"], 0))}
                         onChange={(value) => update(["performans", "gerceklesen", "giderler"], safeNum(value))}
@@ -996,7 +994,7 @@ export default function TemelBilgilerEditor({
                     </td>
                     <td className="num">
                       <NumberInput
-                       
+
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "karZararOrani"])}
                         value={safeNum(get(tb, ["performans", "gerceklesen", "karZararOrani"], 0))}
                         onChange={(value) => update(["performans", "gerceklesen", "karZararOrani"], safeNum(value))}
@@ -1014,7 +1012,7 @@ export default function TemelBilgilerEditor({
                     </td>
                     <td className="num">
                       <NumberInput
-                       
+
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "bursVeIndirimler"])}
                         value={safeNum(get(tb, ["performans", "gerceklesen", "bursVeIndirimler"], 0))}
                         onChange={(value) =>

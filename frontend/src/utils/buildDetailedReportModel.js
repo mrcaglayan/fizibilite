@@ -297,12 +297,14 @@ export function buildDetailedReportModel({
   const headerLabel = headerParts.join(" > ");
 
   const temel = inputs?.temelBilgiler || {};
+  console.log("temel", temel);
   const kademeConfig = normalizeKademeConfig(temel?.kademeler);
   const okulEgitim = temel?.okulEgitimBilgileri || {};
   const ucretArtisOranlari = temel?.ucretArtisOranlari || {};
   const ikMevcut = temel?.ikMevcut || {};
   const performans = temel?.performans?.gerceklesen || {};
   const rakipAnalizi = temel?.rakipAnalizi || {};
+  console.log("rakipAnalizi", rakipAnalizi);
   const inflation = temel?.inflation || {};
   const bursIndirimCounts = temel?.bursIndirimOgrenciSayilari || {};
 
@@ -648,6 +650,7 @@ export function buildDetailedReportModel({
     operatingTotalUsd - hrTotalUsd - badDebtAmount
   );
 
+
   const hrRows = [
     {
       item: "Turk Personel Yonetici ve Egitimci Sayisi",
@@ -748,7 +751,6 @@ export function buildDetailedReportModel({
 
 
 
-  console.log("expenseTotal", expenseTotal)
 
   const expenseRows = [
     {
@@ -945,7 +947,10 @@ export function buildDetailedReportModel({
     return rates.length ? rates.reduce((sum, v) => sum + v, 0) / rates.length : null;
   })();
   const competitorHasData = Object.values(rakipAnalizi || {}).some((row) =>
-    ["a", "b", "c"].some((key) => numOrNull(row?.[key]) != null)
+    ["a", "b", "c"].some((key) => {
+      const v = Number(row?.[key]);
+      return Number.isFinite(v) && v > 0;
+    })
   );
   const baseYear = parseAcademicStartYear(scenario?.academic_year);
   const inflationYears = (() => {
@@ -997,8 +1002,8 @@ export function buildDetailedReportModel({
     {
       no: "5",
       desc: "Tahsil Edilemeyecek Gelirler (Onceki Donemin Tahsil Edilemeyen yuzdelik rakami)",
-      value: uncollectableRevenuePct,
-      valueType: "percent",
+      value: badDebtAmount,
+      valueType: "currency",
     },
     {
       no: "6",

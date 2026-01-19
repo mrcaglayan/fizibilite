@@ -583,6 +583,10 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
           <div className="label">Gider / Öğrenci</div>
           <div className="value">{fmtMoney(k.costPerStudent)}</div>
         </div>
+        <div className="stat">
+          <div className="label">Tahsil Edilemeyen Gelirler %</div>
+          <div className="value">{fmtPct(k.uncollectableRevenuePct)}</div>
+        </div>
       </div>
 
       {(allErrors.length > 0 || allWarnings.length > 0) && (

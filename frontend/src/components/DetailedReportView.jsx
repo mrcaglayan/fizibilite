@@ -1208,7 +1208,6 @@ export default function DetailedReportView(props) {
     return { rows, total: totalAmount };
   }, [detailedExpenses, detailedExpenseTotal, fmtMoneyDisplay]);
 
-  console.log(model);
 
   const discountAnalysis = model.discountAnalysis || {};
 
