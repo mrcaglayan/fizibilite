@@ -1467,12 +1467,19 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
 
     // --- Sheet #1: "RAPOR" ---
-    const excelLogoPath = path.join(__dirname, "..", "media", "excelLogo.png");
-    const maarifLogoPath = path.join(__dirname, "..", "media", "maarifLogo.png");
-    const base64 = fs.readFileSync(excelLogoPath).toString("base64");
-    const base642 = fs.readFileSync(maarifLogoPath).toString("base64");
-    const SCHOOL_LOGO_PLACEHOLDER_BASE64 = `data:image/png;base64,${base64}`;
-    const SCHOOL_LOGO_PLACEHOLDER_BASE642 = `data:image/png;base64,${base642}`;
+    const resolveMediaPath = (filename) => {
+      const candidates = [
+        path.join(__dirname, "..", "media", filename),
+        path.join(__dirname, "..", "..", "media", filename),
+        path.join(process.cwd(), "src", "media", filename),
+        path.join(process.cwd(), "backend", "src", "media", filename),
+      ];
+      return candidates.find((p) => fs.existsSync(p)) || null;
+    };
+    const excelLogoPath = resolveMediaPath("excelLogo.png");
+    const maarifLogoPath = resolveMediaPath("maarifLogo.png");
+    const excelLogoBase64 = excelLogoPath ? fs.readFileSync(excelLogoPath).toString("base64") : null;
+    const maarifLogoBase64 = maarifLogoPath ? fs.readFileSync(maarifLogoPath).toString("base64") : null;
     const wb = new ExcelJS.Workbook();
 
     const addAoaSheet = (workbook, name, aoa) => {
@@ -1517,25 +1524,22 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     raporWs.views = [{ showGridLines: false }];
     if (excelLogoBase64) {
       const imageId = wb.addImage({
-        base64: SCHOOL_LOGO_PLACEHOLDER_BASE64,
+        base64: `data:image/png;base64,${excelLogoBase64}`,
         extension: "png",
       });
       raporWs.addImage(imageId, {
         tl: { col: 1, row: 0.2 },
         ext: { width: 566, height: 374 },
       });
+    }
+    if (maarifLogoBase64) {
       const imageId2 = wb.addImage({
-        base64: SCHOOL_LOGO_PLACEHOLDER_BASE642,
+        base64: `data:image/png;base64,${maarifLogoBase64}`,
         extension: "png",
       });
       raporWs.addImage(imageId2, {
         tl: { col: 10, row: 4 },
         ext: { width: 185, height: 191 },
-      });
-
-      raporWs.addImage(imageId, {
-        tl: { col: 1, row: 0.2 },
-        ext: { width: 566, height: 374 },
       });
     }
 
