@@ -432,8 +432,13 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta } = {}) {
     pushTitle("D. GERCEKLESEN VE GERCEKLESMESI PLANLANAN /PERFORMANS");
     const perfRows = Array.isArray(model.performance) ? model.performance : [];
     const yearRaw = model?.academicStartYear ?? model?.academicYear ?? model?.academic_year;
-    const yearNum = Number(yearRaw);
-    const periodLabel = Number.isFinite(yearNum) ? `${yearNum}-${yearNum + 1}` : safeStr(yearRaw || "");
+    const yearText = safeStr(yearRaw || "");
+    const yearMatch = yearText.match(/(\d{4})/);
+    const currentStartYear = yearMatch ? Number(yearMatch[1]) : Number(yearRaw);
+    const prevStartYear = Number.isFinite(currentStartYear) ? currentStartYear - 1 : null;
+    const periodLabel = Number.isFinite(prevStartYear)
+        ? `${prevStartYear}-${prevStartYear + 1}`
+        : yearText;
     const periodPrefix = periodLabel ? `${periodLabel} Donemi` : "Donem";
     const perfHeaderRow = Array(22).fill(null);
     perfHeaderRow[6] = `${periodPrefix} Planlanan`;
