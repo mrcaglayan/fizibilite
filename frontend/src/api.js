@@ -90,6 +90,39 @@ async function downloadXlsx(schoolId, scenarioId, reportCurrency = "usd") {
   window.URL.revokeObjectURL(url);
 }
 
+async function downloadPdf(schoolId, scenarioId, reportCurrency = "usd") {
+  const qs = toQuery({ reportCurrency, format: "pdf" });
+  const res = await fetch(
+    `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx${qs}`,
+    { method: "GET", headers: getAuthHeaders() }
+  );
+
+  if (!res.ok) {
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await res.json() : await res.text();
+    const msg = data?.error || data || "Download failed";
+    throw new Error(msg);
+  }
+
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") || "";
+  const match = /filename="([^"]+)"/.exec(cd);
+  const contentType = res.headers.get("content-type") || "";
+  let filename = match ? match[1] : `scenario-${scenarioId}.pdf`;
+  if (contentType.includes("application/pdf") && !filename.toLowerCase().endsWith(".pdf")) {
+    filename = `${filename.replace(/\.[^.]+$/, "") || `scenario-${scenarioId}`}.pdf`;
+  }
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 export const api = {
   register: (payload) => request("/auth/register", { method: "POST", body: payload }),
   login: (payload) => request("/auth/login", { method: "POST", body: payload }),
@@ -149,6 +182,7 @@ export const api = {
   adminGetRollup: (params = {}) => request(`/admin/reports/rollup${toQuery(params)}`),
 
   downloadXlsx,
+  downloadPdf,
   exportXlsxUrl: (schoolId, scenarioId, reportCurrency = "usd") =>
     `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx${toQuery({ reportCurrency })}`,
   adminExportRollupXlsxUrl: (academicYear) =>

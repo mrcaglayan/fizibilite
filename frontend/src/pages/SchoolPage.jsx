@@ -3,8 +3,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
-import html2canvas from "html2canvas";
-import { jsPDF } from "jspdf";
 import { FaCheck, FaCopy, FaEdit, FaPaperPlane, FaTrash } from "react-icons/fa";
 import { api } from "../api";
 import TabBadge from "../components/ui/TabBadge";
@@ -1468,95 +1466,12 @@ export default function SchoolPage() {
     }
   }
 
-  const sanitizeFileName = (value) => {
-    const raw = String(value || "").trim();
-    if (!raw) return "";
-    let normalized = raw;
-    if (typeof normalized.normalize === "function") {
-      normalized = normalized.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-    }
-    return normalized
-      .replace(/[^a-zA-Z0-9-_ ]+/g, " ")
-      .trim()
-      .replace(/\s+/g, "_");
-  };
-
-  const buildReportFileName = () => {
-    const parts = [
-      sanitizeFileName(school?.name),
-      sanitizeFileName(selectedScenario?.name),
-      "Rapor",
-    ].filter(Boolean);
-    const base = parts.join("_") || "Rapor";
-    return `${base}.pdf`;
-  };
-
   async function handleExportPdf() {
-    if (!report) {
-      setErr("Once hesaplama yapin.");
-      return;
-    }
-    const target = reportExportRef.current;
-    if (!target) {
-      setErr("Rapor gorunumu hazir degil.");
-      return;
-    }
-
+    if (!selectedScenarioId) return;
     setErr("");
     setExportingPdf(true);
     try {
-      const canvas = await html2canvas(target, {
-        scale: 2,
-        backgroundColor: "#ffffff",
-        useCORS: true,
-        scrollY: -window.scrollY,
-        onclone: (cloneDoc) => {
-          const root = cloneDoc.querySelector('[data-report-export="1"]');
-          if (!root) return;
-          const nodes = root.querySelectorAll("*");
-          nodes.forEach((node) => {
-            const style = cloneDoc.defaultView?.getComputedStyle(node);
-            if (!style) return;
-            const overflow = style.overflow;
-            const overflowX = style.overflowX;
-            const overflowY = style.overflowY;
-            const shouldReset =
-              overflow === "auto" ||
-              overflow === "scroll" ||
-              overflowX === "auto" ||
-              overflowX === "scroll" ||
-              overflowY === "auto" ||
-              overflowY === "scroll";
-            if (!shouldReset) return;
-            node.style.overflow = "visible";
-            node.style.overflowX = "visible";
-            node.style.overflowY = "visible";
-            node.style.maxHeight = "none";
-          });
-        },
-      });
-
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = pdfWidth;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pdfHeight;
-
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pdfHeight;
-      }
-
-      pdf.save(buildReportFileName());
+      await api.downloadPdf(schoolId, selectedScenarioId, reportCurrency);
     } catch (e) {
       setErr(e.message || "PDF export failed");
     } finally {

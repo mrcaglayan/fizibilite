@@ -7,12 +7,63 @@ const { calculateSchoolFeasibility } = require("../engine/feasibilityEngine");
 const { computeScenarioProgress } = require("../utils/scenarioProgress");
 const { getProgressConfig } = require("../utils/progressConfig");
 const { normalizeProgramType } = require("../utils/programType");
-const xlsx = require("xlsx");
+const { getPrevScenario } = require("../utils/report/getPrevScenario");
+const { buildDetailedReportModel } = require("../utils/report/buildDetailedReportModel");
+const { buildTemelBilgilerModel } = require("../utils/report/buildTemelBilgilerModel");
+const { buildKapasiteModel } = require("../utils/report/buildKapasiteModel");
+const { buildHrModel } = require("../utils/report/buildHrModel");
+const { buildGelirlerModel } = require("../utils/report/buildGelirlerModel");
+const { buildGiderlerModel } = require("../utils/report/buildGiderlerModel");
+const { buildNormModel } = require("../utils/report/buildNormModel");
+const { buildMaliTablolarModel } = require("../utils/report/buildMaliTablolarModel");
+const { buildRaporAoa } = require("../utils/excel/raporAoa");
+const { buildTemelBilgilerAoa } = require("../utils/excel/temelBilgilerAoa");
+const { buildKapasiteAoa } = require("../utils/excel/kapasiteAoa");
+const { buildHrAoa } = require("../utils/excel/hrAoa");
+const { buildGelirlerAoa } = require("../utils/excel/gelirlerAoa");
+const { buildGiderlerAoa } = require("../utils/excel/giderlerAoa");
+const { buildNormAoa } = require("../utils/excel/normAoa");
+const { buildMaliTablolarAoa } = require("../utils/excel/maliTablolarAoa");
+const fs = require("fs");
+const path = require("path");
+const ExcelJS = require("exceljs");
 const crypto = require("crypto");
+const os = require("os");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 
 const router = express.Router();
 router.use(requireAuth);
 router.use(requireAssignedCountry);
+
+const execFileAsync = promisify(execFile);
+
+async function convertXlsxBufferToPdf(buffer, baseName = "rapor") {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "rapor-"));
+  const safeBase = baseName.replace(/[^a-zA-Z0-9_-]+/g, "_") || "rapor";
+  const xlsxPath = path.join(tmpDir, `${safeBase}.xlsx`);
+  const pdfPath = path.join(tmpDir, `${safeBase}.pdf`);
+  const candidates = [process.env.SOFFICE_PATH, "soffice", "libreoffice"].filter(Boolean);
+  let lastError = null;
+
+  try {
+    await fs.promises.writeFile(xlsxPath, buffer);
+    for (const cmd of candidates) {
+      try {
+        await execFileAsync(cmd, ["--headless", "--convert-to", "pdf", "--outdir", tmpDir, xlsxPath], {
+          timeout: 60000,
+        });
+        const pdfBuf = await fs.promises.readFile(pdfPath);
+        return pdfBuf;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError || new Error("PDF conversion failed");
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  }
+}
 
 function normalizeKademeConfig(input) {
   const base = {
@@ -103,6 +154,23 @@ function normalizeAcademicYear(value) {
   const err = new Error("Invalid academicYear format. Use YYYY or YYYY-YYYY (end must be start+1).");
   err.status = 400;
   throw err;
+}
+
+function academicYearWithOffset(academicYear, offset) {
+  const raw = String(academicYear || "").trim();
+  const off = Number(offset) || 0;
+  const range = raw.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (Number.isFinite(start) && Number.isFinite(end)) return `${start + off}-${end + off}`;
+  }
+  const single = raw.match(/^(\d{4})$/);
+  if (single) {
+    const start = Number(single[1]);
+    if (Number.isFinite(start)) return `${start + off}-${start + off + 1}`;
+  }
+  return raw || `Y${off + 1}`;
 }
 
 function parseInputsJson(inputsRaw) {
@@ -275,17 +343,21 @@ async function upsertScenarioKpis(pool, scenarioId, academicYear, results) {
 
 async function assertSchoolInUserCountry(pool, schoolId, countryId) {
   const [[s]] = await pool.query(
-    "SELECT id, name, status FROM schools WHERE id=:id AND country_id=:country_id",
+    `SELECT s.id, s.name, s.status,
+            c.name AS country_name, c.code AS country_code
+     FROM schools s
+     JOIN countries c ON c.id = s.country_id
+     WHERE s.id = :id AND s.country_id = :country_id`,
     { id: schoolId, country_id: countryId }
   );
   return s || null;
 }
 
 async function assertScenarioInSchool(pool, scenarioId, schoolId) {
-    const [[s]] = await pool.query(
-      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id AND school_id=:school_id",
-      { id: scenarioId, school_id: schoolId }
-    );
+  const [[s]] = await pool.query(
+    "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id AND school_id=:school_id",
+    { id: scenarioId, school_id: schoolId }
+  );
   return s || null;
 }
 
@@ -366,15 +438,15 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
 router.post("/schools/:schoolId/scenarios", async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
-  const {
-    name,
-    academicYear,
-    kademeConfig,
-    inputCurrency,
-    localCurrencyCode,
-    fxUsdToLocal,
-    programType: requestProgramType,
-  } = req.body || {};
+    const {
+      name,
+      academicYear,
+      kademeConfig,
+      inputCurrency,
+      localCurrencyCode,
+      fxUsdToLocal,
+      programType: requestProgramType,
+    } = req.body || {};
     if (!name || !academicYear) return res.status(400).json({ error: "name and academicYear required" });
     const academicYearNorm = normalizeAcademicYear(academicYear);
     const inputCurrencyValue = String(inputCurrency || "USD").trim().toUpperCase();
@@ -457,9 +529,9 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
 
     const defaultInputs = {
       kapasite: {
-  currentStudents: 0,
-  years: { y1: 0, y2: 0, y3: 0 },
-},
+        currentStudents: 0,
+        years: { y1: 0, y2: 0, y3: 0 },
+      },
       grades: cloneGrades(),
       gradesYears: {
         y1: cloneGrades(),
@@ -753,6 +825,28 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
     const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
+    // Load previous academic year scenario (same school) for performance comparisons.
+    // (No Excel output yet; values are wired for later steps.)
+    const prevData = await getPrevScenario({
+      pool,
+      schoolId,
+      academicYear: scenario.academic_year,
+    });
+
+    let prevReport = null;
+    let prevScenarioMeta = null;
+    let prevInputsJson = null;
+
+    if (prevData?.scenarioRow) {
+      prevInputsJson = prevData.inputsJson;
+      prevScenarioMeta = {
+        input_currency: prevData.scenarioRow.input_currency,
+        fx_usd_to_local: prevData.scenarioRow.fx_usd_to_local,
+        local_currency_code: prevData.scenarioRow.local_currency_code,
+        program_type: prevData.scenarioRow.program_type,
+      };
+    }
+
     if (scenario.status === "submitted" || scenario.status === "approved") {
       return res.status(409).json({ error: "Scenario locked. Awaiting admin review." });
     }
@@ -994,7 +1088,6 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/calculate", async (req, re
     const normConfig = normalizeNormConfigRow(normRow);
     const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
     const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
-
     // upsert cache
     await pool.query(
       "INSERT INTO scenario_results (scenario_id, results_json, calculated_by) VALUES (:id,:json,:u) ON DUPLICATE KEY UPDATE results_json=VALUES(results_json), calculated_by=VALUES(calculated_by), calculated_at=CURRENT_TIMESTAMP",
@@ -1156,7 +1249,6 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
       const normConfig = normalizeNormConfigRow(normRow);
       const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
       const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
-
       const serialized = JSON.stringify(results);
       resultsPayload = results;
       resultsString = serialized;
@@ -1184,11 +1276,12 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
 
 /**
  * GET /schools/:schoolId/scenarios/:scenarioId/export-xlsx
- * Basic Excel export (reference format). You can expand this to match your existing template.
+ * Excel export (reference format). Add ?format=pdf for PDF output of the RAPOR sheet.
  */
 /**
  * GET /schools/:schoolId/scenarios/:scenarioId/export-xlsx
  * Excel export (reference format, now 1/2/3-year columns for Gelirler & Giderler).
+ * 2. ve 3. yŽñl, TEMEL BŽøLGŽøLER tabŽñndaki tahmini enflasyon oranlarŽñna gAre tA¬retilir.
  * 2. ve 3. yıl, TEMEL BİLGİLER tabındaki tahmini enflasyon oranlarına göre türetilir.
  */
 router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, res) => {
@@ -1203,9 +1296,26 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
+    // --- previous academic year scenario (same school) ---
+    const academicYear = String(scenario.academic_year || "").trim();
+    const prevScenarioBundle = await getPrevScenario({ pool, schoolId, academicYear });
+    const prevCurrencyMeta = prevScenarioBundle?.scenarioRow
+      ? {
+        input_currency: prevScenarioBundle.scenarioRow.input_currency,
+        fx_usd_to_local: prevScenarioBundle.scenarioRow.fx_usd_to_local,
+        local_currency_code: prevScenarioBundle.scenarioRow.local_currency_code,
+        program_type: prevScenarioBundle.scenarioRow.program_type,
+      }
+      : null;
+
     const reportCurrency = String(req.query?.reportCurrency || "usd").toLowerCase();
     if (!["usd", "local"].includes(reportCurrency)) {
       return res.status(400).json({ error: "Invalid reportCurrency" });
+    }
+
+    const exportFormat = String(req.query?.format || "xlsx").toLowerCase();
+    if (!["xlsx", "pdf"].includes(exportFormat)) {
+      return res.status(400).json({ error: "Invalid format. Use xlsx or pdf." });
     }
 
     const localCode = scenario.local_currency_code;
@@ -1230,11 +1340,57 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     );
 
     const inputs = parseInputsJson(inputsRow?.inputs_json);
+    const programType = normalizeProgramType(scenario.program_type || inputs?.temelBilgiler?.programType);
+
     const normConfig = normalizeNormConfigRow(normRow);
     const inputsForCalc = normalizeInputsToUsd(inputsRow?.inputs_json, scenario);
     const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
 
+    // --- prevReport (previous year feasibility) ---
+    let prevReport = null;
+    if (prevScenarioBundle?.scenarioRow && prevScenarioBundle?.inputsJson) {
+      try {
+        const prevInputsForCalc = normalizeInputsToUsd(prevScenarioBundle.inputsJson, prevScenarioBundle.scenarioRow);
+        prevReport = calculateSchoolFeasibility(prevInputsForCalc, normConfig);
+      } catch (err) {
+        console.warn("[export-xlsx] prevReport compute failed", err);
+      }
+    }
+
+    // --- Detaylı Rapor model builder (Sheet #1: "Rapor") ---
+    const currencyMeta = {
+      input_currency: scenario?.input_currency,
+      fx_usd_to_local: scenario?.fx_usd_to_local,
+      local_currency_code: scenario?.local_currency_code,
+      program_type: scenario?.program_type,
+    };
+
+    let model = null;
+    try {
+      model = buildDetailedReportModel({
+        school,
+        scenario,
+        inputs,
+        report: results,
+        prevReport,
+        prevCurrencyMeta,
+        reportCurrency,
+        currencyMeta,
+        programType,
+        mode: "detailed",
+      });
+    } catch (err) {
+      console.error("[RaporModel] buildDetailedReportModel failed", err);
+    }
+
+
+
+
     const years = results?.years || { y1: results, y2: null, y3: null };
+
+    const y1 = years?.y1 || null;
+    const y2 = years?.y2 || null;
+    const y3 = years?.y3 || null;
 
     const infl = (results?.temelBilgiler && results.temelBilgiler.inflation) || (inputs?.temelBilgiler && inputs.temelBilgiler.inflation) || {};
     const infl2 = Number(infl.y2 || 0);
@@ -1308,153 +1464,1471 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       y3: salaryMapForYear(ikYears?.y3 || {}),
     };
 
-    const wb = xlsx.utils.book_new();
 
-    // TEMEL BİLGİLER
-    const temel = [
-      ["TEMEL BİLGİLER"],
-      ["2. YIL TAHMİNİ ENFLASYON ORANI", infl2],
-      ["3. YIL TAHMİNİ ENFLASYON ORANI", infl3],
-      ["Y2 FAKTÖR", factors.y2],
-      ["Y3 FAKTÖR", factors.y3],
-    ];
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(temel), "Temel Bilgiler");
 
-    // GELİRLER (3Y)
-    const g = inputs.gelirler || {};
-    const tuitionRows = Array.isArray(g?.tuition?.rows) ? g.tuition.rows : [];
-    const nonEdRows = Array.isArray(g?.nonEducationFees?.rows) ? g.nonEducationFees.rows : [];
-    const dormRows = Array.isArray(g?.dormitory?.rows) ? g.dormitory.rows : [];
-    const otherRows = Array.isArray(g?.otherInstitutionIncome?.rows) ? g.otherInstitutionIncome.rows : [];
+    // --- Sheet #1: "RAPOR" ---
+    const base64 = fs.readFileSync("./src/media/excelLogo.png").toString("base64");
+    const base642 = fs.readFileSync("./src/media/maarifLogo.png").toString("base64");
+    const SCHOOL_LOGO_PLACEHOLDER_BASE64 = `data:image/png;base64,${base64}`;
+    const SCHOOL_LOGO_PLACEHOLDER_BASE642 = `data:image/png;base64,${base642}`;
+    const wb = new ExcelJS.Workbook();
 
-    const gelirlerSheet = [];
-    const addPerStudentSection = (title, rows, legacyUnitFee, fallbackLabel) => {
-      gelirlerSheet.push([title]);
-      gelirlerSheet.push([
-        "Gelirler (USD)",
-        "Öğrenci Sayısı (Y1)",
-        "Birim Ücret (Y1)",
-        "Toplam (Y1)",
-        "Öğrenci Sayısı (Y2)",
-        "Birim Ücret (Y2)",
-        "Toplam (Y2)",
-        "Öğrenci Sayısı (Y3)",
-        "Birim Ücret (Y3)",
-        "Toplam (Y3)",
-      ]);
 
-      let t1 = 0,
-        t2 = 0,
-        t3 = 0;
+    const addAoaSheet = (workbook, name, aoa) => {
+      const ws = workbook.addWorksheet(name);
+      if (!Array.isArray(aoa)) return ws;
+      aoa.forEach((row) => ws.addRow(Array.isArray(row) ? row : [row]));
+      return ws;
+    };
+    const raporAoa = buildRaporAoa({ model, reportCurrency, currencyMeta });
+    const raporWs = addAoaSheet(wb, "RAPOR", raporAoa);
+    // ✅ Set column widths (A and B for example)
+    raporWs.getColumn(1).width = 16.15; // A
+    raporWs.getColumn(2).width = 3.55;  // B
+    raporWs.getColumn(3).width = 1.43; // C
+    raporWs.getColumn(4).width = 1.86;  // D
+    raporWs.getColumn(5).width = 1.86; // E
+    raporWs.getColumn(6).width = 2.14;  // F
+    raporWs.getColumn(7).width = 2.14; // G
+    raporWs.getColumn(8).width = 2.14;  // H
+    raporWs.getColumn(9).width = 7.29; // I
+    raporWs.getColumn(10).width = 4.86; // J
+    raporWs.getColumn(11).width = 5.43; // K
+    raporWs.getColumn(12).width = 5.43; // L
+    raporWs.getColumn(13).width = 6.29; // M
+    raporWs.getColumn(14).width = 3.86; // N
+    raporWs.getColumn(15).width = 3.71; // O
+    raporWs.getColumn(16).width = 5.86; // P
+    raporWs.getColumn(17).width = 2.29; // Q
+    raporWs.getColumn(18).width = 8.14; // R
+    raporWs.getColumn(19).width = 4.86; // S
+    raporWs.getColumn(20).width = 4.14; // T
+    raporWs.getColumn(21).width = 4.86; // U
+    raporWs.getColumn(22).width = 10.71; // V
+    raporWs.getColumn(23).width = 2.43; // W
+    raporWs.getColumn(24).width = 2.43; // X
+    raporWs.getColumn(25).width = 2.43; // Y
+    raporWs.getColumn(26).width = 2.43; // Z
+    raporWs.getColumn(27).width = 20.29; // AA
 
-      const rowsToUse =
-        rows && rows.length
-          ? rows
-          : [
-              {
-                label: fallbackLabel,
-                studentCount: n(years?.y1?.students?.totalStudents || 0),
-                unitFee: n(legacyUnitFee || 0),
-              },
-            ];
+    // Disable grid lines
 
-      rowsToUse.forEach((r) => {
-        const label = r.label || r.key || "";
-        const sc1 = n(r.studentCount);
-        const uf1 = n(r.unitFee);
-        const sc2 = sc1;
-        const sc3 = sc1;
+    raporWs.views = [{ showGridLines: false }];
+    const imageId = wb.addImage({
+      base64: SCHOOL_LOGO_PLACEHOLDER_BASE64,
+      extension: "png",
+    });
+    raporWs.addImage(imageId, {
+      tl: { col: 1, row: 0.2 },
+      ext: { width: 566, height: 374 },
+    });
+    const imageId2 = wb.addImage({
+      base64: SCHOOL_LOGO_PLACEHOLDER_BASE642,
+      extension: "png",
+    });
+    raporWs.addImage(imageId2, {
+      tl: { col: 10, row: 4 },
+      ext: { width: 185, height: 191 },
+    });
 
-        const uf2 = uf1 * n(factors.y2);
-        const uf3 = uf1 * n(factors.y3);
+    raporWs.mergeCells("J21:P23");
+    const raporTitleCell = raporWs.getCell("J21");
+    raporTitleCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    raporTitleCell.font = {
+      ...(raporTitleCell.font || {}),
+      bold: true,
+      size: 20,
+      name: "Times New Roman",
+    };
+    const existing = raporTitleCell.value
+      ? String(raporTitleCell.value).toUpperCase()
+      : "";
+    raporTitleCell.value = `${existing} OKUL ÜCRETİ`.trim();
 
-        const tot1 = sc1 * uf1;
-        const tot2 = sc2 * uf2;
-        const tot3 = sc3 * uf3;
-
-        t1 += tot1;
-        t2 += tot2;
-        t3 += tot3;
-
-        gelirlerSheet.push([label, sc1, uf1, tot1, sc2, uf2, tot2, sc3, uf3, tot3]);
-      });
-
-      gelirlerSheet.push(["TOPLAM", "", "", t1, "", "", t2, "", "", t3]);
-      gelirlerSheet.push([]);
-      return { t1, t2, t3 };
+    raporWs.getCell("V27").value = "KAMPÜS/OKUL";
+    raporWs.getCell("V27").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V27").font = {
+      ...(raporWs.getCell("V27").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
+    raporWs.getCell("V28").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V28").font = {
+      ...(raporWs.getCell("V28").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
     };
 
-    const tuitionLegacyUnit = g?.tuitionFeePerStudentYearly;
-    const lunchLegacyUnit = g?.lunchFeePerStudentYearly;
-    const dormLegacyUnit = g?.dormitoryFeePerStudentYearly;
+    raporWs.getCell("V31").value = "MÜDÜR";
+    raporWs.getCell("V31").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V31").font = {
+      ...(raporWs.getCell("V31").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
+    raporWs.getCell("V32").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V32").font = {
+      ...(raporWs.getCell("V32").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
 
-    const secTuition = addPerStudentSection(
-      "EĞİTİM FAALİYET GELİRLERİ (Öğrenci Ücret Gelirleri) / YIL",
-      tuitionRows,
-      tuitionLegacyUnit,
-      "(Eski model) Eğitim Ücreti"
+    raporWs.getCell("V35").value = "ÜLKE TEMSİLCİSİ";
+    raporWs.getCell("V35").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V35").font = {
+      ...(raporWs.getCell("V35").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
+    raporWs.getCell("V36").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V36").font = {
+      ...(raporWs.getCell("V36").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
+
+    raporWs.getCell("V39").value = "HAZIRLAYAN";
+    raporWs.getCell("V39").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V39").font = {
+      ...(raporWs.getCell("V39").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
+    raporWs.getCell("V40").alignment = { vertical: "bottom", horizontal: "right" };
+    raporWs.getCell("V40").font = {
+      ...(raporWs.getCell("V40").font || {}),
+      bold: true,
+      size: 14,
+      name: "Times New Roman",
+    };
+
+    raporWs.mergeCells("K44:P44");
+
+    const exportDate = new Date();
+    const cell = raporWs.getCell("K44");
+    cell.value = exportDate.toLocaleDateString("tr-TR");
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    cell.font = { ...(cell.font || {}), bold: true };
+
+    // TABLE A.OKUL EĞTİİM BİLGİLERİ
+    raporWs.mergeCells("B59:V60");
+    const cellB59 = raporWs.getCell("B59");
+    cellB59.alignment = { vertical: "middle", horizontal: "center" };
+    cellB59.font = { ...(cellB59.font || {}), bold: true, size: 18, name: "Times New Roman", color: { argb: "FFFFFFFF" } };
+    cellB59.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF4472C4" },
+    };
+
+    const borderAll = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+
+    for (let row = 59; row <= 60; row += 1) {
+      for (let col = 2; col <= 22; col += 1) { // B=2, V=22
+        raporWs.getCell(row, col).border = borderAll;
+      }
+    }
+
+    const GREY = "FFD9D9D9";
+    const LIGHT_BLUE = "FFD9E1F2"; // Accent 3, lighter 80%
+    const TEXT_BLUE = "FF1F4E79";
+
+    const borderThin = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+
+    for (let row = 62; row <= 73; row += 1) {
+      // Merge B:O and P:V on each row before styling
+      raporWs.mergeCells(row, 2, row, 15);
+      raporWs.mergeCells(row, 16, row, 22);
+
+      const fillColor = (row - 62) % 2 === 0 ? GREY : LIGHT_BLUE;
+      const ranges = [
+        [2, 15],  // B:O
+        [16, 22], // P:V
+      ];
+
+      for (const [startCol, endCol] of ranges) {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(row, col);
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fillColor } };
+          cell.font = { ...(cell.font || {}), color: { argb: TEXT_BLUE }, bold: true };
+          cell.alignment = {
+            vertical: "middle",
+            horizontal: startCol === 16 ? "center" : "left",
+
+          };
+          cell.border = borderThin;
+        }
+      }
+    }
+    for (let row = 62; row <= 73; row += 1) {
+      raporWs.getRow(row).height = 30; // ~40px target
+    }
+
+    // TABLE B. OKUL ÜCRETLERİ TABLOSU (YENİ EĞİTİM DÖNEMİ)
+    raporWs.mergeCells("B77:V78");
+    const cellB77 = raporWs.getCell("B77");
+    cellB77.alignment = { vertical: "middle", horizontal: "center" };
+    cellB77.font = { ...(cellB77.font || {}), bold: true, size: 16, name: "Times New Roman", color: { argb: "FFFFFFFF" } };
+    cellB77.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF4472C4" },
+    };
+
+    const borderAllb = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+
+    for (let row = 77; row <= 78; row += 1) {
+      for (let col = 2; col <= 22; col += 1) { // B=2, V=22
+        raporWs.getCell(row, col).border = borderAllb;
+      }
+    }
+
+
+    // Tuition detail rows merged and styled (dynamic row count)
+    const mergeBlocks = [
+      [2, 8],   // B:H
+      [9, 10],  // I:J
+      [11, 12], // K:L
+      [13, 14], // M:N
+      [15, 16], // O:P
+      [17, 18], // Q:R
+      [19, 20], // S:T
+      [21, 22], // U:V
+    ];
+    const borderBlue = {
+      top: { style: "thin", color: { argb: TEXT_BLUE } },
+      left: { style: "thin", color: { argb: TEXT_BLUE } },
+      bottom: { style: "thin", color: { argb: TEXT_BLUE } },
+      right: { style: "thin", color: { argb: TEXT_BLUE } },
+    };
+
+    const tuitionHeaderRowIndex = raporAoa.findIndex((row) => Array.isArray(row) && row[1] === "Kademe");
+    const tuitionStartRow = tuitionHeaderRowIndex >= 0 ? tuitionHeaderRowIndex + 1 : 80;
+    const tuitionDataRowCount = Array.isArray(model.tuitionTable) ? model.tuitionTable.length : 0;
+    const tuitionEndRow = tuitionStartRow + Math.max(0, tuitionDataRowCount);
+    const tuitionLastRowFill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
+
+    for (let row = tuitionStartRow; row <= tuitionEndRow; row += 1) {
+      const isHeaderRow = row === tuitionStartRow;
+      const isLastRow = row === tuitionEndRow;
+      for (const [startCol, endCol] of mergeBlocks) {
+        raporWs.mergeCells(row, startCol, row, endCol);
+        const anchor = raporWs.getCell(row, startCol);
+        anchor.font = { ...(anchor.font || {}), bold: true };
+        anchor.alignment = {
+          vertical: "middle",
+          horizontal: startCol === 2 ? "left" : "center",
+          wrapText: isHeaderRow,
+        };
+        if (isLastRow) {
+          anchor.fill = tuitionLastRowFill;
+          anchor.font = { ...(anchor.font || {}), color: { argb: TEXT_BLUE }, bold: true };
+        }
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(row, col);
+          cell.border = borderBlue;
+          if (isHeaderRow) {
+            cell.alignment = { ...(cell.alignment || {}), wrapText: true, vertical: "middle", horizontal: startCol === 2 ? "left" : "center" };
+          }
+          if (isLastRow) {
+            cell.fill = tuitionLastRowFill;
+            cell.font = { ...(cell.font || {}), color: { argb: TEXT_BLUE } };
+          }
+        }
+      }
+    }
+    for (let row = tuitionStartRow; row <= tuitionEndRow; row += 1) {
+      raporWs.getRow(row).height = 30; // ~40px target for Table B header rows
+    }
+
+    let raporRowOffset = 0;
+
+    // TABLE C. OKUL UCRETI HESAPLAMA PARAMETRELERI (styled, dynamic rows)
+    const paramTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C. OKUL")
     );
+    if (paramTitleIndex >= 0) {
+      const paramTitleRow = paramTitleIndex + 1; // 1-based
+      const paramHeaderRow = paramTitleRow + 1;
+      const paramBlankRow = paramHeaderRow + 1; // intentional blank line after header
+      const parameters = Array.isArray(model.parameters) ? model.parameters : [];
+      const inflationYearsRaw = Array.isArray(model.parametersMeta?.inflationYears)
+        ? model.parametersMeta.inflationYears
+        : [];
+      const inflationBaseYear = Number(model.parametersMeta?.inflationBaseYear);
+      const defaultInflYears = Number.isFinite(inflationBaseYear)
+        ? [inflationBaseYear - 3, inflationBaseYear - 2, inflationBaseYear - 1]
+        : [null, null, null];
+      const inflationYears = [0, 1, 2].map((idx) => {
+        const item = inflationYearsRaw[idx] || {};
+        return {
+          year: item?.year ?? defaultInflYears[idx],
+          value: item?.value ?? null,
+        };
+      });
 
-    const secNonEd = addPerStudentSection(
-      "ÖĞRENİM DIŞI HİZMETLERE İLİŞKİN GELİRLER (Brüt)",
-      nonEdRows,
-      lunchLegacyUnit,
-      "(Eski model) Öğrenim Dışı Hizmet"
+      const toNumberOrNull = (v) => {
+        const nVal = Number(v);
+        return Number.isFinite(nVal) ? nVal : null;
+      };
+      const formatParamValue = (row) => {
+        const valueType = String(row?.valueType || "").toLowerCase();
+        const raw = row?.value;
+        if (valueType === "currency") return money(raw);
+        if (valueType === "percent") return toNumberOrNull(raw) ?? raw ?? null;
+        const num = toNumberOrNull(raw);
+        return num ?? (raw ?? null);
+      };
+
+      const findInflationIndex = parameters.findIndex((p) =>
+        String(p?.desc || "").toLowerCase().includes("yerel mevzuatta uygunluk")
+      );
+
+      // Insert rows to keep the blank header spacer and inflation block from overlapping later sections.
+      raporWs.spliceRows(paramHeaderRow + 1, 0, []);
+      raporRowOffset += 1;
+      if (findInflationIndex >= 0) {
+        const inflationInsertRow = paramHeaderRow + 2 + findInflationIndex + 1;
+        raporWs.spliceRows(inflationInsertRow, 0, [], []);
+        raporRowOffset += 2;
+      }
+
+      // clear old header+rows (columns A-V) before redrawing
+      const inflationExtraRows = findInflationIndex >= 0 ? 2 : 0;
+      const paramTotalRows = parameters.length + inflationExtraRows;
+      const clearThroughRow = paramHeaderRow + 1 + Math.max(0, paramTotalRows);
+      for (let row = paramHeaderRow; row <= clearThroughRow; row += 1) {
+        for (let col = 1; col <= 22; col += 1) {
+          const cell = raporWs.getCell(row, col);
+          cell.value = null;
+          cell.border = undefined;
+          cell.fill = undefined;
+        }
+      }
+
+      // Section header merged B:V
+      const existingParamTitle = raporWs.getCell(paramTitleRow, 1).value;
+      raporWs.mergeCells(paramTitleRow, 2, paramTitleRow, 22);
+      const paramTitleCell = raporWs.getCell(paramTitleRow, 2);
+      paramTitleCell.value = existingParamTitle || paramTitleCell.value || "C. OKUL UCRETI HESAPLAMA PARAMETRELERI";
+      raporWs.getCell(paramTitleRow, 1).value = null;
+      paramTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+      paramTitleCell.font = {
+        ...(paramTitleCell.font || {}),
+        bold: true,
+        size: 14,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      paramTitleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(paramTitleRow, col).border = borderAllb;
+      }
+
+      // Column headers: Parametre (B:T) and Veri (U:V)
+      raporWs.mergeCells(paramHeaderRow, 2, paramHeaderRow, 20);
+      raporWs.mergeCells(paramHeaderRow, 21, paramHeaderRow, 22);
+      const paramHeaderCell = raporWs.getCell(paramHeaderRow, 2);
+      paramHeaderCell.value = "Parametre";
+      paramHeaderCell.font = { ...(paramHeaderCell.font || {}), bold: true, color: { argb: TEXT_BLUE } };
+      paramHeaderCell.alignment = { vertical: "middle", horizontal: "left" };
+      const veriHeaderCell = raporWs.getCell(paramHeaderRow, 21);
+      veriHeaderCell.value = "Veri";
+      veriHeaderCell.font = { ...(veriHeaderCell.font || {}), bold: true, color: { argb: TEXT_BLUE } };
+      veriHeaderCell.alignment = { vertical: "middle", horizontal: "center" };
+      for (let col = 2; col <= 22; col += 1) {
+        const cell = raporWs.getCell(paramHeaderRow, col);
+        cell.border = borderBlue;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
+      }
+
+      // Blank row after headers
+      for (let col = 2; col <= 22; col += 1) {
+        const cell = raporWs.getCell(paramBlankRow, col);
+        cell.value = null;
+        cell.border = undefined;
+        cell.fill = undefined;
+      }
+
+      const renderBorders = (rowNum, startCol, endCol) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          raporWs.getCell(rowNum, col).border = borderBlue;
+        }
+      };
+
+      const renderParamRow = (rowNum, param, opts = {}) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 3);
+        raporWs.mergeCells(rowNum, 4, rowNum, 20);
+        raporWs.mergeCells(rowNum, 21, rowNum, 22);
+
+        const noCell = raporWs.getCell(rowNum, 2);
+        const descCell = raporWs.getCell(rowNum, 4);
+        const dataCell = raporWs.getCell(rowNum, 21);
+
+        noCell.value = param?.no || "";
+        descCell.value = param?.desc || "";
+        dataCell.value = opts.valueOverride !== undefined ? opts.valueOverride : formatParamValue(param);
+
+        const isFinal = String(param?.desc || "").toLowerCase().includes("nihai ucret");
+
+        noCell.alignment = { vertical: "middle", horizontal: "center" };
+        descCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        dataCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+
+        if (isFinal) {
+          descCell.font = { ...(descCell.font || {}), bold: true, italic: true };
+          dataCell.font = { ...(dataCell.font || {}), bold: true, italic: true };
+        }
+
+        renderBorders(rowNum, 2, 3);
+        renderBorders(rowNum, 4, 20);
+        renderBorders(rowNum, 21, 22);
+      };
+
+      const renderInflationRows = (startRow) => {
+        const labelRow = startRow;
+        const valueRow = startRow + 1;
+
+        // Header row
+        raporWs.mergeCells(labelRow, 2, labelRow, 16);
+        const labelCell = raporWs.getCell(labelRow, 2);
+        labelCell.value = "Son 3 Yilin Resmi Enflasyon Oranlari";
+        labelCell.alignment = { vertical: "middle", horizontal: "center" };
+        labelCell.font = { ...(labelCell.font || {}), bold: true, italic: true, color: { argb: TEXT_BLUE } };
+
+        const yearBlocks = [
+          { range: [17, 18], label: inflationYears[0]?.year },
+          { range: [19, 20], label: inflationYears[1]?.year },
+          { range: [21, 22], label: inflationYears[2]?.year },
+        ];
+
+        yearBlocks.forEach(({ range, label }) => {
+          raporWs.mergeCells(labelRow, range[0], labelRow, range[1]);
+          const cell = raporWs.getCell(labelRow, range[0]);
+          cell.value = label ?? "";
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+          cell.font = { ...(cell.font || {}), bold: true, color: { argb: TEXT_BLUE } };
+        });
+
+        // Value row
+        raporWs.mergeCells(valueRow, 2, valueRow, 16);
+        yearBlocks.forEach(({ range }, idx) => {
+          raporWs.mergeCells(valueRow, range[0], valueRow, range[1]);
+          const cell = raporWs.getCell(valueRow, range[0]);
+          const val = inflationYears[idx]?.value;
+          cell.value = val == null ? null : val;
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+        });
+
+        // Borders for both rows
+        [labelRow, valueRow].forEach((rowNum) => {
+          renderBorders(rowNum, 2, 22);
+        });
+
+        return valueRow;
+      };
+
+      let writeRow = paramBlankRow + 1;
+      parameters.forEach((param, idx) => {
+        if (idx === findInflationIndex) {
+          renderParamRow(writeRow, param, { valueOverride: null });
+          writeRow += 1;
+          writeRow = renderInflationRows(writeRow) + 1;
+          return;
+        }
+        renderParamRow(writeRow, param);
+        writeRow += 1;
+      });
+
+      for (let row = paramTitleRow; row < writeRow; row += 1) {
+        raporWs.getRow(row).height = 24;
+      }
+    }
+
+    // TABLE C.1 KAPASITE KULLANIMI (styled, 2 blocks side-by-side)
+    const capTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.1")
     );
+    if (capTitleIndex >= 0) {
+      const capTitleRow = capTitleIndex + 1 + raporRowOffset;
+      const capTitleValue = raporWs.getCell(capTitleRow, 1).value ?? raporAoa[capTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(capTitleRow, 2, capTitleRow, 22);
+      const capTitleCell = raporWs.getCell(capTitleRow, 2);
+      capTitleCell.value = capTitleValue;
+      raporWs.getCell(capTitleRow, 1).value = null;
+      capTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+      capTitleCell.font = {
+        ...(capTitleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      capTitleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(capTitleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(capTitleRow).height = 24;
 
-    const secDorm = addPerStudentSection(
-      "YURT GELİRLERİ (Brüt)",
-      dormRows,
-      dormLegacyUnit,
-      "(Eski model) Yurt"
+      const capGroupRow = capTitleRow + 2;
+      raporWs.mergeCells(capGroupRow, 2, capGroupRow, 14);
+      raporWs.mergeCells(capGroupRow, 15, capGroupRow, 22);
+      const leftGroupCell = raporWs.getCell(capGroupRow, 2);
+      const rightGroupCell = raporWs.getCell(capGroupRow, 15);
+      leftGroupCell.value = "Öğrenci Kapasite Bilgileri";
+      rightGroupCell.value = "Sınıf Kapasite Bilgileri";
+      leftGroupCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      rightGroupCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      leftGroupCell.font = { ...(leftGroupCell.font || {}), bold: true, color: { argb: TEXT_BLUE } };
+      rightGroupCell.font = { ...(rightGroupCell.font || {}), bold: true, color: { argb: TEXT_BLUE } };
+      for (let col = 2; col <= 22; col += 1) {
+        const cell = raporWs.getCell(capGroupRow, col);
+        cell.border = borderBlue;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
+      }
+      raporWs.getRow(capGroupRow).height = 22;
+
+      const cap = model.capacity || {};
+      const capDataStart = capGroupRow + 1;
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const toCellValue = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : v ?? null;
+      };
+      const percentFormat = (v) => {
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 0 && n <= 1) return "0.00%";
+        return "#,##0.00";
+      };
+      const leftRows = [
+        { label: "Bina Kapasitesi", value: cap.buildingCapacity, format: "#,##0" },
+        { label: "Mevcut Öğrenci Sayısı", value: cap.currentStudents, format: "#,##0" },
+        { label: "Planlanan Öğrenci Sayısı", value: cap.plannedStudents, format: "#,##0" },
+        { label: "Kapasite Kullanım Yüzdeliği", value: cap.plannedUtilization, format: percentFormat(cap.plannedUtilization) },
+        { label: "", value: null, format: null },
+      ];
+      const rightRows = [
+        { label: "Kapasiteye Uygun Derslik Sayısı", value: cap.plannedBranches, format: "#,##0" },
+        { label: "Mevcut Derslik Sayısı", value: cap.totalBranches, format: "#,##0" },
+        { label: "Kullanılan Derslik Sayısı", value: cap.usedBranches, format: "#,##0" },
+        { label: "Sınıf Doluluk Oranı", value: cap.avgStudentsPerClass, format: "#,##0.00" },
+        { label: "Sınıf Doluluk Oranı (Planlanan)", value: cap.avgStudentsPerClassPlanned, format: "#,##0.00" },
+      ];
+
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt } = {}) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(rowNum, col);
+          if (border) cell.border = border;
+          if (alignment) cell.alignment = alignment;
+          if (numFmt) cell.numFmt = numFmt;
+        }
+      };
+      const applyValueFormat = (rowNum, startCol, endCol, value, format) => {
+        if (!format) return;
+        const n = Number(value);
+        if (!Number.isFinite(n)) return;
+        applyRange(rowNum, startCol, endCol, { numFmt: format });
+      };
+
+      for (let i = 0; i < 5; i += 1) {
+        const rowNum = capDataStart + i;
+        const left = leftRows[i] || { label: "", value: null, format: null };
+        const right = rightRows[i] || { label: "", value: null, format: null };
+
+        raporWs.mergeCells(rowNum, 2, rowNum, 9);
+        raporWs.mergeCells(rowNum, 10, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 19);
+        raporWs.mergeCells(rowNum, 20, rowNum, 22);
+
+        raporWs.getCell(rowNum, 2).value = left.label || null;
+        raporWs.getCell(rowNum, 10).value = toCellValue(left.value);
+        raporWs.getCell(rowNum, 15).value = right.label || null;
+        raporWs.getCell(rowNum, 20).value = toCellValue(right.value);
+
+        applyRange(rowNum, 2, 9, { alignment: labelAlignment, border: borderBlue });
+        applyRange(rowNum, 10, 14, { alignment: valueAlignment, border: borderBlue });
+        applyRange(rowNum, 15, 19, { alignment: labelAlignment, border: borderBlue });
+        applyRange(rowNum, 20, 22, { alignment: valueAlignment, border: borderBlue });
+
+        applyValueFormat(rowNum, 10, 14, left.value, left.format);
+        applyValueFormat(rowNum, 20, 22, right.value, right.format);
+
+        raporWs.getRow(rowNum).height = 20;
+      }
+    }
+
+    // TABLE C.2 INSAN KAYNAKLARI (Planlama Tablosu verileri)
+    const hrTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.2")
     );
+    if (hrTitleIndex >= 0) {
+      const hrTitleRow = hrTitleIndex + 1 + raporRowOffset;
+      const hrHeaderRow = hrTitleRow + 1;
+      const hrDataCount = Array.isArray(model.hr) ? model.hr.length : 0;
+      const hrNoteRow = hrHeaderRow + hrDataCount + 1;
 
-    // Other institutional income (lump sum)
-    gelirlerSheet.push(["ÖĞRENCİ ÜCRETLERİ HARİÇ KURUMUN DİĞER GELİRLERİ (BRÜT)"]);
-    gelirlerSheet.push(["Gelirler (USD)", "Toplam (Y1)", "Toplam (Y2)", "Toplam (Y3)"]);
-    let oi1 = 0,
-      oi2 = 0,
-      oi3 = 0;
-    const otherToUse = otherRows.length ? otherRows : [{ label: "(Eski model) Diğer", amount: n(g?.otherInstitutionIncomeYearly || 0) }];
-    otherToUse.forEach((r) => {
-      const a1 = n(r.amount);
-      const a2 = a1 * n(factors.y2);
-      const a3 = a1 * n(factors.y3);
-      oi1 += a1;
-      oi2 += a2;
-      oi3 += a3;
-      gelirlerSheet.push([r.label || r.key || "", a1, a2, a3]);
+      const hrTitleValue = raporWs.getCell(hrTitleRow, 1).value ?? raporAoa[hrTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(hrTitleRow, 2, hrTitleRow, 22);
+      const hrTitleCell = raporWs.getCell(hrTitleRow, 2);
+      hrTitleCell.value = hrTitleValue;
+      raporWs.getCell(hrTitleRow, 1).value = null;
+      hrTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+      hrTitleCell.font = {
+        ...(hrTitleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      hrTitleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(hrTitleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(hrTitleRow).height = 24;
+
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const applyBorders = (rowNum) => {
+        for (let col = 2; col <= 22; col += 1) {
+          raporWs.getCell(rowNum, col).border = borderAllb;
+        }
+      };
+
+      raporWs.mergeCells(hrHeaderRow, 2, hrHeaderRow, 14);
+      raporWs.mergeCells(hrHeaderRow, 15, hrHeaderRow, 18);
+      raporWs.mergeCells(hrHeaderRow, 19, hrHeaderRow, 22);
+      raporWs.getCell(hrHeaderRow, 2).alignment = labelAlignment;
+      const mevcutHeaderCell = raporWs.getCell(hrHeaderRow, 15);
+      const planHeaderCell = raporWs.getCell(hrHeaderRow, 19);
+      mevcutHeaderCell.alignment = valueAlignment;
+      planHeaderCell.alignment = valueAlignment;
+      mevcutHeaderCell.font = { ...(mevcutHeaderCell.font || {}), bold: true };
+      planHeaderCell.font = { ...(planHeaderCell.font || {}), bold: true };
+      applyBorders(hrHeaderRow);
+      raporWs.getRow(hrHeaderRow).height = 20;
+
+      for (let i = 0; i < hrDataCount; i += 1) {
+        const rowNum = hrHeaderRow + 1 + i;
+        raporWs.mergeCells(rowNum, 2, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 18);
+        raporWs.mergeCells(rowNum, 19, rowNum, 22);
+        raporWs.getCell(rowNum, 2).alignment = labelAlignment;
+        const currentCell = raporWs.getCell(rowNum, 15);
+        const plannedCell = raporWs.getCell(rowNum, 19);
+        currentCell.alignment = valueAlignment;
+        plannedCell.alignment = valueAlignment;
+        currentCell.font = { ...(currentCell.font || {}), bold: true };
+        plannedCell.font = { ...(plannedCell.font || {}), bold: true };
+        applyBorders(rowNum);
+        raporWs.getRow(rowNum).height = 20;
+      }
+
+      raporWs.mergeCells(hrNoteRow, 2, hrNoteRow, 22);
+      const noteCell = raporWs.getCell(hrNoteRow, 2);
+      noteCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      noteCell.font = { ...(noteCell.font || {}), italic: true, color: { argb: "FFFF0000" } };
+      applyBorders(hrNoteRow);
+      raporWs.getRow(hrNoteRow).height = 18;
+    }
+
+    // TABLE C.3 GELIRLER (Planlama Excel Tablosu verileri)
+    const revenueTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.3")
+    );
+    if (revenueTitleIndex >= 0) {
+      const revenueTitleRow = revenueTitleIndex + 1 + raporRowOffset;
+      const revenueHeaderRow = revenueTitleRow + 1;
+      const revenueDataCount = Array.isArray(model.revenues) ? model.revenues.length : 0;
+      const revenueTotalRow = revenueHeaderRow + revenueDataCount + 1;
+      const revenueNoteRow = revenueTotalRow + 1;
+
+      const revenueTitleValue = raporWs.getCell(revenueTitleRow, 1).value ?? raporAoa[revenueTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(revenueTitleRow, 2, revenueTitleRow, 22);
+      const revenueTitleCell = raporWs.getCell(revenueTitleRow, 2);
+      revenueTitleCell.value = revenueTitleValue;
+      raporWs.getCell(revenueTitleRow, 1).value = null;
+      revenueTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+      revenueTitleCell.font = {
+        ...(revenueTitleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      revenueTitleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(revenueTitleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(revenueTitleRow).height = 24;
+
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const amountFormat = "#,##0.00";
+      const ratioFormat = "0.00%";
+
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(rowNum, col);
+          if (border) cell.border = border;
+          if (alignment) cell.alignment = alignment;
+          if (numFmt) cell.numFmt = numFmt;
+          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+        }
+      };
+
+      const styleRevenueRow = (rowNum, opts = {}) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 20);
+        raporWs.mergeCells(rowNum, 21, rowNum, 22);
+
+        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold: opts.bold });
+        applyRange(rowNum, 15, 20, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          numFmt: opts.withFormats ? amountFormat : undefined,
+          bold: opts.bold,
+        });
+        applyRange(rowNum, 21, 22, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          numFmt: opts.withFormats ? ratioFormat : undefined,
+          bold: opts.bold,
+        });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      styleRevenueRow(revenueHeaderRow, { bold: true, withFormats: false });
+
+      for (let i = 0; i < revenueDataCount; i += 1) {
+        styleRevenueRow(revenueHeaderRow + 1 + i, { bold: false, withFormats: true });
+      }
+
+      styleRevenueRow(revenueTotalRow, { bold: true, withFormats: true });
+
+      raporWs.mergeCells(revenueNoteRow, 2, revenueNoteRow, 22);
+      const revenueNoteCell = raporWs.getCell(revenueNoteRow, 2);
+      revenueNoteCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      revenueNoteCell.font = { ...(revenueNoteCell.font || {}), italic: true, color: { argb: "FFFF0000" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(revenueNoteRow, col).border = borderAllb;
+      }
+      raporWs.getRow(revenueNoteRow).height = 18;
+    }
+
+    // TABLE C.4 GIDERLER (Planlama Excel Tablosu verileri)
+    const expenseTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.4")
+    );
+    if (expenseTitleIndex >= 0) {
+      const expenseTitleRow = expenseTitleIndex + 1 + raporRowOffset;
+      const expenseHeaderRow = expenseTitleRow + 1;
+      const detailedExpenseRows = Array.isArray(model?.parametersMeta?.detailedExpenses)
+        ? model.parametersMeta.detailedExpenses
+        : null;
+      const expenseRows = detailedExpenseRows
+        ? detailedExpenseRows
+        : Array.isArray(model.expenses)
+          ? model.expenses
+          : [];
+      const expenseDataCount = expenseRows.length;
+      const expenseTotalRow = expenseHeaderRow + expenseDataCount + 1;
+
+      const expenseTitleValue =
+        raporWs.getCell(expenseTitleRow, 1).value ?? raporAoa[expenseTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(expenseTitleRow, 2, expenseTitleRow, 22);
+      const expenseTitleCell = raporWs.getCell(expenseTitleRow, 2);
+      expenseTitleCell.value = expenseTitleValue;
+      raporWs.getCell(expenseTitleRow, 1).value = null;
+      expenseTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+      expenseTitleCell.font = {
+        ...(expenseTitleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      expenseTitleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(expenseTitleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(expenseTitleRow).height = 24;
+
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const amountFormat = "#,##0.00";
+      const ratioFormat = "0.00%";
+
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(rowNum, col);
+          if (border) cell.border = border;
+          if (alignment) cell.alignment = alignment;
+          if (numFmt) cell.numFmt = numFmt;
+          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+        }
+      };
+
+      const styleExpenseRow = (rowNum, opts = {}) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 20);
+        raporWs.mergeCells(rowNum, 21, rowNum, 22);
+
+        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold: opts.bold });
+        applyRange(rowNum, 15, 20, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          numFmt: opts.withFormats ? amountFormat : undefined,
+          bold: opts.bold,
+        });
+        applyRange(rowNum, 21, 22, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          numFmt: opts.withFormats ? ratioFormat : undefined,
+          bold: opts.bold,
+        });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      styleExpenseRow(expenseHeaderRow, { bold: true, withFormats: false });
+
+      for (let i = 0; i < expenseDataCount; i += 1) {
+        styleExpenseRow(expenseHeaderRow + 1 + i, { bold: false, withFormats: true });
+      }
+
+      styleExpenseRow(expenseTotalRow, { bold: true, withFormats: true });
+    }
+
+    // TABLE C.5 TAHSIL EDILEMEYECEK GELIRLER (text block)
+    const uncollectableTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.5")
+    );
+    if (uncollectableTitleIndex >= 0) {
+      const titleRow = uncollectableTitleIndex + 1 + raporRowOffset;
+      const bodyRow = titleRow + 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[uncollectableTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const bodyValue = raporWs.getCell(bodyRow, 1).value ?? "";
+      raporWs.mergeCells(bodyRow, 2, bodyRow, 22);
+      const bodyCell = raporWs.getCell(bodyRow, 2);
+      bodyCell.value = bodyValue;
+      raporWs.getCell(bodyRow, 1).value = null;
+      bodyCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(bodyRow, col).border = borderAllb;
+      }
+      raporWs.getRow(bodyRow).height = 36;
+    }
+
+    // TABLE C.6 GIDERLERIN SAPMA YUZDELIGI (text block)
+    const deviationTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.6")
+    );
+    if (deviationTitleIndex >= 0) {
+      const titleRow = deviationTitleIndex + 1 + raporRowOffset;
+      const bodyRow = titleRow + 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[deviationTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 12,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const bodyValue = raporWs.getCell(bodyRow, 1).value ?? "";
+      raporWs.mergeCells(bodyRow, 2, bodyRow, 22);
+      const bodyCell = raporWs.getCell(bodyRow, 2);
+      bodyCell.value = bodyValue;
+      raporWs.getCell(bodyRow, 1).value = null;
+      bodyCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(bodyRow, col).border = borderAllb;
+      }
+      raporWs.getRow(bodyRow).height = 44;
+    }
+
+    // TABLE C.7 BURS VE INDIRIM ORANLARI (Burs ve Indirimler Genelgesi)
+    const bursTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.7")
+    );
+    if (bursTitleIndex >= 0) {
+      const titleRow = bursTitleIndex + 1 + raporRowOffset;
+      const bursCount = Array.isArray(model.scholarships) ? model.scholarships.length : 0;
+      const indirimCount = Array.isArray(model.discounts) ? model.discounts.length : 0;
+      const analysisRows = 4;
+
+      const bursGroupRow = titleRow + 1;
+      const bursSubRow = bursGroupRow + 1;
+      const bursDataStart = bursSubRow + 1;
+      const bursDataEnd = bursDataStart + Math.max(0, bursCount) - 1;
+      const bursTotalRow = bursDataEnd + 1;
+      const bursSpacerRow = bursTotalRow + 1;
+      const bursAnalysisStart = bursSpacerRow + 1;
+      const bursAnalysisEnd = bursAnalysisStart + analysisRows - 1;
+      const indirimBlockSpacerRow = bursAnalysisEnd + 1;
+      const indirimGroupRow = indirimBlockSpacerRow + 1;
+      const indirimSubRow = indirimGroupRow + 1;
+      const indirimDataStart = indirimSubRow + 1;
+      const indirimDataEnd = indirimDataStart + Math.max(0, indirimCount) - 1;
+      const indirimTotalRow = indirimDataEnd + 1;
+      const indirimAnalysisSpacerRow = indirimTotalRow + 1;
+      const indirimAnalysisStart = indirimAnalysisSpacerRow + 1;
+      const indirimAnalysisEnd = indirimAnalysisStart + analysisRows - 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[bursTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const centerAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const rightAlignment = { vertical: "middle", horizontal: "right", wrapText: true };
+      const countFormat = "#,##0";
+      const amountFormat = "#,##0.00";
+      const ratioFormat = "0.00%";
+
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(rowNum, col);
+          if (border) cell.border = border;
+          if (alignment) cell.alignment = alignment;
+          if (numFmt) cell.numFmt = numFmt;
+          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+        }
+      };
+
+      const styleGroupHeaderRow = (rowNum) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 17);
+        raporWs.mergeCells(rowNum, 18, rowNum, 22);
+        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 15, 17, { alignment: centerAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 18, 22, { alignment: centerAlignment, border: borderAllb, bold: true });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      const styleSubHeaderRow = (rowNum) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 17);
+        raporWs.mergeCells(rowNum, 18, rowNum, 19);
+        raporWs.mergeCells(rowNum, 20, rowNum, 22);
+        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 15, 17, { alignment: centerAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 18, 19, { alignment: centerAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 20, 22, { alignment: centerAlignment, border: borderAllb, bold: true });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      const styleDataRow = (rowNum, { bold } = {}) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 14);
+        raporWs.mergeCells(rowNum, 15, rowNum, 17);
+        raporWs.mergeCells(rowNum, 18, rowNum, 19);
+        raporWs.mergeCells(rowNum, 20, rowNum, 22);
+        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold });
+        applyRange(rowNum, 15, 17, {
+          alignment: centerAlignment,
+          border: borderAllb,
+          numFmt: countFormat,
+          bold,
+        });
+        applyRange(rowNum, 18, 19, {
+          alignment: centerAlignment,
+          border: borderAllb,
+          numFmt: countFormat,
+          bold,
+        });
+        applyRange(rowNum, 20, 22, {
+          alignment: centerAlignment,
+          border: borderAllb,
+          numFmt: amountFormat,
+          bold,
+        });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      const styleAnalysisRow = (rowNum, { numFmt } = {}) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 20);
+        raporWs.mergeCells(rowNum, 21, rowNum, 22);
+        applyRange(rowNum, 2, 20, { alignment: centerAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 21, 22, {
+          alignment: rightAlignment,
+          border: borderAllb,
+          numFmt,
+          bold: true,
+        });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      styleGroupHeaderRow(bursGroupRow);
+      styleSubHeaderRow(bursSubRow);
+      if (bursCount > 0) {
+        for (let row = bursDataStart; row <= bursDataEnd; row += 1) {
+          styleDataRow(row);
+        }
+      }
+      styleDataRow(bursTotalRow, { bold: true });
+
+      const bursAnalysisFormats = [amountFormat, ratioFormat, ratioFormat, ratioFormat];
+      for (let i = 0; i < analysisRows; i += 1) {
+        styleAnalysisRow(bursAnalysisStart + i, { numFmt: bursAnalysisFormats[i] });
+      }
+
+      styleGroupHeaderRow(indirimGroupRow);
+      styleSubHeaderRow(indirimSubRow);
+      if (indirimCount > 0) {
+        for (let row = indirimDataStart; row <= indirimDataEnd; row += 1) {
+          styleDataRow(row);
+        }
+      }
+      styleDataRow(indirimTotalRow, { bold: true });
+
+      const indirimAnalysisFormats = [amountFormat, ratioFormat, ratioFormat, ratioFormat];
+      for (let i = 0; i < analysisRows; i += 1) {
+        styleAnalysisRow(indirimAnalysisStart + i, { numFmt: indirimAnalysisFormats[i] });
+      }
+    }
+
+    // TABLE C.8 RAKIP KURUMLARIN ANALIZI (Planlama Excell tablosu verileri)
+    const competitorTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.8")
+    );
+    if (competitorTitleIndex >= 0) {
+      const titleRow = competitorTitleIndex + 1 + raporRowOffset;
+      const descriptionRow = titleRow + 1;
+      const spacerRow = descriptionRow + 1;
+      const headerRow = spacerRow + 1;
+      const competitorCount = Array.isArray(model.competitors) ? model.competitors.length : 0;
+      const dataStart = headerRow + 1;
+      const dataEnd = dataStart + Math.max(0, competitorCount) - 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[competitorTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const descriptionValue = raporWs.getCell(descriptionRow, 1).value ?? "";
+      raporWs.mergeCells(descriptionRow, 2, descriptionRow, 22);
+      const descriptionCell = raporWs.getCell(descriptionRow, 2);
+      descriptionCell.value = descriptionValue;
+      raporWs.getCell(descriptionRow, 1).value = null;
+      descriptionCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      raporWs.getRow(descriptionRow).height = 40;
+
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const amountFormat = "#,##0.00";
+
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(rowNum, col);
+          if (border) cell.border = border;
+          if (alignment) cell.alignment = alignment;
+          if (numFmt) cell.numFmt = numFmt;
+          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+        }
+      };
+
+      const styleHeaderRow = (rowNum) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 8);
+        raporWs.mergeCells(rowNum, 9, rowNum, 13);
+        raporWs.mergeCells(rowNum, 14, rowNum, 18);
+        raporWs.mergeCells(rowNum, 19, rowNum, 22);
+        applyRange(rowNum, 2, 8, { alignment: labelAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 9, 13, { alignment: valueAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 14, 18, { alignment: valueAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 19, 22, { alignment: valueAlignment, border: borderAllb, bold: true });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      const styleDataRow = (rowNum) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 8);
+        raporWs.mergeCells(rowNum, 9, rowNum, 13);
+        raporWs.mergeCells(rowNum, 14, rowNum, 18);
+        raporWs.mergeCells(rowNum, 19, rowNum, 22);
+        applyRange(rowNum, 2, 8, { alignment: labelAlignment, border: borderAllb });
+        applyRange(rowNum, 9, 13, { alignment: valueAlignment, border: borderAllb, numFmt: amountFormat });
+        applyRange(rowNum, 14, 18, { alignment: valueAlignment, border: borderAllb, numFmt: amountFormat });
+        applyRange(rowNum, 19, 22, { alignment: valueAlignment, border: borderAllb, numFmt: amountFormat });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      styleHeaderRow(headerRow);
+      if (competitorCount > 0) {
+        for (let row = dataStart; row <= dataEnd; row += 1) {
+          styleDataRow(row);
+        }
+      }
+    }
+
+    // TABLE C.9 YEREL MEVZUATTA UYGUNLUK (yasal azami artis)
+    const mevzuatTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.9")
+    );
+    if (mevzuatTitleIndex >= 0) {
+      const titleRow = mevzuatTitleIndex + 1 + raporRowOffset;
+      const bodyRow = titleRow + 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[mevzuatTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const bodyValue = raporWs.getCell(bodyRow, 1).value ?? "";
+      raporWs.mergeCells(bodyRow, 2, bodyRow, 22);
+      const bodyCell = raporWs.getCell(bodyRow, 2);
+      bodyCell.value = bodyValue;
+      raporWs.getCell(bodyRow, 1).value = null;
+      bodyCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(bodyRow, col).border = borderAllb;
+      }
+      raporWs.getRow(bodyRow).height = 44;
+    }
+
+    // TABLE C.10 MEVCUT EGITIM SEZONU UCRETI
+    const currentFeeTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("C.10")
+    );
+    if (currentFeeTitleIndex >= 0) {
+      const titleRow = currentFeeTitleIndex + 1 + raporRowOffset;
+      const bodyRow = titleRow + 1;
+      const noteRow = bodyRow + 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[currentFeeTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const bodyValue = raporWs.getCell(bodyRow, 1).value ?? "";
+      raporWs.mergeCells(bodyRow, 2, bodyRow, 22);
+      const bodyCell = raporWs.getCell(bodyRow, 2);
+      bodyCell.value = bodyValue;
+      raporWs.getCell(bodyRow, 1).value = null;
+      bodyCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(bodyRow, col).border = borderAllb;
+      }
+      raporWs.getRow(bodyRow).height = 40;
+
+      const noteValue = raporWs.getCell(noteRow, 1).value ?? "";
+      raporWs.mergeCells(noteRow, 2, noteRow, 22);
+      const noteCell = raporWs.getCell(noteRow, 2);
+      noteCell.value = noteValue;
+      raporWs.getCell(noteRow, 1).value = null;
+      noteCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      noteCell.font = { ...(noteCell.font || {}), color: { argb: "FFFF0000" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(noteRow, col).border = borderAllb;
+      }
+      raporWs.getRow(noteRow).height = 22;
+    }
+
+    // TABLE D. PERFORMANS (Gerceklesen ve Gerceklesmesi Planlanan)
+    const perfTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("D.")
+    );
+    if (perfTitleIndex >= 0) {
+      const titleRow = perfTitleIndex + 1 + raporRowOffset;
+      const headerRow = titleRow + 1;
+      const perfCount = Array.isArray(model.performance) ? model.performance.length : 0;
+      const dataStart = headerRow + 1;
+      const dataEnd = dataStart + Math.max(0, perfCount) - 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[perfTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      const countFormat = "#,##0";
+      const amountFormat = "#,##0.00";
+      const ratioFormat = "0.00%";
+
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const cell = raporWs.getCell(rowNum, col);
+          if (border) cell.border = border;
+          if (alignment) cell.alignment = alignment;
+          if (numFmt) cell.numFmt = numFmt;
+          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+        }
+      };
+
+      const styleHeaderRow = (rowNum) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 6);
+        raporWs.mergeCells(rowNum, 7, rowNum, 12);
+        raporWs.mergeCells(rowNum, 13, rowNum, 18);
+        raporWs.mergeCells(rowNum, 19, rowNum, 22);
+        applyRange(rowNum, 2, 6, { alignment: labelAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 7, 12, { alignment: valueAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 13, 18, { alignment: valueAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 19, 22, { alignment: valueAlignment, border: borderAllb, bold: true });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      const styleDataRow = (rowNum) => {
+        raporWs.mergeCells(rowNum, 2, rowNum, 6);
+        raporWs.mergeCells(rowNum, 7, rowNum, 12);
+        raporWs.mergeCells(rowNum, 13, rowNum, 18);
+        raporWs.mergeCells(rowNum, 19, rowNum, 22);
+
+        const label = String(raporWs.getCell(rowNum, 2).value || "").toLowerCase();
+        const plannedFormat = label.includes("ogrenci") ? countFormat : amountFormat;
+        const actualFormat = label.includes("ogrenci") ? countFormat : amountFormat;
+
+        applyRange(rowNum, 2, 6, { alignment: labelAlignment, border: borderAllb });
+        applyRange(rowNum, 7, 12, { alignment: valueAlignment, border: borderAllb, numFmt: plannedFormat });
+        applyRange(rowNum, 13, 18, { alignment: valueAlignment, border: borderAllb, numFmt: actualFormat });
+        applyRange(rowNum, 19, 22, { alignment: valueAlignment, border: borderAllb, numFmt: ratioFormat });
+        raporWs.getRow(rowNum).height = 20;
+      };
+
+      styleHeaderRow(headerRow);
+      if (perfCount > 0) {
+        for (let row = dataStart; row <= dataEnd; row += 1) {
+          styleDataRow(row);
+        }
+      }
+    }
+
+    // TABLE E. DEGERLENDIRME
+    const evalTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("E.")
+    );
+    if (evalTitleIndex >= 0) {
+      const titleRow = evalTitleIndex + 1 + raporRowOffset;
+      const bodyRow = titleRow + 1;
+
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[evalTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+
+      const bodyValue = raporWs.getCell(bodyRow, 1).value ?? "";
+      raporWs.mergeCells(bodyRow, 2, bodyRow, 22);
+      const bodyCell = raporWs.getCell(bodyRow, 2);
+      bodyCell.value = bodyValue;
+      raporWs.getCell(bodyRow, 1).value = null;
+      bodyCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+      bodyCell.font = { ...(bodyCell.font || {}), color: { argb: "FFFF0000" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(bodyRow, col).border = borderAllb;
+      }
+      raporWs.getRow(bodyRow).height = 60;
+    }
+
+    // TABLE F. KOMISYON GORUS VE ONERILERI
+    const commissionTitleIndex = raporAoa.findIndex(
+      (row) => Array.isArray(row) && typeof row[0] === "string" && row[0].startsWith("F.")
+    );
+    if (commissionTitleIndex >= 0) {
+      const titleRow = commissionTitleIndex + 1 + raporRowOffset;
+      const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[commissionTitleIndex]?.[0] ?? "";
+      raporWs.mergeCells(titleRow, 2, titleRow, 22);
+      const titleCell = raporWs.getCell(titleRow, 2);
+      titleCell.value = titleValue;
+      raporWs.getCell(titleRow, 1).value = null;
+      titleCell.alignment = { vertical: "middle", horizontal: "center" };
+      titleCell.font = {
+        ...(titleCell.font || {}),
+        bold: true,
+        size: 16,
+        name: "Times New Roman",
+        color: { argb: "FFFFFFFF" },
+      };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+      for (let col = 2; col <= 22; col += 1) {
+        raporWs.getCell(titleRow, col).border = borderAllb;
+      }
+      raporWs.getRow(titleRow).height = 24;
+    }
+
+
+
+
+
+    // Sheet #2: TEMEL BİLGİLER (AOA only)
+    const model2 = buildTemelBilgilerModel({
+      school,
+      scenario,
+      inputs,
+      report: results,
+      prevReport,
+      currencyMeta,
+      prevCurrencyMeta,
+      reportCurrency,
+      programType: normalizeProgramType(programType),
     });
-    gelirlerSheet.push(["TOPLAM", oi1, oi2, oi3]);
-    gelirlerSheet.push([]);
 
-    // Government incentives
-    const govt1 = n(g?.governmentIncentives);
-    const govt2 = govt1 * n(factors.y2);
-    const govt3 = govt1 * n(factors.y3);
+    addAoaSheet(wb, "TEMEL BİLGİLER", buildTemelBilgilerAoa({ model: model2 }));
 
-    gelirlerSheet.push(["DEVLET TEŞVİKLERİ"]);
-    gelirlerSheet.push(["Gelirler (USD)", "Toplam (Y1)", "Toplam (Y2)", "Toplam (Y3)"]);
-    gelirlerSheet.push(["Devlet Teşvikleri", govt1, govt2, govt3]);
-    gelirlerSheet.push(["TOPLAM", govt1, govt2, govt3]);
-    gelirlerSheet.push([]);
+    // Sheet #3: Kapasite (AOA only)
+    const model3 = buildKapasiteModel({
+      scenario,
+      inputs,
+      programType,
+      currencyMeta,
+    });
+    addAoaSheet(wb, "Kapasite", buildKapasiteAoa({ model: model3 }));
 
-    // Summary from calculated results (more reliable: includes discount caps, etc.)
-    const y1 = years?.y1 || {};
-    const y2 = years?.y2 || {};
-    const y3 = years?.y3 || {};
+    // Sheet #4: HR ( IK ) (AOA only)
+    const model4 = buildHrModel({
+      scenario,
+      inputs,
+      report: results,
+      programType,
+      currencyMeta,
+      reportCurrency,
+    });
+    addAoaSheet(wb, "HR ( IK )", buildHrAoa({ model: model4 }));
 
-    gelirlerSheet.push(["ÖZET"]);
-    gelirlerSheet.push(["", "Y1", "Y2", "Y3"]);
-    gelirlerSheet.push(["FAALİYET GELİRLERİ (Brüt)", money(y1?.income?.activityGross), money(y2?.income?.activityGross), money(y3?.income?.activityGross)]);
-    gelirlerSheet.push(["BURS VE İNDİRİMLER", money(y1?.income?.totalDiscounts), money(y2?.income?.totalDiscounts), money(y3?.income?.totalDiscounts)]);
-    gelirlerSheet.push(["NET FAALİYET GELİRLERİ", money(y1?.income?.netActivityIncome), money(y2?.income?.netActivityIncome), money(y3?.income?.netActivityIncome)]);
-    gelirlerSheet.push(["NET KİŞİ BAŞI CİRO", money(y1?.kpis?.netCiroPerStudent), money(y2?.kpis?.netCiroPerStudent), money(y3?.kpis?.netCiroPerStudent)]);
-    gelirlerSheet.push(["DİĞER GELİRLER (Brüt + Devlet Teşvikleri)", money(y1?.income?.otherIncomeTotal), money(y2?.income?.otherIncomeTotal), money(y3?.income?.otherIncomeTotal)]);
-    gelirlerSheet.push(["DİĞER GELİRLER %", n(y1?.income?.otherIncomeRatio), n(y2?.income?.otherIncomeRatio), n(y3?.income?.otherIncomeRatio)]);
-    gelirlerSheet.push(["NET TOPLAM GELİR", money(y1?.income?.netIncome), money(y2?.income?.netIncome), money(y3?.income?.netIncome)]);
-
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(withCurrencyLabels(gelirlerSheet)), "gelirler");
+    // Sheet #5: Gelirler ( Incomes ) (AOA only)
+    const model5 = buildGelirlerModel({
+      scenario,
+      inputs,
+      report: results,
+      programType,
+      currencyMeta,
+      reportCurrency,
+    });
+    addAoaSheet(wb, "Gelirler ( Incomes )", buildGelirlerAoa({ model: model5 }));
 
     // GİDERLER (3Y)
     const gider = inputs.giderler || {};
@@ -1514,181 +2988,117 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       return base * n(factors.y3);
     };
 
-    const giderlerSheet = [
-      ["GİDERLER (İŞLETME) / YIL (USD)"],
-      ["Sıra", "Hesap", "Gider Kalemi", "Toplam (Y1)", "Toplam (Y2)", "Toplam (Y3)"],
-    ];
-
-    let op1 = 0, op2 = 0, op3 = 0;
-    operatingItems.forEach(([key, no, code, label]) => {
-      const a1 = opAmount(key, "y1");
-      const a2 = opAmount(key, "y2");
-      const a3 = opAmount(key, "y3");
-      op1 += a1; op2 += a2; op3 += a3;
-      giderlerSheet.push([no, code, label, a1, a2, a3]);
-    });
-    giderlerSheet.push(["TOPLAM", "", "", op1, op2, op3]);
-    giderlerSheet.push([]);
-
-    // Öğrenim dışı hizmetlere yönelik maliyetler
-    giderlerSheet.push(["GİDERLER (ÖĞRENİM DIŞI HİZMETLERE YÖNELİK SATILAN MAL VE HİZMETLER) / YIL"]);
-    giderlerSheet.push([
-      "Sıra", "Hesap", "Gider Kalemi",
-      "Öğrenci (Y1)", "Birim (Y1)", "Toplam (Y1)",
-      "Öğrenci (Y2)", "Birim (Y2)", "Toplam (Y2)",
-      "Öğrenci (Y3)", "Birim (Y3)", "Toplam (Y3)",
-    ]);
-
-    const serviceItems = [
-      ["yemek", 27, 622, "Yemek (Öğrenci ve Personel öğlen yemeği için yapılan harcamalar (Enerji, gıda,yakıt,elektrik,gaz vs. ve org. gideri))"],
-      ["uniforma", 28, 621, "Üniforma (Öğrenci Üniforma maliyeti (Liste fiyatı değil, maliyet fiyatı))"],
-      ["kitapKirtasiye", 29, 621, "Kitap-Kırtasiye (Öğrencilere dönem başı verdiğimiz materyallerin maliyeti)"],
-      ["ulasimServis", 30, 622, "Ulaşım (Okul Servisi) Öğrencilerimiz için kullanılan servis maliyeti"],
-    ];
-
-    let sv1=0, sv2=0, sv3=0;
-    let svStudents=0;
-    serviceItems.forEach(([key, no, code, label]) => {
-      const row = ogrenimDisi[key] || {};
-      const sc1 = n(row.studentCount);
-      const uc1 = n(row.unitCost);
-      const sc2 = sc1, sc3 = sc1;
-      const uc2 = uc1 * n(factors.y2);
-      const uc3 = uc1 * n(factors.y3);
-      const t1 = sc1*uc1, t2 = sc2*uc2, t3 = sc3*uc3;
-      sv1 += t1; sv2 += t2; sv3 += t3;
-      svStudents += sc1;
-      giderlerSheet.push([no, code, label, sc1, uc1, t1, sc2, uc2, t2, sc3, uc3, t3]);
-    });
-    giderlerSheet.push(["TOPLAM", "", "", svStudents, "", sv1, svStudents, "", sv2, svStudents, "", sv3]);
-    giderlerSheet.push([]);
-
-    // Yurt/Konaklama
-    giderlerSheet.push(["GİDERLER (YURT, KONAKLAMA) / YIL"]);
-    giderlerSheet.push([
-      "Sıra", "Hesap", "Gider Kalemi",
-      "Öğrenci (Y1)", "Birim (Y1)", "Toplam (Y1)",
-      "Öğrenci (Y2)", "Birim (Y2)", "Toplam (Y2)",
-      "Öğrenci (Y3)", "Birim (Y3)", "Toplam (Y3)",
-    ]);
-
-    const dormItems = [
-      ["yurtGiderleri", 31, 622, "Yurt Giderleri (Kampüs giderleri içinde gösterilmeyecek; yurt için yapılan giderler)"],
-      ["digerYurt", 32, 622, "Diğer (Yaz Okulu Giderleri vs)"],
-    ];
-
-    let dm1=0, dm2=0, dm3=0;
-    let dmStudents=0;
-    dormItems.forEach(([key, no, code, label]) => {
-      const row = yurt[key] || {};
-      const sc1 = n(row.studentCount);
-      const uc1 = n(row.unitCost);
-      const sc2 = sc1, sc3 = sc1;
-      const uc2 = uc1 * n(factors.y2);
-      const uc3 = uc1 * n(factors.y3);
-      const t1 = sc1*uc1, t2 = sc2*uc2, t3 = sc3*uc3;
-      dm1 += t1; dm2 += t2; dm3 += t3;
-      dmStudents += sc1;
-      giderlerSheet.push([no, code, label, sc1, uc1, t1, sc2, uc2, t2, sc3, uc3, t3]);
-    });
-    giderlerSheet.push(["TOPLAM", "", "", dmStudents, "", dm1, dmStudents, "", dm2, dmStudents, "", dm3]);
-    giderlerSheet.push([]);
-
-    // Burs/İndirimler (use calculated details if available)
-    const bursNames = [
-      "MAGİS BAŞARI BURSU",
-      "MAARİF YETENEK BURSU",
-      "İHTİYAÇ BURSU",
-      "OKUL BAŞARI BURSU",
-      "TAM EĞİTİM BURSU",
-      "BARINMA BURSU",
-      "TÜRKÇE BAŞARI BURSU",
-      "VAKFIN ULUSLARARASI YÜKÜMLÜLÜKLERİNDEN KAYNAKLI İNDİRİM",
-      "VAKIF ÇALIŞANI İNDİRİMİ",
-      "KARDEŞ İNDİRİMİ",
-      "ERKEN KAYIT İNDİRİMİ",
-      "PEŞİN ÖDEME İNDİRİMİ",
-      "KADEME GEÇİŞ İNDİRİMİ",
-      "TEMSİL İNDİRİMİ",
-      "KURUM İNDİRİMİ",
-      "İSTİSNAİ İNDİRİM",
-      "YEREL MEVZUATIN ŞART KOŞTUĞU İNDİRİM",
-    ];
-
-    const discList = Array.isArray(inputs.discounts) ? inputs.discounts : [];
-    const discByName = new Map(discList.map((d) => [String(d && d.name ? d.name : ""), d]));
-    const tuitionStudents = n(y1?.income?.tuitionStudents || y1?.students?.totalStudents || 0);
-
-    const yDiscDetail = (yr) => new Map(((yr?.income?.discountsDetail) || []).map((d) => [String(d?.name || d?.label || d?.key || ""), d]));
-    const d1 = yDiscDetail(y1);
-    const d2 = yDiscDetail(y2);
-    const d3 = yDiscDetail(y3);
-
-    let bursStudents = 0;
-    let a1=0,a2=0,a3=0;
-    let weightedPctSum = 0;
-
-    giderlerSheet.push(["BURS VE İNDİRİMLER / YIL"]);
-    giderlerSheet.push(["Burs / İndirim", "Burslu Öğrenci", "Ort. %", "Tutar (Y1)", "Tutar (Y2)", "Tutar (Y3)"]);
-
-    bursNames.forEach((name) => {
-      const dIn = discByName.get(name) || { mode: "percent", value: 0, ratio: 0 };
-      const ratio = Math.max(0, Math.min(n(dIn.ratio || 0), 1));
-      const pct = Math.max(0, Math.min(n(dIn.value || 0), 1));
-      const count = tuitionStudents > 0 ? Math.round(tuitionStudents * ratio) : 0;
-
-      const amt1 = money(d1.get(name)?.amount);
-      const amt2 = money(d2.get(name)?.amount);
-      const amt3 = money(d3.get(name)?.amount);
-
-      bursStudents += count;
-      weightedPctSum += count * pct;
-      a1 += amt1; a2 += amt2; a3 += amt3;
-
-      giderlerSheet.push([name, count, pct, amt1, amt2, amt3]);
+    // SHEET #6: Giderler ( Expenses ) (AOA ONLY)
+    // ---------------------------------
+    const model6 = buildGiderlerModel({
+      scenario,
+      inputs,
+      report: results,
+      programType,
+      currencyMeta,
+      reportCurrency,
     });
 
-    const weightedPct = bursStudents > 0 ? weightedPctSum / bursStudents : 0;
+    addAoaSheet(wb, "Giderler ( Expenses )", buildGiderlerAoa({ model: model6 }));
 
-    giderlerSheet.push(["TOPLAM", bursStudents, weightedPct, a1, a2, a3]);
-    giderlerSheet.push([]);
+    // SHEET #7-#9: N.Kadro ( Norm ) (AOA ONLY)
+    // ---------------------------------
+    const baseAcademicYear = String(scenario.academic_year || "").trim();
+    for (let yearIndex = 0; yearIndex < 3; yearIndex += 1) {
+      const yearLabel = academicYearWithOffset(baseAcademicYear, yearIndex);
+      const sheetName = `N.Kadro ( ${yearLabel} )`;
 
-    // Expenses summary
-    giderlerSheet.push(["ÖZET"]);
-    giderlerSheet.push(["", "Y1", "Y2", "Y3"]);
-    giderlerSheet.push(["TOPLAM GİDER", money(y1?.expenses?.totalExpenses), money(y2?.expenses?.totalExpenses), money(y3?.expenses?.totalExpenses)]);
-    giderlerSheet.push(["NET SONUÇ", money(y1?.result?.netResult), money(y2?.result?.netResult), money(y3?.result?.netResult)]);
-    giderlerSheet.push(["KÂR MARJI", n(y1?.kpis?.profitMargin), n(y2?.kpis?.profitMargin), n(y3?.kpis?.profitMargin)]);
+      const model7 = buildNormModel({
+        yearIndex,
+        scenario,
+        inputs,
+        report: results,
+        normConfig,
+      });
 
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(withCurrencyLabels(giderlerSheet)), "Giderler");
+      addAoaSheet(wb, sheetName, buildNormAoa({ model: model7, sheetTitle: sheetName }));
+    }
 
-    // n.kadro (norm insights) - year-1
-    const nk = [["Grade", "Branches", "Weekly Teaching Hours"]];
-    (y1?.norm?.breakdownByGrade || []).forEach((r) => nk.push([r.grade, r.branchCount, r.weeklyTeachingHours]));
-    nk.push(["TOTAL", "", "", y1?.norm?.totalTeachingHours]);
-    nk.push(["Required Teachers", "", "", y1?.norm?.requiredTeachers]);
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(nk), "n.kadro");
+    // SHEET #10: Mali Tablolar (AOA only)
+    // ---------------------------------
+    const model10 = buildMaliTablolarModel({
+      scenario,
+      inputs,
+      report: results,
+      currencyMeta,
+      reportCurrency,
+    });
+    addAoaSheet(wb, "Mali Tablolar", buildMaliTablolarAoa({ model: model10 }));
 
-    // rapor (3Y)
-    const rapor = [
-      ["Metric", "Y1", "Y2", "Y3"],
-      ["Total Students", n(y1?.students?.totalStudents), n(y2?.students?.totalStudents), n(y3?.students?.totalStudents)],
-      ["Utilization", n(y1?.students?.utilizationRate), n(y2?.students?.utilizationRate), n(y3?.students?.utilizationRate)],
-      ["Net Income", money(y1?.income?.netIncome), money(y2?.income?.netIncome), money(y3?.income?.netIncome)],
-      ["Total Expenses", money(y1?.expenses?.totalExpenses), money(y2?.expenses?.totalExpenses), money(y3?.expenses?.totalExpenses)],
-      ["Net Result", money(y1?.result?.netResult), money(y2?.result?.netResult), money(y3?.result?.netResult)],
-      ["Revenue/Student", money(y1?.kpis?.revenuePerStudent), money(y2?.kpis?.revenuePerStudent), money(y3?.kpis?.revenuePerStudent)],
-      ["Cost/Student", money(y1?.kpis?.costPerStudent), money(y2?.kpis?.costPerStudent), money(y3?.kpis?.costPerStudent)],
-      ["Profit Margin", n(y1?.kpis?.profitMargin), n(y2?.kpis?.profitMargin), n(y3?.kpis?.profitMargin)],
-    ];
-    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet(rapor), "rapor");
+    if (exportFormat === "pdf") {
+      for (let col = 1; col <= 27; col += 1) {
+        if (col < 2 || col > 22) {
+          const targetCol = raporWs.getColumn(col);
+          targetCol.hidden = true;
+          targetCol.width = 0.1;
+        }
+      }
+      const targetWidth = 115;
+      let currentWidth = 0;
+      for (let col = 2; col <= 22; col += 1) {
+        const colRef = raporWs.getColumn(col);
+        const width = Number(colRef.width) || 8.43;
+        currentWidth += width;
+      }
+      const scaleFactor = currentWidth > 0 ? Math.max(1, targetWidth / currentWidth) : 1;
+      if (scaleFactor > 1.001) {
+        for (let col = 2; col <= 22; col += 1) {
+          const colRef = raporWs.getColumn(col);
+          const width = Number(colRef.width) || 8.43;
+          colRef.width = width * scaleFactor;
+        }
+      }
+      const printEndRow = raporWs.rowCount || 1;
+      raporWs.pageSetup.printArea = `B1:V${printEndRow}`;
+      raporWs.pageSetup.paperSize = 9; // A4
+      raporWs.pageSetup.margins = {
+        left: 0.7,
+        right: 0.7,
+        top: 0.5,
+        bottom: 0,
+        header: 0,
+        footer: 0,
+      };
+      raporWs.pageSetup.horizontalCentered = false;
+      raporWs.pageSetup.fitToPage = true;
+      raporWs.pageSetup.fitToWidth = 1;
+      raporWs.pageSetup.fitToHeight = 0;
 
-    const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+      const nonRaporSheetIds = wb.worksheets
+        .filter((ws) => ws.name !== "RAPOR")
+        .map((ws) => ws.id);
+      nonRaporSheetIds.forEach((id) => wb.removeWorksheet(id));
+    }
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const rawBuf = await wb.xlsx.writeBuffer();
+    const buf = Buffer.isBuffer(rawBuf) ? rawBuf : Buffer.from(rawBuf);
+
     const baseName = showLocal
       ? `${school.name}-${scenario.academic_year}-${localCode}.xlsx`
       : `${school.name}-${scenario.academic_year}.xlsx`;
+    if (exportFormat === "pdf") {
+      let pdfBuf;
+      try {
+        const pdfBase = path.basename(baseName, path.extname(baseName));
+        pdfBuf = await convertXlsxBufferToPdf(buf, pdfBase);
+      } catch (err) {
+        return res.status(500).json({
+          error: "PDF conversion failed",
+          details: "LibreOffice (soffice) is required and must be available in PATH or SOFFICE_PATH.",
+        });
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      const pdfName = baseName.replace(/\\.xlsx$/i, ".pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=\"${pdfName}\"`);
+      return res.send(pdfBuf);
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename=\"${baseName}\"`);
     return res.send(buf);
   } catch (e) {
