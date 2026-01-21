@@ -165,6 +165,8 @@ export default function TemelBilgilerEditor({
   onDirty,
   currencyCode,
   isScenarioLocal,
+  reportCurrency,
+  currencyMeta,
 }) {
   const tb = useMemo(() => (value && typeof value === "object" ? value : {}), [value]);
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
@@ -288,29 +290,72 @@ export default function TemelBilgilerEditor({
   }, [tb, visibleUcretRows]);
 
   const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
-  const canUsePrevFx = Boolean(isScenarioLocal) && prevFx > 0;
+  const realizedFx = Number(get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0));
+  const hasRealizedFx = realizedFx > 0;
+  const reportCurrencyKey = String(reportCurrency || "usd").toLowerCase();
+  const showLocalPerf = reportCurrencyKey === "local";
+  const showUsdPerf = reportCurrencyKey === "usd";
+  const planFxForLocal = prevFx > 0 ? prevFx : hasRealizedFx ? realizedFx : null;
+  const plannedConversionMissing = showLocalPerf && !planFxForLocal;
+  const actualNeedsRealFx =
+    (isScenarioLocal && showUsdPerf) || (!isScenarioLocal && showLocalPerf);
+  const actualConversionMissing = actualNeedsRealFx && !hasRealizedFx;
+  const localCurrencyLabel = String(currencyMeta?.local_currency_code || currencyCode || "LOCAL").toUpperCase();
+  const shouldShowFxWarning = plannedConversionMissing || actualConversionMissing;
+  const realizedFxRequired = isScenarioLocal && showUsdPerf;
+  const actualPlaceholder = actualConversionMissing ? "—" : undefined;
 
   const plannedPerf = useMemo(() => {
-    // prevReport may be the whole report with years.y1
     const y1 = prevReport?.years?.y1 || prevReport?.y1 || null;
     if (!y1) return null;
 
-    const pm = safeNum(y1?.kpis?.profitMargin) * 100; // ratio -> %
-    const base = {
+    const pm = safeNum(y1?.kpis?.profitMargin) * 100;
+    return {
       ogrenci: safeNum(y1?.students?.totalStudents),
       gelirler: safeNum(y1?.income?.netIncome),
       giderler: safeNum(y1?.expenses?.totalExpenses),
       karZararOrani: pm,
       bursIndirim: safeNum(y1?.income?.totalDiscounts),
     };
-    if (!canUsePrevFx) return base;
-    return {
-      ...base,
-      gelirler: base.gelirler * prevFx,
-      giderler: base.giderler * prevFx,
-      bursIndirim: base.bursIndirim * prevFx,
+  }, [prevReport]);
+
+  const plannedPerfDisplay = useMemo(() => {
+    if (!plannedPerf) return null;
+    const convert = (value) => {
+      if (!showLocalPerf) return value;
+      if (!planFxForLocal) return null;
+      return value * planFxForLocal;
     };
-  }, [prevReport, canUsePrevFx, prevFx]);
+    return {
+      ...plannedPerf,
+      gelirler: convert(plannedPerf.gelirler),
+      giderler: convert(plannedPerf.giderler),
+      bursIndirim: convert(plannedPerf.bursIndirim),
+    };
+  }, [plannedPerf, showLocalPerf, planFxForLocal]);
+
+  const getActualDisplay = (path) => {
+    const stored = safeNum(get(tb, path, 0));
+    if (isScenarioLocal) {
+      if (showLocalPerf) return stored;
+      return hasRealizedFx ? stored / realizedFx : null;
+    }
+    if (showLocalPerf) {
+      return hasRealizedFx ? stored * realizedFx : null;
+    }
+    return stored;
+  };
+
+  const setActualFromDisplay = (path, displayValue) => {
+    const raw = safeNum(displayValue);
+    let stored = raw;
+    if (isScenarioLocal && showUsdPerf) {
+      stored = hasRealizedFx ? raw * realizedFx : raw;
+    } else if (!isScenarioLocal && showLocalPerf) {
+      stored = hasRealizedFx ? raw / realizedFx : raw;
+    }
+    update(path, stored);
+  };
 
   const scholarshipGroups = useMemo(() => {
     const burs = [];
@@ -868,6 +913,29 @@ export default function TemelBilgilerEditor({
               <div className="tb-section-title">G) Rakip Kurumların Analizi</div>
               <div className="tb-muted">A/B/C: aynı kademedeki ortalama.</div>
             </div>
+            <div style={{ padding: "0 16px 12px" }}>
+              <div className="tb-field">
+                <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  Önceki Dönem Ortalama Kur (Gerçekleşen) (1 USD = ? {localCurrencyLabel})
+                  {realizedFxRequired ? <span style={{ color: "#d9534f" }}>*</span> : null}
+                </label>
+                <div className="tb-affix">
+                  <NumberInput
+                    className="input tb-input tb-num"
+                    value={safeNum(get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0))}
+                    onChange={(value) =>
+                      update(["performans", "prevYearRealizedFxUsdToLocal"], safeNum(value))
+                    }
+                  />
+                  <span className="tb-affix-sfx">{localCurrencyLabel}</span>
+                </div>
+                {shouldShowFxWarning ? (
+                  <div className="tb-muted" style={{ color: "#d9534f", marginTop: 6 }}>
+                    Önceki dönem USD karşılaştırması için ortalama kur girilmelidir.
+                  </div>
+                ) : null}
+              </div>
+            </div>
             <div className="tb-table-wrap">
               <table className="table tb-table">
                 <thead>
@@ -952,7 +1020,7 @@ export default function TemelBilgilerEditor({
                     <td className="num">
                       <NumberInput
                         className="input tb-input tb-num"
-                        value={plannedPerf ? plannedPerf.gelirler : ""}
+                        value={plannedPerfDisplay?.gelirler ?? ""}
                         disabled
                       />
                     </td>
@@ -960,8 +1028,17 @@ export default function TemelBilgilerEditor({
                       <NumberInput
 
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "gelirler"])}
-                        value={safeNum(get(tb, ["performans", "gerceklesen", "gelirler"], 0))}
-                        onChange={(value) => update(["performans", "gerceklesen", "gelirler"], safeNum(value))}
+                        value={
+                          getActualDisplay(["performans", "gerceklesen", "gelirler"]) ??
+                          ""
+                        }
+                        placeholder={actualPlaceholder}
+                        onChange={(value) =>
+                          setActualFromDisplay(
+                            ["performans", "gerceklesen", "gelirler"],
+                            value,
+                          )
+                        }
                       />
                     </td>
                   </tr>
@@ -970,7 +1047,7 @@ export default function TemelBilgilerEditor({
                     <td className="num">
                       <NumberInput
                         className="input tb-input tb-num"
-                        value={plannedPerf ? plannedPerf.giderler : ""}
+                        value={plannedPerfDisplay?.giderler ?? ""}
                         disabled
                       />
                     </td>
@@ -978,8 +1055,17 @@ export default function TemelBilgilerEditor({
                       <NumberInput
 
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "giderler"])}
-                        value={safeNum(get(tb, ["performans", "gerceklesen", "giderler"], 0))}
-                        onChange={(value) => update(["performans", "gerceklesen", "giderler"], safeNum(value))}
+                        value={
+                          getActualDisplay(["performans", "gerceklesen", "giderler"]) ??
+                          ""
+                        }
+                        placeholder={actualPlaceholder}
+                        onChange={(value) =>
+                          setActualFromDisplay(
+                            ["performans", "gerceklesen", "giderler"],
+                            value,
+                          )
+                        }
                       />
                     </td>
                   </tr>
@@ -1006,7 +1092,7 @@ export default function TemelBilgilerEditor({
                     <td className="num">
                       <NumberInput
                         className="input tb-input tb-num"
-                        value={plannedPerf ? plannedPerf.bursIndirim : ""}
+                        value={plannedPerfDisplay?.bursIndirim ?? ""}
                         disabled
                       />
                     </td>
@@ -1014,9 +1100,19 @@ export default function TemelBilgilerEditor({
                       <NumberInput
 
                         className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "bursVeIndirimler"])}
-                        value={safeNum(get(tb, ["performans", "gerceklesen", "bursVeIndirimler"], 0))}
+                        value={
+                          getActualDisplay([
+                            "performans",
+                            "gerceklesen",
+                            "bursVeIndirimler",
+                          ]) ?? ""
+                        }
+                        placeholder={actualPlaceholder}
                         onChange={(value) =>
-                          update(["performans", "gerceklesen", "bursVeIndirimler"], safeNum(value))
+                          setActualFromDisplay(
+                            ["performans", "gerceklesen", "bursVeIndirimler"],
+                            value,
+                          )
                         }
                       />
                     </td>

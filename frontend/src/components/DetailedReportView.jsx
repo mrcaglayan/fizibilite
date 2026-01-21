@@ -328,6 +328,7 @@ export default function DetailedReportView(props) {
 
         prevReport,
         prevCurrencyMeta,
+        currencyMeta,
         programType: programTypeProp,
       }),
 
@@ -338,6 +339,7 @@ export default function DetailedReportView(props) {
       report,
       prevReport,
       prevCurrencyMeta,
+      currencyMeta,
       programTypeProp,
     ],
   );
@@ -394,32 +396,51 @@ export default function DetailedReportView(props) {
 
     [displayMoney, displayCurrencyCode],
   );
-  const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
+  const perfMeta = model.performanceMeta || {};
+  const realFx = Number(perfMeta.realized_fx_usd_to_local || 0);
+  const planFx = Number(perfMeta.planned_fx_usd_to_local || 0);
+  const perfLocalCode = perfMeta.local_currency_code || localLabel || "LOCAL";
+  const realFxValid = realFx > 0;
+  const planFxValid = planFx > 0;
+  const showLocalPerf = showLocal;
+  const localPerfFxForPlanned =
+    showLocalPerf && (planFxValid ? planFx : realFxValid ? realFx : null);
+  const localPerfFxForActual = showLocalPerf && realFxValid ? realFx : null;
+  const perfCurrencyCodePlanned = showLocalPerf ? perfLocalCode : currencyCode;
+  const perfCurrencyCodeActual = showLocalPerf ? localLabel : currencyCode;
+  const plannedFxMissing = showLocalPerf && !localPerfFxForPlanned;
+  const actualFxMissing = showLocalPerf && !localPerfFxForActual;
 
-  const prevLocalCode = prevCurrencyMeta?.local_currency_code || "";
-
-  const showPerfLocal =
-    reportCurrency === "local" && prevFx > 0 && prevLocalCode;
-
-  const perfCurrencyCode = showPerfLocal ? prevLocalCode : currencyCode;
-
-  const perfDisplayMoney = useCallback(
-    (v) => {
-      const n = Number(v);
-
-      if (!Number.isFinite(n)) return v;
-
-      return showPerfLocal ? n * prevFx : n;
+  const fmtPerfPlannedMoneyDisplay = useCallback(
+    (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "—";
+      if (showLocalPerf) {
+        if (!localPerfFxForPlanned) return "—";
+        return fmtMoney(n * localPerfFxForPlanned, perfCurrencyCodePlanned);
+      }
+      return fmtMoney(n, perfCurrencyCodePlanned);
     },
-
-    [showPerfLocal, prevFx],
+    [showLocalPerf, localPerfFxForPlanned, perfCurrencyCodePlanned],
   );
 
-  const fmtPerfMoneyDisplay = useCallback(
-    (v) => fmtMoney(perfDisplayMoney(v), perfCurrencyCode),
-
-    [perfDisplayMoney, perfCurrencyCode],
+  const fmtPerfActualMoneyDisplay = useCallback(
+    (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "—";
+      if (showLocalPerf) {
+        if (!localPerfFxForActual) return "—";
+        return fmtMoney(n * localPerfFxForActual, perfCurrencyCodeActual);
+      }
+      return fmtMoney(n, perfCurrencyCodeActual);
+    },
+    [showLocalPerf, localPerfFxForActual, perfCurrencyCodeActual],
   );
+
+  const perfWarningText =
+    showLocalPerf && (plannedFxMissing || actualFxMissing)
+      ? "Önceki dönem USD karşılaştırması için ortalama kur girilmelidir."
+      : null;
   const fmtMoneyKpi = useCallback(
     (value) => {
       const n = Number(value);
@@ -1461,10 +1482,10 @@ export default function DetailedReportView(props) {
 
   const perfRows = useMemo(() => {
     const base = Array.isArray(model.performance) ? model.performance : [];
-    const formatValue = (value, kind) => {
+    const formatValue = (value, kind, formatter) => {
       if (!isFiniteNumber(value)) return "—";
       if (kind === "int") return fmtInt(value);
-      if (kind === "money") return fmtPerfMoneyDisplay(value);
+      if (kind === "money") return formatter(value);
       if (kind === "pct") return fmtPct(value);
       return fmtNumber(value);
     };
@@ -1500,12 +1521,12 @@ export default function DetailedReportView(props) {
               : "number";
       return {
         metric,
-        planned: formatValue(row.planned, kind),
-        actual: formatValue(row.actual, kind),
+        planned: formatValue(row.planned, kind, fmtPerfPlannedMoneyDisplay),
+        actual: formatValue(row.actual, kind, fmtPerfActualMoneyDisplay),
         variance: formatVariance(row.variance),
       };
     });
-  }, [model, fmtPerfMoneyDisplay]);
+  }, [model, fmtPerfPlannedMoneyDisplay, fmtPerfActualMoneyDisplay]);
 
   const competitorRows = useMemo(() => {
     const base = model.competitors || [];
@@ -2521,6 +2542,16 @@ export default function DetailedReportView(props) {
         title="D. GERÇEKLEŞEN VE GERÇEKLEŞMESİ PLANLANAN / PERFORMANS"
         subtitle="Bu bölüm komisyon üyeleri tarafından doldurulacaktır (uygulamada ayrıca bağlanacak)."
       >
+        {perfWarningText ? (
+          <div
+            style={{
+              color: "#d9534f",
+              marginBottom: 6,
+            }}
+          >
+            {perfWarningText}
+          </div>
+        ) : null}
         <SimpleTable
           columns={[
             { key: "metric", label: "" },

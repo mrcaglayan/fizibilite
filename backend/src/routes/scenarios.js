@@ -132,6 +132,11 @@ function safeNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function safeStr(value) {
+  if (value == null) return "";
+  return String(value);
+}
+
 const CURRENCY_CODE_REGEX = /^[A-Z0-9]{2,10}$/;
 
 function normalizeCurrencyCode(code) {
@@ -2860,6 +2865,12 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
       const countFormat = countNumFmt;
       const amountFormat = currencyNumFmt;
+      const prevLocalCodeLabel =
+        safeStr(prevCurrencyMeta?.local_currency_code) || localCode || "LOCAL";
+      const currentLocalCodeLabel =
+        localCode || safeStr(prevCurrencyMeta?.local_currency_code) || "LOCAL";
+      const perfPlannedNumFmt = `#,##0 "${prevLocalCodeLabel}"`;
+      const perfActualNumFmt = `#,##0 "${currentLocalCodeLabel}"`;
       const ratioFormat = percentNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
@@ -2891,8 +2902,16 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         raporWs.mergeCells(rowNum, 19, rowNum, 22);
 
         const label = String(raporWs.getCell(rowNum, 2).value || "").toLowerCase();
-        const plannedFormat = label.includes("ogrenci") ? countFormat : amountFormat;
-        const actualFormat = label.includes("ogrenci") ? countFormat : amountFormat;
+        const plannedFormat = label.includes("ogrenci")
+            ? countFormat
+            : showLocal
+                ? perfPlannedNumFmt
+                : amountFormat;
+        const actualFormat = label.includes("ogrenci")
+            ? countFormat
+            : showLocal
+                ? perfActualNumFmt
+                : amountFormat;
 
         applyRange(rowNum, 2, 6, { alignment: labelAlignment, border: borderAllb });
         applyRange(rowNum, 7, 12, { alignment: valueAlignment, border: borderAllb, numFmt: plannedFormat });

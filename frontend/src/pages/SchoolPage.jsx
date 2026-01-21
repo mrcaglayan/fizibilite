@@ -2526,6 +2526,12 @@ export default function SchoolPage() {
                 programType={programType}
                 currencyCode={inputCurrencyCode}
                 isScenarioLocal={selectedScenario?.input_currency === "LOCAL"}
+                reportCurrency={reportCurrency}
+                currencyMeta={{
+                  input_currency: selectedScenario?.input_currency,
+                  fx_usd_to_local: selectedScenario?.fx_usd_to_local,
+                  local_currency_code: selectedScenario?.local_currency_code,
+                }}
                 onDirty={markDirty}
               />
             </TabProgressHeatmap>

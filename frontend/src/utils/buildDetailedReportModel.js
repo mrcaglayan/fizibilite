@@ -265,6 +265,7 @@ export function buildDetailedReportModel({
   report,
   prevReport,
   prevCurrencyMeta,
+  currencyMeta,
   programType,
 } = {}) {
   const normKey = (k) => String(k || "").trim().toLowerCase();
@@ -281,14 +282,18 @@ export function buildDetailedReportModel({
     return n;
   };
   const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
-  const prevInputCurrency = String(
-    prevCurrencyMeta?.input_currency || scenario?.input_currency || "USD"
-  ).toUpperCase();
-  const prevIsLocal = prevInputCurrency === "LOCAL" && prevFx > 0;
-  const toUsdPrev = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    return prevIsLocal ? n / prevFx : n;
+  const perfRealizedFx = Number(
+    inputs?.temelBilgiler?.performans?.prevYearRealizedFxUsdToLocal || 0,
+  );
+  const perfRealizedFxValid = perfRealizedFx > 0;
+  const plannedFxForLocal = prevFx > 0 ? prevFx : perfRealizedFxValid ? perfRealizedFx : null;
+  const toUsdPerf = (value) => {
+    const raw = numOrNull(value);
+    if (raw == null) return null;
+    if (inputCurrency === "LOCAL") {
+      return perfRealizedFxValid ? raw / perfRealizedFx : null;
+    }
+    return raw;
   };
 
   const headerParts = [
@@ -299,14 +304,12 @@ export function buildDetailedReportModel({
   const headerLabel = headerParts.join(" > ");
 
   const temel = inputs?.temelBilgiler || {};
-  console.log("temel", temel);
   const kademeConfig = normalizeKademeConfig(temel?.kademeler);
   const okulEgitim = temel?.okulEgitimBilgileri || {};
   const ucretArtisOranlari = temel?.ucretArtisOranlari || {};
   const ikMevcut = temel?.ikMevcut || {};
   const performans = temel?.performans?.gerceklesen || {};
   const rakipAnalizi = temel?.rakipAnalizi || {};
-  console.log("rakipAnalizi", rakipAnalizi);
   const inflation = temel?.inflation || {};
   const bursIndirimCounts = temel?.bursIndirimOgrenciSayilari || {};
 
@@ -819,14 +822,10 @@ export function buildDetailedReportModel({
   const plannedMargin = numOrNull(plannedPerf?.kpis?.profitMargin);
   const plannedDiscounts = numOrNull(plannedPerf?.income?.totalDiscounts);
 
-  const toUsdPrevOrNull = (value) => {
-    const raw = numOrNull(value);
-    return raw == null ? null : toUsdPrev(raw);
-  };
   const actualStudents = numOrNull(performans?.ogrenciSayisi);
-  const actualIncome = toUsdPrevOrNull(performans?.gelirler);
-  const actualExpenses = toUsdPrevOrNull(performans?.giderler);
-  const actualDiscounts = toUsdPrevOrNull(performans?.bursVeIndirimler);
+  const actualIncome = toUsdPerf(performans?.gelirler);
+  const actualExpenses = toUsdPerf(performans?.giderler);
+  const actualDiscounts = toUsdPerf(performans?.bursVeIndirimler);
   let actualMargin = numOrNull(performans?.karZararOrani);
   if (actualMargin != null && Math.abs(actualMargin) > 1.5) {
     actualMargin = actualMargin / 100;
@@ -1071,6 +1070,14 @@ export function buildDetailedReportModel({
     }));
   })();
 
+  const localCurrencyCode =
+    currencyMeta?.local_currency_code || prevCurrencyMeta?.local_currency_code || null;
+  const performanceMeta = {
+    realized_fx_usd_to_local: perfRealizedFxValid ? perfRealizedFx : null,
+    planned_fx_usd_to_local: plannedFxForLocal > 0 ? plannedFxForLocal : null,
+    local_currency_code: localCurrencyCode,
+  };
+
   return {
     currencyCode: "USD",
     headerLabel,
@@ -1111,6 +1118,7 @@ export function buildDetailedReportModel({
     discounts,
     discountAnalysis,
     performance: performanceRows,
+    performanceMeta,
     competitors: competitorRows,
     revenuesDetailed,
     revenuesDetailedTotal,

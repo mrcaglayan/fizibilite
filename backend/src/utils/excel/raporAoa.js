@@ -25,23 +25,34 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
         return [["Rapor model empty"]];
     }
 
-    const inputCurrency = String(currencyMeta?.input_currency || "USD").toUpperCase();
     const fx = Number(currencyMeta?.fx_usd_to_local || 0);
     const localCode = safeStr(currencyMeta?.local_currency_code || "LOCAL");
-    const showLocal = reportCurrency === "local" && inputCurrency === "LOCAL" && Number.isFinite(fx) && fx > 0;
-    const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
-    const prevLocalCode = safeStr(prevCurrencyMeta?.local_currency_code || "");
-    const showPerfLocal = reportCurrency === "local" && prevFx > 0 && prevLocalCode;
-
+    const showLocal = reportCurrency === "local" && Number.isFinite(fx) && fx > 0 && localCode;
+    const perfMeta = model.performanceMeta || {};
+    const perfRealFx = Number(perfMeta.realized_fx_usd_to_local || 0);
+    const perfPlanFx = Number(perfMeta.planned_fx_usd_to_local || 0);
+    const perfPlanFxForLocal = perfPlanFx > 0 ? perfPlanFx : perfRealFx > 0 ? perfRealFx : null;
     const money = (v) => {
         const n = safeNumOrNull(v);
         if (n == null) return null;
         return showLocal ? n * fx : n;
     };
-    const perfMoney = (v) => {
+    const perfPlannedMoney = (v) => {
         const n = safeNumOrNull(v);
         if (n == null) return null;
-        return showPerfLocal ? n * prevFx : n;
+        if (showLocal) {
+            if (!perfPlanFxForLocal) return null;
+            return n * perfPlanFxForLocal;
+        }
+        return n;
+    };
+    const perfActualMoney = (v) => {
+        const n = safeNumOrNull(v);
+        if (n == null) return null;
+        if (showLocal) {
+            return perfRealFx > 0 ? n * perfRealFx : null;
+        }
+        return n;
     };
 
     const currencyLabel = showLocal ? localCode : "USD";
@@ -460,12 +471,12 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
         const plannedValue = isStudentRow
             ? safeNumOrNull(r?.planned) ?? safeStr(r?.planned)
             : r?.planned != null && isFiniteNumber(r.planned)
-                ? perfMoney(r.planned)
+                ? perfPlannedMoney(r.planned)
                 : safeNumOrNull(r?.planned) ?? safeStr(r?.planned);
         const actualValue = isStudentRow
             ? safeNumOrNull(r?.actual) ?? safeStr(r?.actual)
             : r?.actual != null && isFiniteNumber(r.actual)
-                ? perfMoney(r.actual)
+                ? perfActualMoney(r.actual)
                 : safeNumOrNull(r?.actual) ?? safeStr(r?.actual);
         const varianceValue = safeNumOrNull(r?.variance) ?? safeStr(r?.variance);
         const row = Array(22).fill(null);

@@ -110,6 +110,16 @@ function safeNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function numOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function positiveNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function get(obj, path, fallback = undefined) {
   let cur = obj;
   for (const k of path) {
@@ -194,7 +204,7 @@ function getScholarshipGroups() {
   ].filter((g) => g.rows.length);
 }
 
-function computePlannedPerf(prevReport, isScenarioLocal, prevCurrencyMeta) {
+function computePlannedPerf(prevReport) {
   const y1 = prevReport?.years?.y1 || prevReport?.y1 || null;
   if (!y1) return null;
 
@@ -207,16 +217,7 @@ function computePlannedPerf(prevReport, isScenarioLocal, prevCurrencyMeta) {
     bursIndirim: safeNum(y1?.income?.totalDiscounts),
   };
 
-  const prevFx = safeNum(prevCurrencyMeta?.fx_usd_to_local);
-  const canUsePrevFx = Boolean(isScenarioLocal) && prevFx > 0;
-  if (!canUsePrevFx) return base;
-
-  return {
-    ...base,
-    gelirler: base.gelirler * prevFx,
-    giderler: base.giderler * prevFx,
-    bursIndirim: base.bursIndirim * prevFx,
-  };
+  return base;
 }
 
 function computeCurrentStudents(inputs) {
@@ -261,6 +262,12 @@ function buildTemelBilgilerModel({
     String(currencyMeta?.input_currency || scenario?.input_currency || "").toUpperCase() === "LOCAL"
       ? String(currencyMeta?.local_currency_code || scenario?.local_currency_code || "").toUpperCase()
       : "USD";
+
+  const inputCurrency = String(currencyMeta?.input_currency || scenario?.input_currency || "USD").toUpperCase();
+  const localCurrencyCode = String(currencyMeta?.local_currency_code || scenario?.local_currency_code || "LOCAL").toUpperCase();
+  const reportCurrencyKey = String(reportCurrency || "usd").toLowerCase();
+  const showUsd = reportCurrencyKey === "usd";
+  const showLocal = reportCurrencyKey === "local";
 
   const baseYear = parseAcademicStartYear(scenario?.academic_year);
 
@@ -311,7 +318,48 @@ function buildTemelBilgilerModel({
 
   const plannedHeadcounts = computePlannedHeadcounts(inputs?.ik);
   const isScenarioLocal = String(scenario?.input_currency || "").toUpperCase() === "LOCAL";
-  const plannedPerf = computePlannedPerf(prevReport, isScenarioLocal, prevCurrencyMeta);
+  const plannedPerf = computePlannedPerf(prevReport);
+  const perfInputs = tb?.performans?.gerceklesen || {};
+  const prevFx = positiveNumber(prevCurrencyMeta?.fx_usd_to_local);
+  const realizedFx = positiveNumber(get(inputs, ["temelBilgiler", "performans", "prevYearRealizedFxUsdToLocal"], 0));
+  const planFxForLocal = prevFx || realizedFx;
+  const needsPlannedConversion = showLocal && !planFxForLocal;
+  const needsActualConversion =
+    (showUsd && inputCurrency === "LOCAL") || (showLocal && inputCurrency === "USD");
+  const actualConversionMissing = needsActualConversion && !realizedFx;
+  const showPerfFxWarning = needsPlannedConversion || actualConversionMissing;
+  const perfWarningMessage = "Önceki dönem USD karşılaştırması için ortalama kur girilmelidir.";
+
+  const toPlannedDisplay = (value) => {
+    const raw = numOrNull(value);
+    if (raw == null) return null;
+    if (showLocal) {
+      if (!planFxForLocal) return null;
+      return raw * planFxForLocal;
+    }
+    return raw;
+  };
+
+  const toActualDisplay = (value) => {
+    const raw = numOrNull(value);
+    if (raw == null) return null;
+    if (showUsd) {
+      if (inputCurrency === "LOCAL") {
+        return realizedFx ? raw / realizedFx : null;
+      }
+      return raw;
+    }
+    if (showLocal) {
+      if (inputCurrency === "USD") {
+        return realizedFx ? raw * realizedFx : null;
+      }
+      return raw;
+    }
+    return raw;
+  };
+
+  const performanceMoneyUnitLabel = showLocal ? localCurrencyCode : "USD";
+  const realizedFxLabel = `Önceki Dönem Ortalama Kur (Gerçekleşen) (1 USD = X ${localCurrencyCode})`;
   const scholarshipGroups = getScholarshipGroups();
   const feeParamRows = buildFeeParamRows(baseYear);
 
@@ -553,43 +601,50 @@ function buildTemelBilgilerModel({
         title: "H) Performans (Önceki Dönem)",
         tables: [
           {
+            title: "Kur Bilgisi",
+            headers: ["Parametre", "Değer"],
+            rows: [[realizedFxLabel, realizedFx || ""]],
+          },
+          {
             title: "Planlanan (Önceki Senaryo) vs Gerçek",
             headers: ["Kalem", "Plan", "Gerçek", "Birim"],
             rows: [
               [
                 "Öğrenci Sayısı",
-                plannedPerf ? plannedPerf.ogrenci : "",
-                safeNum(get(tb, ["performans", "gerceklesen", "ogrenciSayisi"], 0)),
+                plannedPerf ? numOrNull(plannedPerf.ogrenci) : null,
+                safeNum(perfInputs.ogrenciSayisi),
                 "Öğrenci",
               ],
               [
                 "Gelirler",
-                plannedPerf ? plannedPerf.gelirler : "",
-                safeNum(get(tb, ["performans", "gerceklesen", "gelirler"], 0)),
-                currencyCode,
+                plannedPerf ? toPlannedDisplay(plannedPerf.gelirler) : null,
+                toActualDisplay(perfInputs.gelirler),
+                performanceMoneyUnitLabel,
               ],
               [
                 "Giderler",
-                plannedPerf ? plannedPerf.giderler : "",
-                safeNum(get(tb, ["performans", "gerceklesen", "giderler"], 0)),
-                currencyCode,
+                plannedPerf ? toPlannedDisplay(plannedPerf.giderler) : null,
+                toActualDisplay(perfInputs.giderler),
+                performanceMoneyUnitLabel,
               ],
               [
                 "Kar / Zarar Oranı (%)",
-                plannedPerf ? plannedPerf.karZararOrani : "",
-                safeNum(get(tb, ["performans", "gerceklesen", "karZararOrani"], 0)),
+                plannedPerf ? plannedPerf.karZararOrani : null,
+                safeNum(perfInputs.karZararOrani),
                 "%",
               ],
               [
                 "Burs ve İndirimler",
-                plannedPerf ? plannedPerf.bursIndirim : "",
-                safeNum(get(tb, ["performans", "gerceklesen", "bursVeIndirimler"], 0)),
-                currencyCode,
+                plannedPerf ? toPlannedDisplay(plannedPerf.bursIndirim) : null,
+                toActualDisplay(perfInputs.bursVeIndirimler),
+                performanceMoneyUnitLabel,
               ],
+              ...(showPerfFxWarning ? [["Not", perfWarningMessage, "", ""]] : []),
             ],
           },
         ],
       },
+
       {
         title: "I) Değerlendirme",
         tables: [
