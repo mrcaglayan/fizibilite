@@ -886,7 +886,7 @@ function buildDetailedReportModel({
     })
   );
 
-  const plannedPerf = prevReport?.years?.y1 || {};
+  const plannedPerf = prevReport?.years?.y1 || prevReport || {};
   const plannedStudentsPerf = numOrNull(plannedPerf?.students?.totalStudents);
   const plannedIncome = numOrNull(plannedPerf?.income?.netIncome);
   const plannedExpenses = numOrNull(plannedPerf?.expenses?.totalExpenses);

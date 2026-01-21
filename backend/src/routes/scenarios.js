@@ -1356,6 +1356,16 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         console.warn("[export-xlsx] prevReport compute failed", err);
       }
     }
+    if (!prevReport && prevScenarioBundle?.resultsJson) {
+      try {
+        prevReport =
+          typeof prevScenarioBundle.resultsJson === "string"
+            ? JSON.parse(prevScenarioBundle.resultsJson)
+            : prevScenarioBundle.resultsJson;
+      } catch (err) {
+        console.warn("[export-xlsx] prevReport parse failed", err);
+      }
+    }
 
     // --- Detaylı Rapor model builder (Sheet #1: "Rapor") ---
     const currencyMeta = {
@@ -1538,7 +1548,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         extension: "png",
       });
       raporWs.addImage(imageId2, {
-        tl: { col: 10, row: 4 },
+        tl: { col: 12, row: 4 },
         ext: { width: 185, height: 191 },
       });
     }
@@ -1556,7 +1566,9 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const existing = raporTitleCell.value
       ? String(raporTitleCell.value).toUpperCase()
       : "";
-    raporTitleCell.value = `${existing} OKUL ÜCRETİ`.trim();
+    const countryName = school?.country_name ? String(school.country_name).toUpperCase() : "";
+    const countrySuffix = countryName ? `${countryName} OKUL ÜCRETİ` : "OKUL ÜCRETİ";
+    raporTitleCell.value = `${existing} ${countrySuffix}`.trim();
 
     raporWs.getCell("V27").value = "KAMPÜS/OKUL";
     raporWs.getCell("V27").alignment = { vertical: "bottom", horizontal: "right" };
@@ -1622,10 +1634,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       name: "Times New Roman",
     };
 
-    raporWs.mergeCells("K44:P44");
+    const dateRow = 58;
+    raporWs.mergeCells(`K${dateRow}:P${dateRow}`);
 
     const exportDate = new Date();
-    const cell = raporWs.getCell("K44");
+    const cell = raporWs.getCell(`K${dateRow}`);
     cell.value = exportDate.toLocaleDateString("tr-TR");
     cell.alignment = { vertical: "middle", horizontal: "center" };
     cell.font = { ...(cell.font || {}), bold: true };
@@ -1657,6 +1670,10 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const GREY = "FFD9D9D9";
     const LIGHT_BLUE = "FFD9E1F2"; // Accent 3, lighter 80%
     const TEXT_BLUE = "FF1F4E79";
+    const currencyLabel = showLocal ? localCode : "USD";
+    const currencyNumFmt = `#,##0 "${currencyLabel}"`;
+    const percentNumFmt = "0.00%";
+    const countNumFmt = "#,##0";
 
     const borderThin = {
       top: { style: "thin" },
@@ -1742,6 +1759,20 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const tuitionDataRowCount = Array.isArray(model.tuitionTable) ? model.tuitionTable.length : 0;
     const tuitionEndRow = tuitionStartRow + Math.max(0, tuitionDataRowCount);
     const tuitionLastRowFill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
+    const applyTableBFormats = (rowNum) => {
+      const applyFmt = (startCol, endCol, fmt) => {
+        for (let col = startCol; col <= endCol; col += 1) {
+          raporWs.getCell(rowNum, col).numFmt = fmt;
+        }
+      };
+      applyFmt(9, 10, currencyNumFmt);
+      applyFmt(11, 12, currencyNumFmt);
+      applyFmt(13, 14, currencyNumFmt);
+      applyFmt(15, 16, currencyNumFmt);
+      applyFmt(17, 18, currencyNumFmt);
+      applyFmt(19, 20, percentNumFmt);
+      applyFmt(21, 22, currencyNumFmt);
+    };
 
     for (let row = tuitionStartRow; row <= tuitionEndRow; row += 1) {
       const isHeaderRow = row === tuitionStartRow;
@@ -1771,12 +1802,22 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
           }
         }
       }
+      if (!isHeaderRow) {
+        applyTableBFormats(row);
+      }
     }
     for (let row = tuitionStartRow; row <= tuitionEndRow; row += 1) {
       raporWs.getRow(row).height = 30; // ~40px target for Table B header rows
     }
 
     let raporRowOffset = 0;
+    const pdfPageBreaks = {
+      tableA: 59,
+      capacity: null,
+      uncollectable: null,
+      localRegulation: null,
+      currentFee: null,
+    };
 
     // TABLE C. OKUL UCRETI HESAPLAMA PARAMETRELERI (styled, dynamic rows)
     const paramTitleIndex = raporAoa.findIndex(
@@ -1813,6 +1854,29 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         if (valueType === "percent") return toNumberOrNull(raw) ?? raw ?? null;
         const num = toNumberOrNull(raw);
         return num ?? (raw ?? null);
+      };
+      const normalizeParamLabel = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const paramCurrencyLabels = new Set([
+        "gelir planlamasi",
+        "gider planlamasi",
+        "gelir - gider farki",
+        "burs ve indirim giderleri (fizibilite-g71)",
+        "ogrenci basina maliyet (tum giderler (parametre 4 / planlanan ogrenci sayisi))",
+        "mevcut egitim sezonu ucreti (ortalama)",
+        "nihai ucret",
+      ]);
+      const paramPercentLabels = new Set([
+        "planlanan donem kapasite kullanim orani (%)",
+        "tahsil edilemeyecek gelirler (onceki donemin tahsil edilemeyen yuzdelik rakami)",
+        "giderlerin sapma yuzdeligi (%... olarak hesaplanabilir)",
+      ]);
+      const resolveParamNumFmt = (param) => {
+        const valueType = String(param?.valueType || "").toLowerCase();
+        const label = normalizeParamLabel(param?.desc);
+        if (paramPercentLabels.has(label) || valueType === "percent") return percentNumFmt;
+        if (paramCurrencyLabels.has(label) || valueType === "currency") return currencyNumFmt;
+        if (valueType === "number") return countNumFmt;
+        return null;
       };
 
       const findInflationIndex = parameters.findIndex((p) =>
@@ -1914,6 +1978,12 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
           descCell.font = { ...(descCell.font || {}), bold: true, italic: true };
           dataCell.font = { ...(dataCell.font || {}), bold: true, italic: true };
         }
+        const numFmt = resolveParamNumFmt(param);
+        if (numFmt) {
+          for (let col = 21; col <= 22; col += 1) {
+            raporWs.getCell(rowNum, col).numFmt = numFmt;
+          }
+        }
 
         renderBorders(rowNum, 2, 3);
         renderBorders(rowNum, 4, 20);
@@ -1953,6 +2023,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
           const val = inflationYears[idx]?.value;
           cell.value = val == null ? null : val;
           cell.alignment = { vertical: "middle", horizontal: "center" };
+          cell.numFmt = percentNumFmt;
         });
 
         // Borders for both rows
@@ -1986,6 +2057,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     );
     if (capTitleIndex >= 0) {
       const capTitleRow = capTitleIndex + 1 + raporRowOffset;
+      pdfPageBreaks.capacity = capTitleRow;
       const capTitleValue = raporWs.getCell(capTitleRow, 1).value ?? raporAoa[capTitleIndex]?.[0] ?? "";
       raporWs.mergeCells(capTitleRow, 2, capTitleRow, 22);
       const capTitleCell = raporWs.getCell(capTitleRow, 2);
@@ -2199,8 +2271,8 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      const amountFormat = "#,##0.00";
-      const ratioFormat = "0.00%";
+      const amountFormat = currencyNumFmt;
+      const ratioFormat = percentNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
@@ -2291,8 +2363,8 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      const amountFormat = "#,##0.00";
-      const ratioFormat = "0.00%";
+      const amountFormat = currencyNumFmt;
+      const ratioFormat = percentNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
@@ -2340,6 +2412,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     );
     if (uncollectableTitleIndex >= 0) {
       const titleRow = uncollectableTitleIndex + 1 + raporRowOffset;
+      pdfPageBreaks.uncollectable = titleRow;
       const bodyRow = titleRow + 1;
 
       const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[uncollectableTitleIndex]?.[0] ?? "";
@@ -2449,7 +2522,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2462,9 +2535,9 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const centerAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
       const rightAlignment = { vertical: "middle", horizontal: "right", wrapText: true };
-      const countFormat = "#,##0";
-      const amountFormat = "#,##0.00";
-      const ratioFormat = "0.00%";
+      const countFormat = countNumFmt;
+      const amountFormat = currencyNumFmt;
+      const ratioFormat = percentNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
@@ -2539,6 +2612,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       };
 
       styleGroupHeaderRow(bursGroupRow);
+      raporWs.getRow(bursGroupRow).height = 26;
       styleSubHeaderRow(bursSubRow);
       if (bursCount > 0) {
         for (let row = bursDataStart; row <= bursDataEnd; row += 1) {
@@ -2553,6 +2627,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       }
 
       styleGroupHeaderRow(indirimGroupRow);
+      raporWs.getRow(indirimGroupRow).height = 26;
       styleSubHeaderRow(indirimSubRow);
       if (indirimCount > 0) {
         for (let row = indirimDataStart; row <= indirimDataEnd; row += 1) {
@@ -2589,7 +2664,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2609,7 +2684,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      const amountFormat = "#,##0.00";
+      const amountFormat = currencyNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
@@ -2659,6 +2734,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     );
     if (mevzuatTitleIndex >= 0) {
       const titleRow = mevzuatTitleIndex + 1 + raporRowOffset;
+      pdfPageBreaks.localRegulation = titleRow;
       const bodyRow = titleRow + 1;
 
       const titleValue = raporWs.getCell(titleRow, 1).value ?? raporAoa[mevzuatTitleIndex]?.[0] ?? "";
@@ -2698,6 +2774,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     );
     if (currentFeeTitleIndex >= 0) {
       const titleRow = currentFeeTitleIndex + 1 + raporRowOffset;
+      pdfPageBreaks.currentFee = titleRow;
       const bodyRow = titleRow + 1;
       const noteRow = bodyRow + 1;
 
@@ -2764,7 +2841,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2776,9 +2853,9 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      const countFormat = "#,##0";
-      const amountFormat = "#,##0.00";
-      const ratioFormat = "0.00%";
+      const countFormat = countNumFmt;
+      const amountFormat = currencyNumFmt;
+      const ratioFormat = percentNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
@@ -2844,7 +2921,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 13,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2882,7 +2959,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -3044,6 +3121,24 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     addAoaSheet(wb, "Mali Tablolar", buildMaliTablolarAoa({ model: model10 }));
 
     if (exportFormat === "pdf") {
+      const parsePositiveInt = (value) => {
+        const n = Number.parseInt(value, 10);
+        return Number.isFinite(n) && n > 0 ? n : null;
+      };
+      const requestedStartRow = parsePositiveInt(req.query?.pdfStartRow);
+      const requestedEndRow = parsePositiveInt(req.query?.pdfEndRow);
+      const pageBreakColumns = { left: 2, right: 22 };
+      const tableABreakRow = pdfPageBreaks.tableA ? Math.max(1, pdfPageBreaks.tableA - 1) : null;
+      const finalSectionRow = pdfPageBreaks.localRegulation ?? pdfPageBreaks.currentFee;
+      const pageBreakRows = [
+        tableABreakRow,
+        pdfPageBreaks.uncollectable,
+        finalSectionRow,
+      ].filter((row) => Number.isFinite(row) && row > 1);
+      pageBreakRows.forEach((row) => {
+        raporWs.getRow(row).addPageBreak(pageBreakColumns.left, pageBreakColumns.right);
+      });
+
       for (let col = 1; col <= 27; col += 1) {
         if (col < 2 || col > 22) {
           const targetCol = raporWs.getColumn(col);
@@ -3067,7 +3162,12 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         }
       }
       const printEndRow = raporWs.rowCount || 1;
-      raporWs.pageSetup.printArea = `B1:V${printEndRow}`;
+      const startRow = Math.min(printEndRow, Math.max(1, requestedStartRow || 1));
+      const endRow = Math.min(printEndRow, requestedEndRow || printEndRow);
+      if (endRow < startRow) {
+        return res.status(400).json({ error: "Invalid pdfStartRow/pdfEndRow range." });
+      }
+      raporWs.pageSetup.printArea = `B${startRow}:V${endRow}`;
       raporWs.pageSetup.paperSize = 9; // A4
       raporWs.pageSetup.margins = {
         left: 0.7,

@@ -440,6 +440,7 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta } = {}) {
     perfHeaderRow[12] = `${periodPrefix} Gerceklesen`;
     perfHeaderRow[18] = "Sapma Yuzdesi";
     aoa.push(perfHeaderRow);
+    console.log("perfRows:", perfRows);
 
     perfRows.forEach((r) => {
         const label = safeStr(r?.metric || "");
