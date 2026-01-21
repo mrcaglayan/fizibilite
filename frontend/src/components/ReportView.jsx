@@ -40,12 +40,26 @@ export default function ReportView({ results, currencyMeta, reportCurrency = "us
     currencyMeta?.input_currency === "LOCAL" && fx > 0 && currencyMeta?.local_currency_code;
   const showLocal = reportCurrency === "local" && canShowLocal;
   const localLabel = currencyMeta?.local_currency_code || "LOCAL";
+  const displayCurrencyCode = showLocal ? localLabel : "USD";
   const money = (v) => {
     const n = Number(v);
     if (!Number.isFinite(n)) return v;
     return showLocal ? n * fx : n;
   };
-  const fmtMoney = (v) => fmt(money(v));
+  const fmtCurrency = (v, currency) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "-";
+    try {
+      return n.toLocaleString(undefined, {
+        style: "currency",
+        currency: String(currency || "").trim(),
+        maximumFractionDigits: 0,
+      });
+    } catch {
+      return fmt(n);
+    }
+  };
+  const fmtMoney = (v) => fmtCurrency(money(v), displayCurrencyCode);
 
   const yOf = (ky) => years?.[ky] || {};
   const pnlOf = (ky) => yOf(ky)?.pnl || {};

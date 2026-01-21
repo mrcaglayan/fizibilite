@@ -69,7 +69,7 @@ async function getPrevScenario({ pool, schoolId, academicYear }) {
     const currentStart = extractAcademicStartYear(academicYear);
     if (!currentStart) return null;
     const [allRows] = await pool.query(
-      "SELECT id, academic_year FROM school_scenarios WHERE school_id=?",
+      "SELECT id, academic_year, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE school_id=?",
       [sid]
     );
     const candidates = Array.isArray(allRows)

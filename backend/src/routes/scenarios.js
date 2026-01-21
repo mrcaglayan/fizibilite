@@ -1498,7 +1498,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       aoa.forEach((row) => ws.addRow(Array.isArray(row) ? row : [row]));
       return ws;
     };
-    const raporAoa = buildRaporAoa({ model, reportCurrency, currencyMeta });
+    const raporAoa = buildRaporAoa({ model, reportCurrency, currencyMeta, prevCurrencyMeta });
     const raporWs = addAoaSheet(wb, "RAPOR", raporAoa);
     // ✅ Set column widths (A and B for example)
     raporWs.getColumn(1).width = 16.15; // A
@@ -1672,6 +1672,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const TEXT_BLUE = "FF1F4E79";
     const currencyLabel = showLocal ? localCode : "USD";
     const currencyNumFmt = `#,##0 "${currencyLabel}"`;
+    const prevFxRate = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
+    const prevLocalCode = prevCurrencyMeta?.local_currency_code;
+    const showPerfLocal = reportCurrency === "local" && prevFxRate > 0 && prevLocalCode;
+    const perfCurrencyLabel = showPerfLocal ? prevLocalCode : "USD";
+    const perfCurrencyNumFmt = `#,##0 "${perfCurrencyLabel}"`;
     const percentNumFmt = "0.00%";
     const countNumFmt = "#,##0";
 
@@ -2271,7 +2276,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      const amountFormat = currencyNumFmt;
+      const amountFormat = perfCurrencyNumFmt;
       const ratioFormat = percentNumFmt;
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {

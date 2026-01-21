@@ -359,8 +359,10 @@ function buildDetailedReportModel({
     return n;
   };
   const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
-  const prevIsLocal =
-    String(scenario?.input_currency || "").toUpperCase() === "LOCAL" && prevFx > 0;
+  const prevInputCurrency = String(
+    prevCurrencyMeta?.input_currency || scenario?.input_currency || "USD"
+  ).toUpperCase();
+  const prevIsLocal = prevInputCurrency === "LOCAL" && prevFx > 0;
   const toUsdPrev = (value) => {
     const n = Number(value);
     if (!Number.isFinite(n)) return 0;

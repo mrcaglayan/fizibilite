@@ -210,6 +210,14 @@ export default function SchoolPage() {
     [schoolId, selectedScenarioId]
   );
   const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
+  const reportTabSuffix = useMemo(() => {
+    if (!selectedScenario) return "";
+    const inputCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
+    const localCode = String(selectedScenario?.local_currency_code || "LOCAL").toUpperCase();
+    const canShowLocal = inputCurrency === "LOCAL" && localCode;
+    const currencyCode = reportCurrency === "local" && canShowLocal ? localCode : "USD";
+    return ` (${currencyCode})`;
+  }, [selectedScenario, reportCurrency]);
   const [tab, setTab] = useScenarioUiString("school.activeTab", "scenarios", { scope: uiScopeKey });
   const [detailedReportMode, setDetailedReportMode] = useScenarioUiString("school.detailedReportMode", "detailed", { scope: uiScopeKey });
   useEffect(() => {
@@ -2306,6 +2314,10 @@ export default function SchoolPage() {
             {TABS.map((t) => {
               const dirty = isTabDirty(t.key);
               const active = tab === t.key;
+              const label =
+                t.key === "detailedReport" || t.key === "report"
+                  ? `${t.label}${reportTabSuffix}`
+                  : t.label;
 
 
               const showBadge = showScenarioProgress && !["scenarios", "detailedReport", "report"].includes(t.key);
@@ -2330,7 +2342,7 @@ export default function SchoolPage() {
                   style={tabStyle}
                   onClick={() => requestTabChange(t.key)}
                 >
-                  <span className="school-tab-label">{t.label}</span>
+                  <span className="school-tab-label">{label}</span>
                   {showBadge ? <TabBadge done={tabProgress.done} /> : null}
                   {dirty ? <span className="school-tab-dot" title="Kaydedilmemis degisiklik" /> : null}
                 </button>
