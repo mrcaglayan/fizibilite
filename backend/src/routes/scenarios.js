@@ -1543,6 +1543,16 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       });
     }
 
+    raporWs.mergeCells("J21:P23");
+    const raporTitleCell = raporWs.getCell("J21");
+    raporTitleCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    raporTitleCell.font = {
+      ...(raporTitleCell.font || {}),
+      bold: true,
+      size: 20,
+      name: "Times New Roman",
+    };
+
     const existing = raporTitleCell.value
       ? String(raporTitleCell.value).toUpperCase()
       : "";
