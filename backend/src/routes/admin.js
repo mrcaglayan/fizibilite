@@ -162,6 +162,75 @@ router.put("/progress-requirements", async (req, res) => {
 });
 
 /**
+ * PUT /admin/progress-requirements/bulk
+ * Body: { countryIds: number[], config }
+ */
+router.put("/progress-requirements/bulk", async (req, res) => {
+  try {
+    const rawIds = req.body?.countryIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      return res.status(400).json({ error: "countryIds must be a non-empty array" });
+    }
+
+    const uniqueIds = Array.from(
+      new Set(
+        rawIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+    );
+
+    if (!uniqueIds.length) {
+      return res.status(400).json({ error: "No valid countryIds provided" });
+    }
+
+    if (uniqueIds.length > 500) {
+      return res.status(400).json({ error: "Too many countryIds (max 500)" });
+    }
+
+    const config = req.body?.config;
+    if (!isPlainObject(config) || !isPlainObject(config.sections)) {
+      return res.status(400).json({ error: "Invalid config payload" });
+    }
+
+    const pool = getPool();
+    const conn = await pool.getConnection();
+    const configJson = JSON.stringify(config);
+    try {
+      await conn.beginTransaction();
+      for (const countryId of uniqueIds) {
+        await conn.query(
+          `INSERT INTO progress_requirements (country_id, config_json, updated_by)
+           VALUES (:country_id, :config_json, :updated_by)
+           ON DUPLICATE KEY UPDATE
+             config_json=VALUES(config_json),
+             updated_by=VALUES(updated_by)`,
+          {
+            country_id: countryId,
+            config_json: configJson,
+            updated_by: req.user.id,
+          }
+        );
+      }
+      await conn.commit();
+    } catch (err) {
+      try {
+        await conn.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    return res.json({ updatedCount: uniqueIds.length, countryIds: uniqueIds });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
  * GET /admin/users
  * Query: unassigned=1 (optional)
  */

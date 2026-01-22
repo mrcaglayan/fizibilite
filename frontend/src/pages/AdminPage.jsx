@@ -95,6 +95,18 @@ const getSchoolStatusMeta = (status) => {
   return { label: "Active", className: "is-ok" };
 };
 
+const getDynamicHint = (sectionId, field) => {
+  if (!field) return null;
+  const id = String(field.id || "");
+  const label = String(field.label || "");
+  if (sectionId === "gradesPlan.plan") {
+    if (id.startsWith("gradesPlan.") || label.includes("Plan ")) return "grade";
+  }
+  if (sectionId === "ik.localStaff" && id.startsWith("ik.headcount.")) return "type";
+  if (sectionId === "gelirler.unitFee" && id.startsWith("gelirler.tuition.")) return "type";
+  return null;
+};
+
 export default function AdminPage() {
   const auth = useAuth();
   const [activeTab, setActiveTab] = useState("users");
@@ -140,6 +152,7 @@ export default function AdminPage() {
   const [progressTargetIds, setProgressTargetIds] = useState(() => new Set());
   const [progressCountryListSearch, setProgressCountryListSearch] = useState("");
   const [progressBulkSaving, setProgressBulkSaving] = useState(false);
+  const [showOnlySelectedBySection, setShowOnlySelectedBySection] = useState({});
   const [expandedProgressTabs, setExpandedProgressTabs] = useState(new Set());
   const [expandedProgressSections, setExpandedProgressSections] = useState(new Set());
 
@@ -1948,6 +1961,20 @@ export default function AdminPage() {
                               const selectedCount = allFields.filter(
                                 (field) => sectionConfig.selectedFields?.[field.id] !== false
                               ).length;
+                              const totalCount = allFields.length;
+                              const showOnlySelected = Boolean(showOnlySelectedBySection[section.id]);
+                              const visibleFields = showOnlySelected
+                                ? filteredFields.filter((field) => sectionConfig.selectedFields?.[field.id] !== false)
+                                : filteredFields;
+                              const minValue = sectionMode === "MIN" ? sectionMin : null;
+                              const minTooHigh = sectionMode === "MIN" && minValue > selectedCount;
+                              const ruleSummary =
+                                sectionMode === "ALL"
+                                  ? `✅ Rule: Must complete ALL selected fields (${selectedCount} selected)`
+                                  : minTooHigh
+                                    ? `⚠️ MIN (${minValue}) is greater than selected (${selectedCount}). It will behave like ALL.`
+                                    : `✅ Rule: Must complete AT LEAST ${minValue} of ${selectedCount} selected fields`;
+                              const requiredCount = sectionMode === "MIN" ? minValue : selectedCount;
 
                               return (
                                 <div key={section.id} style={{ borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
@@ -1970,6 +1997,19 @@ export default function AdminPage() {
                                     </div>
 
                                     <div className="row">
+                                      <label className="small">
+                                        <input
+                                          type="checkbox"
+                                          checked={showOnlySelected}
+                                          onChange={() =>
+                                            setShowOnlySelectedBySection((prev) => ({
+                                              ...prev,
+                                              [section.id]: !prev?.[section.id],
+                                            }))
+                                          }
+                                        />{" "}
+                                        Show only selected
+                                      </label>
                                       <label className="small">
                                         <input
                                           type="checkbox"
@@ -2011,26 +2051,60 @@ export default function AdminPage() {
                                       </button>
                                     </div>
                                   </div>
+                                  <div className="small" style={{ marginTop: 6 }}>
+                                    {ruleSummary}
+                                  </div>
+                                  <div className="small" style={{ marginTop: 4, color: "#6b7280" }}>
+                                    Selected: {selectedCount}/{totalCount} · Mode: {sectionMode} · Required: {requiredCount}
+                                  </div>
 
                                   {sectionExpanded ? (
                                     <div style={{ marginTop: 8 }}>
-                                      {!filteredFields.length ? (
+                                      {!visibleFields.length ? (
                                         <div className="small">No fields available for this section.</div>
                                       ) : (
                                         <div className="grid2" style={{ gap: 8 }}>
-                                          {filteredFields.map((field) => {
+                                          {visibleFields.map((field) => {
                                             const checked = sectionConfig.selectedFields?.[field.id] !== false;
+                                            const dynamicHint = getDynamicHint(section.id, field);
                                             return (
-                                              <label key={field.id} className="small" style={{ display: "flex", gap: 8 }}>
-                                                <input
-                                                  type="checkbox"
-                                                  checked={checked}
-                                                  onChange={(e) =>
-                                                    setProgressFieldSelected(section.id, field.id, e.target.checked)
-                                                  }
-                                                  disabled={!sectionEnabled}
-                                                />
-                                                <span>{field.label || field.id}</span>
+                                              <label
+                                                key={field.id}
+                                                className="small"
+                                                style={{
+                                                  display: "flex",
+                                                  gap: 8,
+                                                  alignItems: "center",
+                                                  justifyContent: "space-between",
+                                                  width: "100%",
+                                                }}
+                                              >
+                                                <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={(e) =>
+                                                      setProgressFieldSelected(section.id, field.id, e.target.checked)
+                                                    }
+                                                    disabled={!sectionEnabled}
+                                                  />
+                                                  <span>{field.label || field.id}</span>
+                                                </span>
+                                                {dynamicHint ? (
+                                                  <span
+                                                    style={{
+                                                      padding: "2px 8px",
+                                                      borderRadius: 999,
+                                                      background: "#eef2f7",
+                                                      color: "#374151",
+                                                      fontSize: 11,
+                                                      lineHeight: 1.4,
+                                                      whiteSpace: "nowrap",
+                                                    }}
+                                                  >
+                                                    Dynamic: {dynamicHint}
+                                                  </span>
+                                                ) : null}
                                               </label>
                                             );
                                           })}

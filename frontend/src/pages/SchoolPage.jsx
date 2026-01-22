@@ -361,14 +361,17 @@ export default function SchoolPage() {
     selectedScenario?.input_currency === "LOCAL"
       ? (selectedScenario.local_currency_code || "LOCAL")
       : "USD";
+  const isLocalScenario = selectedScenario?.input_currency === "LOCAL";
+  const prevRealFxValue = Number(inputs?.temelBilgiler?.performans?.prevYearRealizedFxUsdToLocal || 0);
+  const prevRealFxMissing = isLocalScenario && !(Number.isFinite(prevRealFxValue) && prevRealFxValue > 0);
 
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
   const programType = useMemo(() => getProgramType(inputs, selectedScenario), [inputs, selectedScenario]);
 
   const scenarioProgress = useMemo(
-    () => computeScenarioProgress({ inputs, norm, config: progressConfig }),
-    [inputs, norm, progressConfig]
+    () => computeScenarioProgress({ inputs, norm, config: progressConfig, scenario: selectedScenario }),
+    [inputs, norm, progressConfig, selectedScenario]
   );
   const progMap = useMemo(
     () => Object.fromEntries((scenarioProgress?.tabs || []).map((t) => [t.key, t])),
@@ -1276,10 +1279,10 @@ export default function SchoolPage() {
   }
 
 
-  function showBlockingToast(message) {
+  function showBlockingToast(message, toastId = "blocking-toast") {
     // Small bottom-right notification (does not affect page layout)
     toast.warn(message, {
-      toastId: "norm-y2y3-missing",
+      toastId,
       position: "bottom-right",
       autoClose: false,
       closeOnClick: false,
@@ -1311,15 +1314,31 @@ export default function SchoolPage() {
 
     // Do NOT set page-level err here (it breaks layout). Use toast only.
     setErr("");
-    showBlockingToast(msg);
+    showBlockingToast(msg, "norm-y2y3-missing");
 
     if (tab !== "norm") setTab("norm");
+    return false;
+  }
+
+  function ensurePrevRealFxForLocal(actionLabel = "Islem") {
+    if (!inputs) return true;
+    if (!isLocalScenario) return true;
+    if (!prevRealFxMissing) return true;
+
+    const msg =
+      `${actionLabel} yapilamaz: Temel Bilgiler > Performans alanindaki ` +
+      `"Onceki Donem Ortalama Kur (Gerceklesen)" girilmelidir.`;
+
+    setErr("");
+    showBlockingToast(msg, "prev-realized-fx-missing");
+    if (tab !== "basics") setTab("basics");
     return false;
   }
 
 
   async function calculate(options = {}) {
     if (!selectedScenarioId) return;
+    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
     if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return;
     setCalculating(true);
     setErr("");
@@ -1337,6 +1356,7 @@ export default function SchoolPage() {
 
   async function submitScenarioForApproval(scenarioId) {
     if (!scenarioId || scenarioId !== selectedScenarioId) return;
+    if (!ensurePrevRealFxForLocal("Onaya gonderme")) return;
     if (!ensurePlanningStudentsForY2Y3("Onaya gonderme")) return;
     if (submittingScenarioId) return;
 
@@ -1834,6 +1854,7 @@ export default function SchoolPage() {
                   className="topbar-btn is-primary"
                   onClick={async () => {
                     if (inputsSaving || calculating) return;
+                    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
                     if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
                     if (inputsDirty) {
                       const ok = await saveInputs();

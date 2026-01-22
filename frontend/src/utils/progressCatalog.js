@@ -1,38 +1,14 @@
 import { getGradeOptions, normalizeKademeConfig } from "./kademe";
-import { getProgramType, getVariantKeysForProgramType } from "./programType";
 
 const YEAR_KEYS = ["y1", "y2", "y3"];
 
 const KADEME_BASE_KEYS = ["okulOncesi", "ilkokul", "ortaokul", "lise"];
 
-const KADEME_ROWS = [
-  { key: "okulOncesi", label: "Okul Oncesi" },
-  { key: "ilkokul", label: "Ilkokul" },
-  { key: "ortaokul", label: "Ortaokul" },
-  { key: "lise", label: "Lise" },
-];
-
-const KADEME_BASE_BY_ROW = {
-  okulOncesi: "okulOncesi",
-  ilkokulYerel: "ilkokul",
-  ilkokulInt: "ilkokul",
-  ortaokulYerel: "ortaokul",
-  ortaokulInt: "ortaokul",
-  liseYerel: "lise",
-  liseInt: "lise",
-  ilkokul: "ilkokul",
-  ortaokul: "ortaokul",
-  lise: "lise",
-};
-
 const TUITION_ROWS = [
-  { key: "okulOncesi", label: "Okul Oncesi" },
-  { key: "ilkokulYerel", label: "Ilkokul-Yerel" },
-  { key: "ilkokulInt", label: "Ilkokul-Int" },
-  { key: "ortaokulYerel", label: "Ortaokul-Yerel" },
-  { key: "ortaokulInt", label: "Ortaokul-Int" },
-  { key: "liseYerel", label: "Lise-Yerel" },
-  { key: "liseInt", label: "Lise-Int" },
+  { idKey: "okulOncesi", label: "Okul Oncesi", baseKey: "okulOncesi", yerelKey: "okulOncesi", intKey: "okulOncesi" },
+  { idKey: "ilkokulYerel", label: "Ilkokul", baseKey: "ilkokul", yerelKey: "ilkokulYerel", intKey: "ilkokulInt" },
+  { idKey: "ortaokulYerel", label: "Ortaokul", baseKey: "ortaokul", yerelKey: "ortaokulYerel", intKey: "ortaokulInt" },
+  { idKey: "liseYerel", label: "Lise", baseKey: "lise", yerelKey: "liseYerel", intKey: "liseInt" },
 ];
 
 const SCHOLAR_KEYS = [
@@ -58,13 +34,10 @@ const SCHOLAR_KEYS = [
 const COMPETITOR_KEYS = ["okulOncesi", "ilkokul", "ortaokul", "lise"];
 
 const IK_LEVEL_DEFS = [
-  { key: "okulOncesi", label: "Okul Oncesi", kademeKey: "okulOncesi" },
-  { key: "ilkokulYerel", label: "Ilkokul-Yerel", kademeKey: "ilkokul" },
-  { key: "ilkokulInt", label: "Ilkokul-Int", kademeKey: "ilkokul" },
-  { key: "ortaokulYerel", label: "Ortaokul-Yerel", kademeKey: "ortaokul" },
-  { key: "ortaokulInt", label: "Ortaokul-Int", kademeKey: "ortaokul" },
-  { key: "liseYerel", label: "Lise-Yerel", kademeKey: "lise" },
-  { key: "liseInt", label: "Lise-Int", kademeKey: "lise" },
+  { key: "okulOncesi", label: "Okul Oncesi", kademeKey: "okulOncesi", yerelKey: "okulOncesi", intKey: "okulOncesi" },
+  { key: "ilkokulYerel", label: "Ilkokul", kademeKey: "ilkokul", yerelKey: "ilkokulYerel", intKey: "ilkokulInt" },
+  { key: "ortaokulYerel", label: "Ortaokul", kademeKey: "ortaokul", yerelKey: "ortaokulYerel", intKey: "ortaokulInt" },
+  { key: "liseYerel", label: "Lise", kademeKey: "lise", yerelKey: "liseYerel", intKey: "liseInt" },
 ];
 
 const IK_LOCAL_ROLES = [
@@ -97,11 +70,11 @@ const GIDERLER_ITEMS = [
 const TAB_DEFS = [
   { key: "temelBilgiler", label: "Temel Bilgiler", sectionIds: [
     "temel.okulEgitim",
-    "temel.kademeler",
     "temel.inflation",
     "temel.ikMevcut",
     "temel.bursOgr",
     "temel.rakip",
+    "temel.performans",
   ] },
   { key: "kapasite", label: "Kapasite", sectionIds: ["kapasite.caps"] },
   { key: "gradesPlan", label: "Sinif/Sube Plani", sectionIds: ["gradesPlan.plan"] },
@@ -114,11 +87,11 @@ const TAB_DEFS = [
 
 const SECTION_DEFS = [
   { id: "temel.okulEgitim", tabKey: "temelBilgiler", label: "Okul Egitim Bilgileri", modeDefault: "ALL", minDefault: null },
-  { id: "temel.kademeler", tabKey: "temelBilgiler", label: "Kademeler", modeDefault: "ALL", minDefault: null },
   { id: "temel.inflation", tabKey: "temelBilgiler", label: "Enflasyon ve Parametreler", modeDefault: "ALL", minDefault: null },
   { id: "temel.ikMevcut", tabKey: "temelBilgiler", label: "IK Mevcut", modeDefault: "ALL", minDefault: null },
   { id: "temel.bursOgr", tabKey: "temelBilgiler", label: "Burs ve Indirimler (Ogrenci)", modeDefault: "MIN", minDefault: 1 },
   { id: "temel.rakip", tabKey: "temelBilgiler", label: "Rakip Analizi", modeDefault: "ALL", minDefault: null },
+  { id: "temel.performans", tabKey: "temelBilgiler", label: "Performans (Onceki Donem)", modeDefault: "ALL", minDefault: null },
   { id: "kapasite.caps", tabKey: "kapasite", label: "Kapasite", modeDefault: "ALL", minDefault: null, requiresKademe: true },
   { id: "gradesPlan.plan", tabKey: "gradesPlan", label: "Planlanan Sinif/Sube", modeDefault: "ALL", minDefault: null, requiresKademe: true },
   { id: "norm.lessons", tabKey: "norm", label: "Ders Dagilimi", modeDefault: "MIN", minDefault: 3, requiresKademe: true, allowEmpty: false },
@@ -151,6 +124,10 @@ const INFLATION_FIELDS = [
   { key: "currentSeasonAvgFee", label: "Mevcut sezon ortalama ucret" },
 ];
 
+const PERF_FIELDS = [
+  { key: "prevYearRealizedFxUsdToLocal", label: "Onceki Donem Ortalama Kur (Gerceklesen)", type: "number" },
+];
+
 const IK_MEV_FIELDS = [
   { key: "yerelKadroluEgitimci", label: "Yerel kadrolu egitimci" },
   { key: "yerelDestek", label: "Yerel destek" },
@@ -165,6 +142,28 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function parseHeadcountNumber(value) {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (isNonEmptyString(value)) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function pickHeadcountValue(yerelValue, intValue) {
+  const yerelNum = parseHeadcountNumber(yerelValue);
+  const intNum = parseHeadcountNumber(intValue);
+  if (yerelNum == null && intNum == null) return null;
+  if (yerelNum != null && intNum != null) return Math.max(yerelNum, intNum);
+  return yerelNum != null ? yerelNum : intNum;
+}
+
+function pickTuitionValue(yerelValue, intValue) {
+  return pickHeadcountValue(yerelValue, intValue);
+}
+
 function safeGet(obj, path, fallback) {
   let cur = obj;
   for (const key of path || []) {
@@ -172,6 +171,13 @@ function safeGet(obj, path, fallback) {
     cur = cur[key];
   }
   return cur == null ? fallback : cur;
+}
+
+function getTuitionUnitFee(inputsArg, key) {
+  const rows = safeGet(inputsArg, ["gelirler", "tuition", "rows"], []);
+  const list = Array.isArray(rows) ? rows : [];
+  const match = list.find((r) => String(r?.key) === String(key));
+  return match?.unitFee ?? null;
 }
 
 function buildKademeContext(inputs) {
@@ -183,6 +189,8 @@ function buildKademeContext(inputs) {
       enabledKademes: new Set(),
       enabledGrades: new Set(),
       enabledLevels: new Set(),
+      activeGrades: new Set(),
+      isGradeActive: () => false,
     };
   }
 
@@ -191,9 +199,6 @@ function buildKademeContext(inputs) {
   const gradeIndex = new Map(gradeOptions.map((g, idx) => [g, idx]));
   const enabledKademes = new Set();
   const enabledGrades = new Set();
-  const programType = getProgramType(inputs);
-  const variantKeys = getVariantKeysForProgramType(programType);
-
   KADEME_BASE_KEYS.forEach((key) => {
     const row = normalized[key];
     if (!row?.enabled) return;
@@ -209,12 +214,16 @@ function buildKademeContext(inputs) {
   });
 
   const enabledLevels = new Set(
-    IK_LEVEL_DEFS.filter(
-      (lvl) => enabledKademes.has(lvl.kademeKey) && variantKeys.has(lvl.key)
-    ).map((lvl) => lvl.key)
+    IK_LEVEL_DEFS.filter((lvl) => enabledKademes.has(lvl.kademeKey)).map((lvl) => lvl.key)
   );
+  const activeGrades = new Set(enabledGrades);
+  const isGradeActive = (grade) => {
+    const key = String(grade ?? "").trim().toUpperCase();
+    if (!key) return false;
+    return activeGrades.has(key);
+  };
 
-  return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels };
+  return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels, activeGrades, isGradeActive };
 }
 
 function collectNormSubjects(norm) {
@@ -282,7 +291,7 @@ export function DEFAULT_PROGRESS_CONFIG() {
   return { version: 1, sections };
 }
 
-export function buildProgressCatalog({ inputs, norm } = {}) {
+export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
   const ctx = buildKademeContext(inputs);
   const fieldsById = {};
   const sections = SECTION_DEFS.map((s) => ({ ...s, fields: [] }));
@@ -309,21 +318,6 @@ export function buildProgressCatalog({ inputs, norm } = {}) {
     );
   });
 
-  KADEME_ROWS.forEach((row) => {
-    ["enabled", "from", "to"].forEach((k) => {
-      addField(
-        "temel.kademeler",
-        makeField(
-          `temel.kademeler.${row.key}.${k}`,
-          `${row.label} ${k}`,
-          k === "enabled" ? "boolean" : "string",
-          (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "kademeler", row.key, k], null),
-          () => true
-        )
-      );
-    });
-  });
-
   INFLATION_FIELDS.forEach((f) => {
     addField(
       "temel.inflation",
@@ -333,6 +327,22 @@ export function buildProgressCatalog({ inputs, norm } = {}) {
         "number",
         (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "inflation", f.key], null),
         () => true
+      )
+    );
+  });
+
+  PERF_FIELDS.forEach((f) => {
+    addField(
+      "temel.performans",
+      makeField(
+        `temel.performans.${f.key}`,
+        f.label,
+        f.type || "number",
+        (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "performans", f.key], null),
+        (_, __, scenarioArg) => {
+          if (!scenarioArg || typeof scenarioArg !== "object") return true;
+          return String(scenarioArg.input_currency || "").toUpperCase() === "LOCAL";
+        }
       )
     );
   });
@@ -404,7 +414,11 @@ export function buildProgressCatalog({ inputs, norm } = {}) {
             `Plan ${grade} ${year} ${fieldKey}`,
             "number",
             (inputsArg) => getGradePlanValue(inputsArg, year, grade, fieldKey),
-            () => (ctx.enabledGrades.size ? ctx.enabledGrades.has(grade) : true)
+            () => {
+              if (typeof ctx.isGradeActive === "function") return ctx.isGradeActive(grade);
+              if (ctx.enabledGrades && ctx.enabledGrades.size) return ctx.enabledGrades.has(grade);
+              return true;
+            }
           )
         );
       });
@@ -444,8 +458,19 @@ export function buildProgressCatalog({ inputs, norm } = {}) {
             `ik.headcount.${year}.${lvl.key}.${role.key}`,
             `Headcount ${lvl.label} ${role.label} ${year}`,
             "number",
-            (inputsArg) =>
-              safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", lvl.key, role.key], null),
+            (inputsArg) => {
+              const yerelValue = safeGet(
+                inputsArg,
+                ["ik", "years", year, "headcountsByLevel", lvl.yerelKey || lvl.key, role.key],
+                null
+              );
+              const intValue = safeGet(
+                inputsArg,
+                ["ik", "years", year, "headcountsByLevel", lvl.intKey || lvl.key, role.key],
+                null
+              );
+              return pickHeadcountValue(yerelValue, intValue);
+            },
             () => (ctx.enabledLevels.size ? ctx.enabledLevels.has(lvl.key) : true)
           )
         );
@@ -457,18 +482,15 @@ export function buildProgressCatalog({ inputs, norm } = {}) {
     addField(
       "gelirler.unitFee",
       makeField(
-        `gelirler.tuition.${row.key}.unitFee`,
+        `gelirler.tuition.${row.idKey}.unitFee`,
         `Birim ucret ${row.label}`,
         "number",
         (inputsArg) => {
-          const rows = safeGet(inputsArg, ["gelirler", "tuition", "rows"], []);
-          const match = Array.isArray(rows) ? rows.find((r) => String(r?.key) === row.key) : null;
-          return match?.unitFee ?? null;
+          const yerelVal = getTuitionUnitFee(inputsArg, row.yerelKey);
+          const intVal = getTuitionUnitFee(inputsArg, row.intKey);
+          return pickTuitionValue(yerelVal, intVal);
         },
-        () => {
-          const baseKey = KADEME_BASE_BY_ROW[row.key] || row.key;
-          return ctx.enabledKademes.size ? ctx.enabledKademes.has(baseKey) : true;
-        }
+        () => (ctx.enabledKademes.size ? ctx.enabledKademes.has(row.baseKey) : true)
       )
     );
   });

@@ -289,8 +289,17 @@ export default function TemelBilgilerEditor({
     return rates.length ? fracToPercent(sum / rates.length) : 0;
   }, [tb, visibleUcretRows]);
 
+  const isLocalScenario =
+    currencyMeta?.input_currency === "LOCAL" &&
+    Number(currencyMeta?.fx_usd_to_local) > 0 &&
+    !!currencyMeta?.local_currency_code;
+  const prevRealFxRaw = get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0);
+  const prevRealFxVal = Number(prevRealFxRaw || 0);
+  const isPrevRealFxValid = isLocalScenario && Number.isFinite(prevRealFxVal) && prevRealFxVal > 0;
+  const isPrevRealFxMissing = isLocalScenario && !isPrevRealFxValid;
+
   const prevFx = Number(prevCurrencyMeta?.fx_usd_to_local || 0);
-  const realizedFx = Number(get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0));
+  const realizedFx = prevRealFxVal;
   const hasRealizedFx = realizedFx > 0;
   const reportCurrencyKey = String(reportCurrency || "usd").toLowerCase();
   const showLocalPerf = reportCurrencyKey === "local";
@@ -978,8 +987,18 @@ export default function TemelBilgilerEditor({
                 {/* LEFT (2 lines) */}
                 <div className="tb-fx-leftBox">
                   <div className="tb-fx-line1">
-                    Önceki Dönem Ortalama Kur (Gerçekleşen)
+                    <span>Önceki Dönem Ortalama Kur (Gerçekleşen)</span>
                     {realizedFxRequired ? <span className="tb-req">*</span> : null}
+                    {isLocalScenario && isPrevRealFxMissing ? (
+                      <span className="text-[11px] px-2 py-[2px] rounded border border-red-200 bg-red-50 text-red-700">
+                        Zorunlu
+                      </span>
+                    ) : null}
+                    {isLocalScenario && !isPrevRealFxMissing ? (
+                      <span className="text-[11px] px-2 py-[2px] rounded border border-green-200 bg-green-50 text-green-700">
+                        Tamamlandı
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="tb-fx-line2">
@@ -992,7 +1011,7 @@ export default function TemelBilgilerEditor({
                 {/* RIGHT (input) */}
                 <div className="tb-affix tb-fx-rightBox">
                   <NumberInput
-                    className="input tb-input tb-num"
+                    className={`input tb-input tb-num${isPrevRealFxMissing ? " border-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
                     value={safeNum(get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0))}
                     onChange={(value) =>
                       update(["performans", "prevYearRealizedFxUsdToLocal"], safeNum(value))
@@ -1001,6 +1020,11 @@ export default function TemelBilgilerEditor({
                   <span className="tb-affix-sfx">{localCurrencyLabel}</span>
                 </div>
               </div>
+              {isPrevRealFxMissing ? (
+                <div className="text-xs text-red-600 mt-1">
+                  Bu alan zorunludur. Girilmeden Hesapla/Onaya Gönder işlemi yapılamaz.
+                </div>
+              ) : null}
             </div>
 
             <div className="tb-table-wrap">

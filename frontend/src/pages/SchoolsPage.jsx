@@ -47,6 +47,7 @@ export default function SchoolsPage() {
       inputs: inputsData?.inputs,
       norm: normData,
       config: progressConfig,
+      scenario: latest,
     });
     const tooltipLines = progress.missingDetailsLines.length
       ? ["Eksik:", ...progress.missingDetailsLines]

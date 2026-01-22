@@ -34,8 +34,8 @@ function normalizeConfig(config) {
   return out;
 }
 
-export function computeScenarioProgress({ inputs, norm, config } = {}) {
-  const catalog = buildProgressCatalog({ inputs, norm });
+export function computeScenarioProgress({ inputs, norm, config, scenario } = {}) {
+  const catalog = buildProgressCatalog({ inputs, norm, scenario });
   const normalizedConfig = normalizeConfig(config);
 
   const sectionsById = new Map(catalog.sections.map((s) => [s.id, s]));
@@ -72,7 +72,7 @@ export function computeScenarioProgress({ inputs, norm, config } = {}) {
       .filter((field) => {
         if (typeof field.appliesIf !== "function") return true;
         try {
-          return field.appliesIf(inputs, norm) !== false;
+          return field.appliesIf(inputs, norm, scenario) !== false;
         } catch (_) {
           return true;
         }
