@@ -2262,3 +2262,65 @@ hr {
 .kapasiteExcelTable tbody tr.kapGrowth td:first-child {
   text-align: left !important;
 }
+.tb-fx-inline {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+/* LEFT BOX */
+.tb-fx-leftBox {
+  flex: 1;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  padding: 2px 15px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 30px; /* match input height */
+}
+
+.tb-fx-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.1;
+
+  /* keep it in ONE line */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tb-req {
+  color: #d9534f;
+  font-weight: 800;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.tb-fx-line2 {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.1;
+  color: #ff0000;
+
+  /* keep it in ONE line (so it never becomes 3 lines total) */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* RIGHT */
+.tb-fx-rightBox {
+  min-width: 240px;
+  display: flex;
+  align-items: center;
+}
+
+.tb-input.tb-num {
+  height: 40px;
+}

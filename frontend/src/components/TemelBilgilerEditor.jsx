@@ -867,7 +867,7 @@ export default function TemelBilgilerEditor({
         {/* This card can get stretched by the grid row; make the table area flex-fill to avoid empty space */}
         <section className="card tb-card tb-span-6 tb-fill">
           <div className="tb-section-head">
-            <div className="tb-section-title">F) Burs ve İndirimler — Öğrenci Sayısı</div>
+            <div className="tb-section-title">F) Burs ve İndirimler — Öğrenci Sayısı (MEVCUT)</div>
             <div className="tb-muted">Sadece öğrenci sayısı girilir (oran değil).</div>
           </div>
           <div className="tb-table-wrap tb-table-tall">
@@ -912,29 +912,6 @@ export default function TemelBilgilerEditor({
             <div className="tb-section-head">
               <div className="tb-section-title">G) Rakip Kurumların Analizi</div>
               <div className="tb-muted">A/B/C: aynı kademedeki ortalama.</div>
-            </div>
-            <div style={{ padding: "0 16px 12px" }}>
-              <div className="tb-field">
-                <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  Önceki Dönem Ortalama Kur (Gerçekleşen) (1 USD = ? {localCurrencyLabel})
-                  {realizedFxRequired ? <span style={{ color: "#d9534f" }}>*</span> : null}
-                </label>
-                <div className="tb-affix">
-                  <NumberInput
-                    className="input tb-input tb-num"
-                    value={safeNum(get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0))}
-                    onChange={(value) =>
-                      update(["performans", "prevYearRealizedFxUsdToLocal"], safeNum(value))
-                    }
-                  />
-                  <span className="tb-affix-sfx">{localCurrencyLabel}</span>
-                </div>
-                {shouldShowFxWarning ? (
-                  <div className="tb-muted" style={{ color: "#d9534f", marginTop: 6 }}>
-                    Önceki dönem USD karşılaştırması için ortalama kur girilmelidir.
-                  </div>
-                ) : null}
-              </div>
             </div>
             <div className="tb-table-wrap">
               <table className="table tb-table">
@@ -987,6 +964,36 @@ export default function TemelBilgilerEditor({
               <div className="tb-section-title">H) Performans (Önceki Dönem)</div>
               <div className="tb-muted">Planlanan: önceki yıl senaryosu.</div>
             </div>
+            <div className="tb-field">
+              <div className="tb-fx-row tb-fx-inline">
+                {/* LEFT (2 lines) */}
+                <div className="tb-fx-leftBox">
+                  <div className="tb-fx-line1">
+                    Önceki Dönem Ortalama Kur (Gerçekleşen)
+                    {realizedFxRequired ? <span className="tb-req">*</span> : null}
+                  </div>
+
+                  <div className="tb-fx-line2">
+                    {shouldShowFxWarning
+                      ? "Önceki dönem USD karşılaştırması için ortalama kur girilmelidir."
+                      : "\u00A0"}
+                  </div>
+                </div>
+
+                {/* RIGHT (input) */}
+                <div className="tb-affix tb-fx-rightBox">
+                  <NumberInput
+                    className="input tb-input tb-num"
+                    value={safeNum(get(tb, ["performans", "prevYearRealizedFxUsdToLocal"], 0))}
+                    onChange={(value) =>
+                      update(["performans", "prevYearRealizedFxUsdToLocal"], safeNum(value))
+                    }
+                  />
+                  <span className="tb-affix-sfx">{localCurrencyLabel}</span>
+                </div>
+              </div>
+            </div>
+
             <div className="tb-table-wrap">
               <table className="table tb-table">
                 <thead>
