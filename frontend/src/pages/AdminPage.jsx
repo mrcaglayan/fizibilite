@@ -117,6 +117,7 @@ export default function AdminPage() {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState("user");
+  const [newUserCountryId, setNewUserCountryId] = useState("");
 
   const [assignUserId, setAssignUserId] = useState("");
   const [assignCountryId, setAssignCountryId] = useState("");
@@ -136,6 +137,9 @@ export default function AdminPage() {
   const [progressLoading, setProgressLoading] = useState(false);
   const [progressSaving, setProgressSaving] = useState(false);
   const [progressSearch, setProgressSearch] = useState("");
+  const [progressTargetIds, setProgressTargetIds] = useState(() => new Set());
+  const [progressCountryListSearch, setProgressCountryListSearch] = useState("");
+  const [progressBulkSaving, setProgressBulkSaving] = useState(false);
   const [expandedProgressTabs, setExpandedProgressTabs] = useState(new Set());
   const [expandedProgressSections, setExpandedProgressSections] = useState(new Set());
 
@@ -346,6 +350,24 @@ export default function AdminPage() {
   }, [queueRows, queueSort]);
 
   const progressSearchValue = progressSearch.trim().toLowerCase();
+
+  const filteredCountriesForApply = useMemo(() => {
+    const q = progressCountryListSearch.trim().toLowerCase();
+    if (!q) return countries;
+    return countries.filter((c) => {
+      const name = String(c.name || "").toLowerCase();
+      const code = String(c.code || "").toLowerCase();
+      return name.includes(q) || code.includes(q);
+    });
+  }, [countries, progressCountryListSearch]);
+
+  const progressTargetCount = progressTargetIds.size;
+  const progressBulkDisabled =
+    !progressCountryId ||
+    progressTargetCount === 0 ||
+    progressSaving ||
+    progressLoading ||
+    progressBulkSaving;
 
   const filteredCountrySchools = useMemo(() => {
     const q = schoolsSearch.trim().toLowerCase();
@@ -575,6 +597,14 @@ export default function AdminPage() {
       password: newUserPassword,
       role: newUserRole,
     };
+    if (newUserCountryId) {
+      const nextId = Number(newUserCountryId);
+      if (!Number.isFinite(nextId)) {
+        toast.error("Invalid country selection");
+        return;
+      }
+      payload.countryId = nextId;
+    }
     if (!payload.email || !payload.password) {
       toast.error("Email and password are required");
       return;
@@ -589,6 +619,7 @@ export default function AdminPage() {
       setNewUserEmail("");
       setNewUserPassword("");
       setNewUserRole("user");
+      setNewUserCountryId("");
       await load();
       toast.success("User created (password reset required on first login)");
     } catch (e) {
@@ -871,6 +902,67 @@ export default function AdminPage() {
         if (section.selectedFields) section.selectedFields[id] = false;
       });
     });
+  };
+
+  const toggleTargetCountry = (countryId) => {
+    const id = Number(countryId);
+    if (!Number.isFinite(id)) return;
+    setProgressTargetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllTargets = () => {
+    setProgressTargetIds((prev) => {
+      const next = new Set(prev);
+      filteredCountriesForApply.forEach((country) => {
+        const id = Number(country.id);
+        if (Number.isFinite(id)) next.add(id);
+      });
+      return next;
+    });
+  };
+
+  const clearTargets = () => {
+    setProgressTargetIds(new Set());
+  };
+
+  const applyProgressConfigToSelectedCountries = async () => {
+    const ids = Array.from(progressTargetIds)
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id));
+    const uniqueIds = Array.from(new Set(ids));
+    if (!uniqueIds.length) {
+      toast.error("Select at least one country");
+      return;
+    }
+    if (!progressCountryId) {
+      toast.error("Select a country to edit rules first");
+      return;
+    }
+    const ok = window.confirm(
+      `Apply this configuration to ${uniqueIds.length} countries? This will overwrite their current rules.`
+    );
+    if (!ok) return;
+
+    setProgressBulkSaving(true);
+    try {
+      const result = await api.adminBulkSaveProgressRequirements(uniqueIds, progressConfigNormalized);
+      const updatedCount = Number.isFinite(Number(result?.updatedCount))
+        ? Number(result.updatedCount)
+        : uniqueIds.length;
+      toast.success(`Applied to ${updatedCount} countries`);
+      if (uniqueIds.some((id) => String(id) === String(progressCountryId))) {
+        await loadProgressRequirements(progressCountryId);
+      }
+    } catch (e) {
+      toast.error(e.message || "Failed to apply progress requirements");
+    } finally {
+      setProgressBulkSaving(false);
+    }
   };
 
   const saveProgressConfig = async () => {
@@ -1358,6 +1450,18 @@ export default function AdminPage() {
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
                 </select>
+                <select
+                  className="input"
+                  value={newUserCountryId}
+                  onChange={(e) => setNewUserCountryId(e.target.value)}
+                >
+                  <option value="">Assign country (optional)</option>
+                  {countries.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.code}){c.region ? ` - ${c.region}` : ""}
+                    </option>
+                  ))}
+                </select>
                 <button className="btn primary" onClick={createUser} disabled={loading}>
                   Create
                 </button>
@@ -1701,6 +1805,72 @@ export default function AdminPage() {
                   {progressSaving ? "Saving..." : "Save"}
                 </button>
               </div>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Apply to multiple countries</div>
+            <div className="row" style={{ alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <input
+                className="input sm"
+                placeholder="Search countries"
+                value={progressCountryListSearch}
+                onChange={(e) => setProgressCountryListSearch(e.target.value)}
+              />
+              <button
+                className="btn"
+                onClick={selectAllTargets}
+                disabled={filteredCountriesForApply.length === 0 || progressBulkSaving}
+              >
+                Select all
+              </button>
+              <button
+                className="btn"
+                onClick={clearTargets}
+                disabled={progressTargetCount === 0 || progressBulkSaving}
+              >
+                Clear
+              </button>
+              <button
+                className="btn primary"
+                onClick={applyProgressConfigToSelectedCountries}
+                disabled={progressBulkDisabled}
+              >
+                {progressBulkSaving ? "Applying..." : `Apply to Selected (${progressTargetCount})`}
+              </button>
+            </div>
+
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                borderRadius: 10,
+                padding: 10,
+                background: "#fff",
+                maxHeight: 240,
+                overflowY: "auto",
+              }}
+            >
+              {filteredCountriesForApply.length === 0 ? (
+                <div className="small">No countries found.</div>
+              ) : (
+                filteredCountriesForApply.map((country) => {
+                  const id = Number(country.id);
+                  const checked = progressTargetIds.has(id);
+                  return (
+                    <label
+                      key={country.id}
+                      style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleTargetCountry(id)}
+                      />
+                      <span>{country.name || "-"}</span>
+                    </label>
+                  );
+                })
+              )}
             </div>
           </div>
 
