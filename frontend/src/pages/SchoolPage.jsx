@@ -210,6 +210,7 @@ export default function SchoolPage() {
     [schoolId, selectedScenarioId]
   );
   const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
+  const reportCurrencyDefaultedForRef = useRef(null);
   const reportTabSuffix = useMemo(() => {
     if (!selectedScenario) return "";
     const inputCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
@@ -866,14 +867,37 @@ export default function SchoolPage() {
   }, [schoolId, selectedScenarioId]);
 
   useEffect(() => {
+    if (!selectedScenarioId) {
+      reportCurrencyDefaultedForRef.current = null;
+      return;
+    }
+    const scenarioId = selectedScenario?.id;
+    if (!scenarioId || String(scenarioId) !== String(selectedScenarioId)) return;
+
     const isLocal =
       selectedScenario?.input_currency === "LOCAL" &&
       Number(selectedScenario?.fx_usd_to_local) > 0 &&
       selectedScenario?.local_currency_code;
+    const scenarioKey = String(scenarioId);
+
+    if (reportCurrencyDefaultedForRef.current !== scenarioKey) {
+      setReportCurrency(isLocal ? "local" : "usd");
+      reportCurrencyDefaultedForRef.current = scenarioKey;
+      return;
+    }
+
     if (!isLocal && reportCurrency !== "usd") {
       setReportCurrency("usd");
     }
-  }, [selectedScenario?.input_currency, selectedScenario?.fx_usd_to_local, selectedScenario?.local_currency_code, reportCurrency, setReportCurrency]);
+  }, [
+    selectedScenarioId,
+    selectedScenario?.id,
+    selectedScenario?.input_currency,
+    selectedScenario?.fx_usd_to_local,
+    selectedScenario?.local_currency_code,
+    reportCurrency,
+    setReportCurrency,
+  ]);
 
   // Load previous year's report (used in TEMEL BİLGİLER: performans planlanan)
   useEffect(() => {
@@ -1873,7 +1897,7 @@ export default function SchoolPage() {
                   <div className="action-menu" ref={exportMenuRef}>
                     <button
                       type="button"
-                      className="topbar-btn is-ghost"
+                      className={`topbar-btn is-ghost ${exportingPdf ? "is-loading" : ""}`}
                       onClick={() => {
                         if (exportDisabled) return;
                         setExportOpen((prev) => !prev);
@@ -1881,7 +1905,9 @@ export default function SchoolPage() {
                       disabled={exportDisabled}
                       aria-haspopup="menu"
                       aria-expanded={exportOpen}
+                      aria-busy={exportingPdf ? "true" : undefined}
                     >
+                      {exportingPdf ? <span className="pdf-export-spinner" aria-hidden="true" /> : null}
                       {exportLabel}
                     </button>
                     {exportOpen ? (
