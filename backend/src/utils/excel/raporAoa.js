@@ -115,7 +115,7 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
     tuitionHeaderRow[1] = "Kademe";                                  // B
     tuitionHeaderRow[8] = `Eğitim Ücreti (${currencyLabel})`;       // I
     tuitionHeaderRow[10] = `Üniforma (${currencyLabel})`;            // K
-    tuitionHeaderRow[12] = `Kitap KKirtasiye (${currencyLabel})`;     // M
+    tuitionHeaderRow[12] = `Kitap Kırtasiye (${currencyLabel})`;     // M
     tuitionHeaderRow[14] = `Ulaşılmaz (${currencyLabel})`;             // O
     tuitionHeaderRow[16] = `Yemek (${currencyLabel})`;                // Q
     tuitionHeaderRow[18] = "Artış Yüzdesi";                          // S
@@ -176,17 +176,16 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
         ["Mevcut Öğrenci Sayısı", safeNumOrNull(cap.currentStudents) ?? safeStr(cap.currentStudents)],
         ["Planlanan Öğrenci Sayısı", safeNumOrNull(cap.plannedStudents) ?? safeStr(cap.plannedStudents)],
         ["Kapasite Kullanım Yüzdeliği", safeNumOrNull(cap.plannedUtilization) ?? safeStr(cap.plannedUtilization)],
-        [null, null],
     ];
     const rightRows = [
         ["Kapasiteye Uygun Derslik Sayısı", safeNumOrNull(cap.plannedBranches) ?? safeStr(cap.plannedBranches)],
         ["Mevcut Derslik Sayısı", safeNumOrNull(cap.totalBranches) ?? safeStr(cap.totalBranches)],
         ["Kullanılan Derslik Sayısı", safeNumOrNull(cap.usedBranches) ?? safeStr(cap.usedBranches)],
-        ["Sınıf Doluluk Oranı", safeNumOrNull(cap.avgStudentsPerClass) ?? safeStr(cap.avgStudentsPerClass)],
         ["Sınıf Doluluk Oranı (Planlanan)", safeNumOrNull(cap.avgStudentsPerClassPlanned) ?? safeStr(cap.avgStudentsPerClassPlanned)],
     ];
 
-    for (let i = 0; i < 5; i += 1) {
+    const rowCount = Math.max(leftRows.length, rightRows.length);
+    for (let i = 0; i < rowCount; i += 1) {
         const [leftLabel, leftVal] = leftRows[i] || [null, null];
         const [rightLabel, rightVal] = rightRows[i] || [null, null];
         pushDualRow(leftLabel, leftVal, rightLabel, rightVal);

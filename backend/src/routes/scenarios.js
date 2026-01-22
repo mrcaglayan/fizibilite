@@ -2110,6 +2110,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const labelAlignment = { vertical: "middle", horizontal: "left", wrapText: true };
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
       const toCellValue = (v) => {
+        if (v == null || v === "") return null;
         const n = Number(v);
         return Number.isFinite(n) ? n : v ?? null;
       };
@@ -2123,13 +2124,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         { label: "Mevcut Öğrenci Sayısı", value: cap.currentStudents, format: "#,##0" },
         { label: "Planlanan Öğrenci Sayısı", value: cap.plannedStudents, format: "#,##0" },
         { label: "Kapasite Kullanım Yüzdeliği", value: cap.plannedUtilization, format: percentFormat(cap.plannedUtilization) },
-        { label: "", value: null, format: null },
       ];
       const rightRows = [
         { label: "Kapasiteye Uygun Derslik Sayısı", value: cap.plannedBranches, format: "#,##0" },
         { label: "Mevcut Derslik Sayısı", value: cap.totalBranches, format: "#,##0" },
         { label: "Kullanılan Derslik Sayısı", value: cap.usedBranches, format: "#,##0" },
-        { label: "Sınıf Doluluk Oranı", value: cap.avgStudentsPerClass, format: "#,##0.00" },
         { label: "Sınıf Doluluk Oranı (Planlanan)", value: cap.avgStudentsPerClassPlanned, format: "#,##0.00" },
       ];
 
@@ -2148,7 +2147,8 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         applyRange(rowNum, startCol, endCol, { numFmt: format });
       };
 
-      for (let i = 0; i < 5; i += 1) {
+      const rowCount = Math.max(leftRows.length, rightRows.length);
+      for (let i = 0; i < rowCount; i += 1) {
         const rowNum = capDataStart + i;
         const left = leftRows[i] || { label: "", value: null, format: null };
         const right = rightRows[i] || { label: "", value: null, format: null };
@@ -2903,15 +2903,15 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
 
         const label = String(raporWs.getCell(rowNum, 2).value || "").toLowerCase();
         const plannedFormat = label.includes("ogrenci")
-            ? countFormat
-            : showLocal
-                ? perfPlannedNumFmt
-                : amountFormat;
+          ? countFormat
+          : showLocal
+            ? perfPlannedNumFmt
+            : amountFormat;
         const actualFormat = label.includes("ogrenci")
-            ? countFormat
-            : showLocal
-                ? perfActualNumFmt
-                : amountFormat;
+          ? countFormat
+          : showLocal
+            ? perfActualNumFmt
+            : amountFormat;
 
         applyRange(rowNum, 2, 6, { alignment: labelAlignment, border: borderAllb });
         applyRange(rowNum, 7, 12, { alignment: valueAlignment, border: borderAllb, numFmt: plannedFormat });
@@ -3196,7 +3196,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       raporWs.pageSetup.margins = {
         left: 0.7,
         right: 0.7,
-        top: 0.5,
+        top: 0.2,
         bottom: 0,
         header: 0,
         footer: 0,
