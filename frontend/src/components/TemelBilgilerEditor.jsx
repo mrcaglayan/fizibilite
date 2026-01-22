@@ -309,12 +309,13 @@ export default function TemelBilgilerEditor({
     const y1 = prevReport?.years?.y1 || prevReport?.y1 || null;
     if (!y1) return null;
 
-    const pm = safeNum(y1?.kpis?.profitMargin) * 100;
+    const gelirler = safeNum(y1?.income?.netIncome);
+    const giderler = safeNum(y1?.expenses?.totalExpenses);
     return {
       ogrenci: safeNum(y1?.students?.totalStudents),
-      gelirler: safeNum(y1?.income?.netIncome),
-      giderler: safeNum(y1?.expenses?.totalExpenses),
-      karZararOrani: pm,
+      gelirler,
+      giderler,
+      karZarar: gelirler - giderler,
       bursIndirim: safeNum(y1?.income?.totalDiscounts),
     };
   }, [prevReport]);
@@ -330,12 +331,13 @@ export default function TemelBilgilerEditor({
       ...plannedPerf,
       gelirler: convert(plannedPerf.gelirler),
       giderler: convert(plannedPerf.giderler),
+      karZarar: convert(plannedPerf.karZarar),
       bursIndirim: convert(plannedPerf.bursIndirim),
     };
   }, [plannedPerf, showLocalPerf, planFxForLocal]);
 
-  const getActualDisplay = (path) => {
-    const stored = safeNum(get(tb, path, 0));
+  const toActualDisplay = (rawValue) => {
+    const stored = safeNum(rawValue);
     if (isScenarioLocal) {
       if (showLocalPerf) return stored;
       return hasRealizedFx ? stored / realizedFx : null;
@@ -345,6 +347,8 @@ export default function TemelBilgilerEditor({
     }
     return stored;
   };
+
+  const getActualDisplay = (path) => toActualDisplay(get(tb, path, 0));
 
   const setActualFromDisplay = (path, displayValue) => {
     const raw = safeNum(displayValue);
@@ -356,6 +360,11 @@ export default function TemelBilgilerEditor({
     }
     update(path, stored);
   };
+
+  const actualKarZararDisplay = toActualDisplay(
+    safeNum(get(tb, ["performans", "gerceklesen", "gelirler"], 0)) -
+      safeNum(get(tb, ["performans", "gerceklesen", "giderler"], 0))
+  );
 
   const scholarshipGroups = useMemo(() => {
     const burs = [];
@@ -1076,24 +1085,24 @@ export default function TemelBilgilerEditor({
                       />
                     </td>
                   </tr>
-                  <tr>
-                    <td style={{ fontWeight: 700 }}>Kar / Zarar Oranı (%)</td>
-                    <td className="num">
-                      <NumberInput
-                        className="input tb-input tb-num"
-                        value={plannedPerf ? plannedPerf.karZararOrani.toFixed(2) : ""}
-                        disabled
-                      />
-                    </td>
-                    <td className="num">
-                      <NumberInput
-
-                        className={inputClass("input tb-input tb-num", ["performans", "gerceklesen", "karZararOrani"])}
-                        value={safeNum(get(tb, ["performans", "gerceklesen", "karZararOrani"], 0))}
-                        onChange={(value) => update(["performans", "gerceklesen", "karZararOrani"], safeNum(value))}
-                      />
-                    </td>
-                  </tr>
+                    <tr>
+                      <td style={{ fontWeight: 700 }}>Kar / Zarar </td>
+                      <td className="num">
+                        <NumberInput
+                          className="input tb-input tb-num"
+                          value={plannedPerfDisplay?.karZarar ?? ""}
+                          disabled
+                        />
+                      </td>
+                      <td className="num">
+                        <NumberInput
+                          className="input tb-input tb-num"
+                          value={actualKarZararDisplay ?? ""}
+                          placeholder={actualPlaceholder}
+                          disabled
+                        />
+                      </td>
+                    </tr>
                   <tr>
                     <td style={{ fontWeight: 700 }}>Burs ve İndirimler</td>
                     <td className="num">

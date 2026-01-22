@@ -819,17 +819,23 @@ export function buildDetailedReportModel({
   const plannedStudentsPerf = numOrNull(plannedPerf?.students?.totalStudents);
   const plannedIncome = numOrNull(plannedPerf?.income?.netIncome);
   const plannedExpenses = numOrNull(plannedPerf?.expenses?.totalExpenses);
-  const plannedMargin = numOrNull(plannedPerf?.kpis?.profitMargin);
   const plannedDiscounts = numOrNull(plannedPerf?.income?.totalDiscounts);
+  const plannedProfit =
+    plannedIncome != null && plannedExpenses != null ? plannedIncome - plannedExpenses : null;
 
   const actualStudents = numOrNull(performans?.ogrenciSayisi);
   const actualIncome = toUsdPerf(performans?.gelirler);
   const actualExpenses = toUsdPerf(performans?.giderler);
   const actualDiscounts = toUsdPerf(performans?.bursVeIndirimler);
-  let actualMargin = numOrNull(performans?.karZararOrani);
-  if (actualMargin != null && Math.abs(actualMargin) > 1.5) {
-    actualMargin = actualMargin / 100;
-  }
+  const actualProfitFromInputs =
+    actualIncome != null && actualExpenses != null ? actualIncome - actualExpenses : null;
+  const storedProfit = numOrNull(performans?.karZarar);
+  const actualProfit =
+    actualProfitFromInputs != null
+      ? actualProfitFromInputs
+      : storedProfit != null
+        ? toUsdPerf(storedProfit)
+        : null;
 
   const calcVariance = (planned, actual) =>
     planned != null && actual != null && Number(planned) !== 0
@@ -853,9 +859,9 @@ export function buildDetailedReportModel({
       actual: actualExpenses,
     },
     {
-      metric: "Kar Zarar Orani",
-      planned: plannedMargin,
-      actual: actualMargin,
+      metric: "Kar Zarar",
+      planned: plannedProfit,
+      actual: actualProfit,
     },
     {
       metric: "Burs ve Indirimler",

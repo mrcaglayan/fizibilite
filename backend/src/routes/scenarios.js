@@ -641,15 +641,15 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
         },
 
         // Gerçekleşen/Planlanan performans
-        performans: {
-          gerceklesen: {
-            ogrenciSayisi: 0,
-            gelirler: 0,
-            giderler: 0,
-            karZararOrani: 0, // %
-            bursVeIndirimler: 0,
+          performans: {
+            gerceklesen: {
+              ogrenciSayisi: 0,
+              gelirler: 0,
+              giderler: 0,
+              karZarar: 0,
+              bursVeIndirimler: 0,
+            },
           },
-        },
 
         degerlendirme: "",
       },

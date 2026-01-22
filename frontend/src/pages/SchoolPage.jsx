@@ -630,7 +630,7 @@ export default function SchoolPage() {
         lise: { a: 0, b: 0, c: 0 },
       },
       performans: t.performans || {
-        gerceklesen: { ogrenciSayisi: 0, gelirler: 0, giderler: 0, karZararOrani: 0, bursVeIndirimler: 0 },
+        gerceklesen: { ogrenciSayisi: 0, gelirler: 0, giderler: 0, karZarar: 0, bursVeIndirimler: 0 },
       },
       degerlendirme: typeof t.degerlendirme === "string" ? t.degerlendirme : "",
     };

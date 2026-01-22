@@ -1497,7 +1497,7 @@ export default function DetailedReportView(props) {
         { metric: "Ogrenci Sayisi", planned: "—", actual: "—", variance: "—" },
         { metric: "Gelirler", planned: "—", actual: "—", variance: "—" },
         { metric: "Giderler", planned: "—", actual: "—", variance: "—" },
-        { metric: "Kar Zarar Orani", planned: "—", actual: "—", variance: "—" },
+        { metric: "Kar Zarar", planned: "—", actual: "—", variance: "—" },
         {
           metric: "Burs ve Indirimler",
           planned: "—",
@@ -1512,13 +1512,12 @@ export default function DetailedReportView(props) {
       const kind =
         metric === "Ogrenci Sayisi"
           ? "int"
-          : metric === "Kar Zarar Orani"
-            ? "pct"
-            : metric === "Gelirler" ||
-              metric === "Giderler" ||
-              metric === "Burs ve Indirimler"
-              ? "money"
-              : "number";
+          : metric === "Gelirler" ||
+            metric === "Giderler" ||
+            metric === "Burs ve Indirimler" ||
+            metric === "Kar Zarar"
+            ? "money"
+            : "number";
       return {
         metric,
         planned: formatValue(row.planned, kind, fmtPerfPlannedMoneyDisplay),

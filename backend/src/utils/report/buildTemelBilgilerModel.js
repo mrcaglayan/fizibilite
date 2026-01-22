@@ -208,12 +208,13 @@ function computePlannedPerf(prevReport) {
   const y1 = prevReport?.years?.y1 || prevReport?.y1 || null;
   if (!y1) return null;
 
-  const pm = safeNum(y1?.kpis?.profitMargin) * 100;
+  const gelirler = safeNum(y1?.income?.netIncome);
+  const giderler = safeNum(y1?.expenses?.totalExpenses);
   const base = {
     ogrenci: safeNum(y1?.students?.totalStudents),
-    gelirler: safeNum(y1?.income?.netIncome),
-    giderler: safeNum(y1?.expenses?.totalExpenses),
-    karZararOrani: pm,
+    gelirler,
+    giderler,
+    karZarar: gelirler - giderler,
     bursIndirim: safeNum(y1?.income?.totalDiscounts),
   };
 
@@ -357,6 +358,14 @@ function buildTemelBilgilerModel({
     }
     return raw;
   };
+
+  const actualKarZararRaw = (() => {
+    const gelir = numOrNull(perfInputs.gelirler);
+    const gider = numOrNull(perfInputs.giderler);
+    if (gelir != null && gider != null) return gelir - gider;
+    const stored = numOrNull(perfInputs.karZarar);
+    return stored != null ? stored : null;
+  })();
 
   const performanceMoneyUnitLabel = showLocal ? localCurrencyCode : "USD";
   const realizedFxLabel = `Önceki Dönem Ortalama Kur (Gerçekleşen) (1 USD = X ${localCurrencyCode})`;
@@ -628,10 +637,10 @@ function buildTemelBilgilerModel({
                 performanceMoneyUnitLabel,
               ],
               [
-                "Kar / Zarar Oranı (%)",
-                plannedPerf ? plannedPerf.karZararOrani : null,
-                safeNum(perfInputs.karZararOrani),
-                "%",
+                "Kar / Zarar",
+                plannedPerf ? toPlannedDisplay(plannedPerf.karZarar) : null,
+                toActualDisplay(actualKarZararRaw),
+                performanceMoneyUnitLabel,
               ],
               [
                 "Burs ve İndirimler",
