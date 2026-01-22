@@ -328,39 +328,39 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
     const sumCost = (rows) =>
         rows.reduce((sum, r) => (Number.isFinite(Number(r?.cost)) ? sum + Number(r.cost) : sum), 0);
 
-    const buildGroupHeaderRow = (label) => {
-        const row = Array(22).fill(null);
-        row[1] = label;
-        row[14] = "MEVCUT DONEM";
-        row[17] = "PLANLANAN DONEM";
-        return row;
-    };
+      const buildGroupHeaderRow = (label) => {
+          const row = Array(22).fill(null);
+          row[1] = label;
+          row[12] = "MEVCUT DONEM";
+          row[17] = "PLANLANAN DONEM";
+          return row;
+      };
 
-    const buildSubHeaderRow = () => {
-        const row = Array(22).fill(null);
-        row[14] = "Ogrenci Sayisi";
-        row[17] = "Ogrenci Sayisi";
-        row[19] = "Maliyet";
-        return row;
-    };
+      const buildSubHeaderRow = () => {
+          const row = Array(22).fill(null);
+          row[12] = "Ogrenci Sayisi";
+          row[17] = "Ogrenci Sayisi";
+          row[19] = "Maliyet";
+          return row;
+      };
 
-    const buildDataRow = (r) => {
-        const row = Array(22).fill(null);
-        row[1] = safeStr(r?.name || "");
-        row[14] = safeNumOrNull(r?.cur) ?? safeStr(r?.cur);
-        row[17] = safeNumOrNull(r?.planned) ?? safeStr(r?.planned);
-        row[19] = money(r?.cost);
-        return row;
-    };
+      const buildDataRow = (r) => {
+          const row = Array(22).fill(null);
+          row[1] = safeStr(r?.name || "");
+          row[12] = safeNumOrNull(r?.cur) ?? safeStr(r?.cur);
+          row[17] = safeNumOrNull(r?.planned) ?? safeStr(r?.planned);
+          row[19] = money(r?.cost);
+          return row;
+      };
 
-    const buildTotalRow = (rows) => {
-        const row = Array(22).fill(null);
-        row[1] = "Toplam";
-        row[14] = sumCount(rows, "cur");
-        row[17] = sumCount(rows, "planned");
-        row[19] = money(sumCost(rows));
-        return row;
-    };
+      const buildTotalRow = (rows) => {
+          const row = Array(22).fill(null);
+          row[1] = "Toplam";
+          row[12] = sumCount(rows, "cur");
+          row[17] = sumCount(rows, "planned");
+          row[19] = money(sumCost(rows));
+          return row;
+      };
 
     const pushAnalysisRows = (labelPrefix, analysis) => {
         const rows = [
@@ -458,12 +458,12 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
         ? `${prevStartYear}-${prevStartYear + 1}`
         : yearText;
     const periodPrefix = periodLabel ? `${periodLabel} Donemi` : "Donem";
-    const perfHeaderRow = Array(22).fill(null);
-    perfHeaderRow[6] = `${periodPrefix} Planlanan`;
-    perfHeaderRow[12] = `${periodPrefix} Gerceklesen`;
-    perfHeaderRow[18] = "Sapma Yuzdesi";
-    aoa.push(perfHeaderRow);
-    perfRows.forEach((r) => {
+      const perfHeaderRow = Array(22).fill(null);
+      perfHeaderRow[8] = `${periodPrefix} Planlanan`;
+      perfHeaderRow[13] = `${periodPrefix} Gerceklesen`;
+      perfHeaderRow[19] = "Sapma Yuzdesi";
+      aoa.push(perfHeaderRow);
+      perfRows.forEach((r) => {
         const label = safeStr(r?.metric || "");
         const labelLower = label.toLowerCase();
         const isStudentRow = labelLower.includes("ogrenci");
@@ -480,9 +480,9 @@ function buildRaporAoa({ model, reportCurrency = "usd", currencyMeta, prevCurren
         const varianceValue = safeNumOrNull(r?.variance) ?? safeStr(r?.variance);
         const row = Array(22).fill(null);
         row[1] = label;
-        row[6] = plannedValue;
-        row[12] = actualValue;
-        row[18] = varianceValue;
+          row[8] = plannedValue;
+          row[13] = actualValue;
+          row[19] = varianceValue;
         aoa.push(row);
     });
 

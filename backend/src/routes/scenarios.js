@@ -2163,6 +2163,17 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         raporWs.getCell(rowNum, 15).value = right.label || null;
         raporWs.getCell(rowNum, 20).value = toCellValue(right.value);
 
+        if (i === rowCount - 1) {
+          const leftLabelCell = raporWs.getCell(rowNum, 2);
+          const rightLabelCell = raporWs.getCell(rowNum, 15);
+          leftLabelCell.font = { ...(leftLabelCell.font || {}), size: 9 };
+          rightLabelCell.font = { ...(rightLabelCell.font || {}), size: 9 };
+        }
+        if (i === 0) {
+          const rightLabelCell = raporWs.getCell(rowNum, 15);
+          rightLabelCell.font = { ...(rightLabelCell.font || {}), size: 8 };
+        }
+
         applyRange(rowNum, 2, 9, { alignment: labelAlignment, border: borderBlue });
         applyRange(rowNum, 10, 14, { alignment: valueAlignment, border: borderBlue });
         applyRange(rowNum, 15, 19, { alignment: labelAlignment, border: borderBlue });
@@ -2326,7 +2337,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       raporWs.mergeCells(revenueNoteRow, 2, revenueNoteRow, 22);
       const revenueNoteCell = raporWs.getCell(revenueNoteRow, 2);
       revenueNoteCell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
-      revenueNoteCell.font = { ...(revenueNoteCell.font || {}), italic: true, color: { argb: "FFFF0000" } };
+      revenueNoteCell.font = { ...(revenueNoteCell.font || {}), size: 9, italic: true, color: { argb: "FFFF0000" } };
       for (let col = 2; col <= 22; col += 1) {
         raporWs.getCell(revenueNoteRow, col).border = borderAllb;
       }
@@ -2549,49 +2560,65 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const amountFormat = currencyNumFmt;
       const ratioFormat = percentNumFmt;
 
-      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold, fontSize } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
           const cell = raporWs.getCell(rowNum, col);
           if (border) cell.border = border;
           if (alignment) cell.alignment = alignment;
           if (numFmt) cell.numFmt = numFmt;
-          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+          const fontUpdates = {};
+          if (bold) fontUpdates.bold = true;
+          if (fontSize) fontUpdates.size = fontSize;
+          if (Object.keys(fontUpdates).length) {
+            cell.font = { ...(cell.font || {}), ...fontUpdates };
+          }
         }
       };
 
       const styleGroupHeaderRow = (rowNum) => {
-        raporWs.mergeCells(rowNum, 2, rowNum, 14);
-        raporWs.mergeCells(rowNum, 15, rowNum, 17);
+        raporWs.mergeCells(rowNum, 2, rowNum, 12);
+        raporWs.mergeCells(rowNum, 13, rowNum, 17);
         raporWs.mergeCells(rowNum, 18, rowNum, 22);
-        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold: true });
-        applyRange(rowNum, 15, 17, { alignment: centerAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 2, 12, { alignment: labelAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 13, 17, {
+          alignment: centerAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
         applyRange(rowNum, 18, 22, { alignment: centerAlignment, border: borderAllb, bold: true });
         raporWs.getRow(rowNum).height = 20;
       };
 
       const styleSubHeaderRow = (rowNum) => {
-        raporWs.mergeCells(rowNum, 2, rowNum, 14);
-        raporWs.mergeCells(rowNum, 15, rowNum, 17);
+        raporWs.mergeCells(rowNum, 2, rowNum, 12);
+        raporWs.mergeCells(rowNum, 13, rowNum, 17);
         raporWs.mergeCells(rowNum, 18, rowNum, 19);
         raporWs.mergeCells(rowNum, 20, rowNum, 22);
-        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold: true });
-        applyRange(rowNum, 15, 17, { alignment: centerAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 2, 12, { alignment: labelAlignment, border: borderAllb, bold: true });
+        applyRange(rowNum, 13, 17, {
+          alignment: centerAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
         applyRange(rowNum, 18, 19, { alignment: centerAlignment, border: borderAllb, bold: true });
         applyRange(rowNum, 20, 22, { alignment: centerAlignment, border: borderAllb, bold: true });
         raporWs.getRow(rowNum).height = 20;
       };
 
       const styleDataRow = (rowNum, { bold } = {}) => {
-        raporWs.mergeCells(rowNum, 2, rowNum, 14);
-        raporWs.mergeCells(rowNum, 15, rowNum, 17);
+        raporWs.mergeCells(rowNum, 2, rowNum, 12);
+        raporWs.mergeCells(rowNum, 13, rowNum, 17);
         raporWs.mergeCells(rowNum, 18, rowNum, 19);
         raporWs.mergeCells(rowNum, 20, rowNum, 22);
-        applyRange(rowNum, 2, 14, { alignment: labelAlignment, border: borderAllb, bold });
-        applyRange(rowNum, 15, 17, {
+        applyRange(rowNum, 2, 12, { alignment: labelAlignment, border: borderAllb, bold:true, fontSize:9 });
+        applyRange(rowNum, 13, 17, {
           alignment: centerAlignment,
           border: borderAllb,
           numFmt: countFormat,
           bold,
+          fontSize: 11,
         });
         applyRange(rowNum, 18, 19, {
           alignment: centerAlignment,
@@ -2873,33 +2900,58 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const perfActualNumFmt = `#,##0 "${currentLocalCodeLabel}"`;
       const ratioFormat = percentNumFmt;
 
-      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
+      const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold, fontSize } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
           const cell = raporWs.getCell(rowNum, col);
           if (border) cell.border = border;
           if (alignment) cell.alignment = alignment;
           if (numFmt) cell.numFmt = numFmt;
-          if (bold) cell.font = { ...(cell.font || {}), bold: true };
+          const fontUpdates = {};
+          if (bold) fontUpdates.bold = true;
+          if (fontSize) fontUpdates.size = fontSize;
+          if (Object.keys(fontUpdates).length) {
+            cell.font = { ...(cell.font || {}), ...fontUpdates };
+          }
         }
       };
 
       const styleHeaderRow = (rowNum) => {
-        raporWs.mergeCells(rowNum, 2, rowNum, 6);
-        raporWs.mergeCells(rowNum, 7, rowNum, 12);
-        raporWs.mergeCells(rowNum, 13, rowNum, 18);
-        raporWs.mergeCells(rowNum, 19, rowNum, 22);
-        applyRange(rowNum, 2, 6, { alignment: labelAlignment, border: borderAllb, bold: true });
-        applyRange(rowNum, 7, 12, { alignment: valueAlignment, border: borderAllb, bold: true });
-        applyRange(rowNum, 13, 18, { alignment: valueAlignment, border: borderAllb, bold: true });
-        applyRange(rowNum, 19, 22, { alignment: valueAlignment, border: borderAllb, bold: true });
+        raporWs.mergeCells(rowNum, 2, rowNum, 8);
+        raporWs.mergeCells(rowNum, 9, rowNum, 13);
+        raporWs.mergeCells(rowNum, 14, rowNum, 19);
+        raporWs.mergeCells(rowNum, 20, rowNum, 22);
+        applyRange(rowNum, 2, 8, {
+          alignment: labelAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
+        applyRange(rowNum, 9, 13, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
+        applyRange(rowNum, 14, 19, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
+        applyRange(rowNum, 20, 22, {
+          alignment: valueAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
         raporWs.getRow(rowNum).height = 20;
       };
 
       const styleDataRow = (rowNum) => {
-        raporWs.mergeCells(rowNum, 2, rowNum, 6);
-        raporWs.mergeCells(rowNum, 7, rowNum, 12);
-        raporWs.mergeCells(rowNum, 13, rowNum, 18);
-        raporWs.mergeCells(rowNum, 19, rowNum, 22);
+        raporWs.mergeCells(rowNum, 2, rowNum, 8);
+        raporWs.mergeCells(rowNum, 9, rowNum, 13);
+        raporWs.mergeCells(rowNum, 14, rowNum, 19);
+        raporWs.mergeCells(rowNum, 20, rowNum, 22);
 
         const label = String(raporWs.getCell(rowNum, 2).value || "").toLowerCase();
         const plannedFormat = label.includes("ogrenci")
@@ -2913,10 +2965,15 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
             ? perfActualNumFmt
             : amountFormat;
 
-        applyRange(rowNum, 2, 6, { alignment: labelAlignment, border: borderAllb });
-        applyRange(rowNum, 7, 12, { alignment: valueAlignment, border: borderAllb, numFmt: plannedFormat });
-        applyRange(rowNum, 13, 18, { alignment: valueAlignment, border: borderAllb, numFmt: actualFormat });
-        applyRange(rowNum, 19, 22, { alignment: valueAlignment, border: borderAllb, numFmt: ratioFormat });
+        applyRange(rowNum, 2, 8, {
+          alignment: labelAlignment,
+          border: borderAllb,
+          bold: true,
+          fontSize: 9,
+        });
+        applyRange(rowNum, 9, 13, { alignment: valueAlignment, border: borderAllb, numFmt: plannedFormat });
+        applyRange(rowNum, 14, 19, { alignment: valueAlignment, border: borderAllb, numFmt: actualFormat });
+        applyRange(rowNum, 20, 22, { alignment: valueAlignment, border: borderAllb, numFmt: ratioFormat });
         raporWs.getRow(rowNum).height = 20;
       };
 
