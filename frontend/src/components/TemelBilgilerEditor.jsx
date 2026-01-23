@@ -309,7 +309,9 @@ export default function TemelBilgilerEditor({
   const actualNeedsRealFx =
     (isScenarioLocal && showUsdPerf) || (!isScenarioLocal && showLocalPerf);
   const actualConversionMissing = actualNeedsRealFx && !hasRealizedFx;
-  const localCurrencyLabel = String(currencyMeta?.local_currency_code || currencyCode || "LOCAL").toUpperCase();
+  const localCurrencyLabel = String(
+    currencyMeta?.local_currency_code || prevCurrencyMeta?.local_currency_code || "LOCAL"
+  ).toUpperCase();
   const shouldShowFxWarning = plannedConversionMissing || actualConversionMissing;
   const realizedFxRequired = isScenarioLocal && showUsdPerf;
   const actualPlaceholder = actualConversionMissing ? "—" : undefined;
