@@ -1652,7 +1652,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     raporWs.mergeCells("B59:V60");
     const cellB59 = raporWs.getCell("B59");
     cellB59.alignment = { vertical: "middle", horizontal: "center" };
-    cellB59.font = { ...(cellB59.font || {}), bold: true, size: 18, name: "Times New Roman", color: { argb: "FFFFFFFF" } };
+    cellB59.font = { ...(cellB59.font || {}), bold: true, size: 12, name: "Times New Roman", color: { argb: "FFFFFFFF" } };
     cellB59.fill = {
       type: "pattern",
       pattern: "solid",
@@ -1725,7 +1725,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     raporWs.mergeCells("B77:V78");
     const cellB77 = raporWs.getCell("B77");
     cellB77.alignment = { vertical: "middle", horizontal: "center" };
-    cellB77.font = { ...(cellB77.font || {}), bold: true, size: 16, name: "Times New Roman", color: { argb: "FFFFFFFF" } };
+    cellB77.font = { ...(cellB77.font || {}), bold: true, size: 12, name: "Times New Roman", color: { argb: "FFFFFFFF" } };
     cellB77.fill = {
       type: "pattern",
       pattern: "solid",
@@ -1925,7 +1925,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       paramTitleCell.font = {
         ...(paramTitleCell.font || {}),
         bold: true,
-        size: 14,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2077,7 +2077,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       capTitleCell.font = {
         ...(capTitleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2205,7 +2205,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       hrTitleCell.font = {
         ...(hrTitleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2280,7 +2280,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       revenueTitleCell.font = {
         ...(revenueTitleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2372,7 +2372,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       expenseTitleCell.font = {
         ...(expenseTitleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2386,6 +2386,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const valueAlignment = { vertical: "middle", horizontal: "center", wrapText: true };
       const amountFormat = currencyNumFmt;
       const ratioFormat = percentNumFmt;
+      const ratioAlertFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFF0000" } };
 
       const applyRange = (rowNum, startCol, endCol, { alignment, border, numFmt, bold } = {}) => {
         for (let col = startCol; col <= endCol; col += 1) {
@@ -2418,6 +2419,32 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         raporWs.getRow(rowNum).height = 20;
       };
 
+      const toRatioValue = (value) => {
+        if (value == null) return null;
+        let raw = value;
+        if (typeof raw === "object" && raw !== null && "result" in raw) raw = raw.result;
+        if (typeof raw === "string") {
+          const trimmed = raw.trim();
+          if (trimmed.endsWith("%")) {
+            const n = Number(trimmed.slice(0, -1));
+            return Number.isFinite(n) ? n / 100 : null;
+          }
+        }
+        const n = Number(raw);
+        if (!Number.isFinite(n)) return null;
+        if (n > 1) return n / 100;
+        return n;
+      };
+
+      const applyRatioAlert = (rowNum, threshold) => {
+        const ratio = toRatioValue(raporWs.getCell(rowNum, 21).value);
+        if (ratio != null && ratio > threshold) {
+          for (let col = 21; col <= 22; col += 1) {
+            raporWs.getCell(rowNum, col).fill = ratioAlertFill;
+          }
+        }
+      };
+
       styleExpenseRow(expenseHeaderRow, { bold: true, withFormats: false });
 
       for (let i = 0; i < expenseDataCount; i += 1) {
@@ -2425,6 +2452,22 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       }
 
       styleExpenseRow(expenseTotalRow, { bold: true, withFormats: true });
+
+      if (expenseDataCount >= 1) {
+        applyRatioAlert(expenseHeaderRow + 1, 0.15);
+      }
+      if (expenseDataCount >= 2) {
+        applyRatioAlert(expenseHeaderRow + 2, 0.45);
+      }
+      if (expenseDataCount >= 10) {
+        applyRatioAlert(expenseHeaderRow + 10, 0.08);
+      }
+      if (expenseDataCount >= 11) {
+        applyRatioAlert(expenseHeaderRow + 11, 0.05);
+      }
+      if (expenseDataCount >= 12) {
+        applyRatioAlert(expenseHeaderRow + 12, 0.02);
+      }
     }
 
     // TABLE C.5 TAHSIL EDILEMEYECEK GELIRLER (text block)
@@ -2445,7 +2488,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };
@@ -2824,7 +2867,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       titleCell.font = {
         ...(titleCell.font || {}),
         bold: true,
-        size: 16,
+        size: 12,
         name: "Times New Roman",
         color: { argb: "FFFFFFFF" },
       };

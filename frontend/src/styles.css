@@ -1900,6 +1900,15 @@ hr {
     background 160ms ease,
     opacity 160ms ease;
 }
+.school-page .topbar-btn.is-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.school-page .topbar-btn.is-loading:disabled {
+  opacity: 0.9;
+  cursor: progress;
+}
 .school-page .topbar-btn:hover {
   transform: translateY(-1px);
   background: #fff;
@@ -1930,6 +1939,26 @@ hr {
 .school-page .topbar-btn.is-primary:hover {
   background: #0f172a;
   border-color: #0f172a;
+}
+
+.school-page .pdf-export-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 3px solid rgba(15, 23, 42, 0.18);
+  border-top-color: #0ea5e9;
+  border-right-color: #22c55e;
+  animation: pdf-export-spin 0.8s linear infinite;
+  box-shadow:
+    0 0 0 2px rgba(14, 165, 233, 0.08),
+    0 0 12px rgba(14, 165, 233, 0.35);
+  flex: 0 0 auto;
+}
+
+@keyframes pdf-export-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Tabs row */

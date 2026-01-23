@@ -95,6 +95,18 @@ const getSchoolStatusMeta = (status) => {
   return { label: "Active", className: "is-ok" };
 };
 
+const getDynamicHint = (sectionId, field) => {
+  if (!field) return null;
+  const id = String(field.id || "");
+  const label = String(field.label || "");
+  if (sectionId === "gradesPlan.plan") {
+    if (id.startsWith("gradesPlan.") || label.includes("Plan ")) return "grade";
+  }
+  if (sectionId === "ik.localStaff" && id.startsWith("ik.headcount.")) return "type";
+  if (sectionId === "gelirler.unitFee" && id.startsWith("gelirler.tuition.")) return "type";
+  return null;
+};
+
 export default function AdminPage() {
   const auth = useAuth();
   const [activeTab, setActiveTab] = useState("users");
@@ -117,6 +129,7 @@ export default function AdminPage() {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState("user");
+  const [newUserCountryId, setNewUserCountryId] = useState("");
 
   const [assignUserId, setAssignUserId] = useState("");
   const [assignCountryId, setAssignCountryId] = useState("");
@@ -136,6 +149,10 @@ export default function AdminPage() {
   const [progressLoading, setProgressLoading] = useState(false);
   const [progressSaving, setProgressSaving] = useState(false);
   const [progressSearch, setProgressSearch] = useState("");
+  const [progressTargetIds, setProgressTargetIds] = useState(() => new Set());
+  const [progressCountryListSearch, setProgressCountryListSearch] = useState("");
+  const [progressBulkSaving, setProgressBulkSaving] = useState(false);
+  const [showOnlySelectedBySection, setShowOnlySelectedBySection] = useState({});
   const [expandedProgressTabs, setExpandedProgressTabs] = useState(new Set());
   const [expandedProgressSections, setExpandedProgressSections] = useState(new Set());
 
@@ -346,6 +363,24 @@ export default function AdminPage() {
   }, [queueRows, queueSort]);
 
   const progressSearchValue = progressSearch.trim().toLowerCase();
+
+  const filteredCountriesForApply = useMemo(() => {
+    const q = progressCountryListSearch.trim().toLowerCase();
+    if (!q) return countries;
+    return countries.filter((c) => {
+      const name = String(c.name || "").toLowerCase();
+      const code = String(c.code || "").toLowerCase();
+      return name.includes(q) || code.includes(q);
+    });
+  }, [countries, progressCountryListSearch]);
+
+  const progressTargetCount = progressTargetIds.size;
+  const progressBulkDisabled =
+    !progressCountryId ||
+    progressTargetCount === 0 ||
+    progressSaving ||
+    progressLoading ||
+    progressBulkSaving;
 
   const filteredCountrySchools = useMemo(() => {
     const q = schoolsSearch.trim().toLowerCase();
@@ -575,6 +610,14 @@ export default function AdminPage() {
       password: newUserPassword,
       role: newUserRole,
     };
+    if (newUserCountryId) {
+      const nextId = Number(newUserCountryId);
+      if (!Number.isFinite(nextId)) {
+        toast.error("Invalid country selection");
+        return;
+      }
+      payload.countryId = nextId;
+    }
     if (!payload.email || !payload.password) {
       toast.error("Email and password are required");
       return;
@@ -589,6 +632,7 @@ export default function AdminPage() {
       setNewUserEmail("");
       setNewUserPassword("");
       setNewUserRole("user");
+      setNewUserCountryId("");
       await load();
       toast.success("User created (password reset required on first login)");
     } catch (e) {
@@ -871,6 +915,67 @@ export default function AdminPage() {
         if (section.selectedFields) section.selectedFields[id] = false;
       });
     });
+  };
+
+  const toggleTargetCountry = (countryId) => {
+    const id = Number(countryId);
+    if (!Number.isFinite(id)) return;
+    setProgressTargetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllTargets = () => {
+    setProgressTargetIds((prev) => {
+      const next = new Set(prev);
+      filteredCountriesForApply.forEach((country) => {
+        const id = Number(country.id);
+        if (Number.isFinite(id)) next.add(id);
+      });
+      return next;
+    });
+  };
+
+  const clearTargets = () => {
+    setProgressTargetIds(new Set());
+  };
+
+  const applyProgressConfigToSelectedCountries = async () => {
+    const ids = Array.from(progressTargetIds)
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id));
+    const uniqueIds = Array.from(new Set(ids));
+    if (!uniqueIds.length) {
+      toast.error("Select at least one country");
+      return;
+    }
+    if (!progressCountryId) {
+      toast.error("Select a country to edit rules first");
+      return;
+    }
+    const ok = window.confirm(
+      `Apply this configuration to ${uniqueIds.length} countries? This will overwrite their current rules.`
+    );
+    if (!ok) return;
+
+    setProgressBulkSaving(true);
+    try {
+      const result = await api.adminBulkSaveProgressRequirements(uniqueIds, progressConfigNormalized);
+      const updatedCount = Number.isFinite(Number(result?.updatedCount))
+        ? Number(result.updatedCount)
+        : uniqueIds.length;
+      toast.success(`Applied to ${updatedCount} countries`);
+      if (uniqueIds.some((id) => String(id) === String(progressCountryId))) {
+        await loadProgressRequirements(progressCountryId);
+      }
+    } catch (e) {
+      toast.error(e.message || "Failed to apply progress requirements");
+    } finally {
+      setProgressBulkSaving(false);
+    }
   };
 
   const saveProgressConfig = async () => {
@@ -1358,6 +1463,18 @@ export default function AdminPage() {
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
                 </select>
+                <select
+                  className="input"
+                  value={newUserCountryId}
+                  onChange={(e) => setNewUserCountryId(e.target.value)}
+                >
+                  <option value="">Assign country (optional)</option>
+                  {countries.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.code}){c.region ? ` - ${c.region}` : ""}
+                    </option>
+                  ))}
+                </select>
                 <button className="btn primary" onClick={createUser} disabled={loading}>
                   Create
                 </button>
@@ -1704,6 +1821,72 @@ export default function AdminPage() {
             </div>
           </div>
 
+          <div className="card" style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Apply to multiple countries</div>
+            <div className="row" style={{ alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <input
+                className="input sm"
+                placeholder="Search countries"
+                value={progressCountryListSearch}
+                onChange={(e) => setProgressCountryListSearch(e.target.value)}
+              />
+              <button
+                className="btn"
+                onClick={selectAllTargets}
+                disabled={filteredCountriesForApply.length === 0 || progressBulkSaving}
+              >
+                Select all
+              </button>
+              <button
+                className="btn"
+                onClick={clearTargets}
+                disabled={progressTargetCount === 0 || progressBulkSaving}
+              >
+                Clear
+              </button>
+              <button
+                className="btn primary"
+                onClick={applyProgressConfigToSelectedCountries}
+                disabled={progressBulkDisabled}
+              >
+                {progressBulkSaving ? "Applying..." : `Apply to Selected (${progressTargetCount})`}
+              </button>
+            </div>
+
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                borderRadius: 10,
+                padding: 10,
+                background: "#fff",
+                maxHeight: 240,
+                overflowY: "auto",
+              }}
+            >
+              {filteredCountriesForApply.length === 0 ? (
+                <div className="small">No countries found.</div>
+              ) : (
+                filteredCountriesForApply.map((country) => {
+                  const id = Number(country.id);
+                  const checked = progressTargetIds.has(id);
+                  return (
+                    <label
+                      key={country.id}
+                      style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleTargetCountry(id)}
+                      />
+                      <span>{country.name || "-"}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
           {!progressCountryId ? (
             <div className="card" style={{ marginTop: 12 }}>
               <div className="small">Select a country to edit progress rules.</div>
@@ -1778,6 +1961,20 @@ export default function AdminPage() {
                               const selectedCount = allFields.filter(
                                 (field) => sectionConfig.selectedFields?.[field.id] !== false
                               ).length;
+                              const totalCount = allFields.length;
+                              const showOnlySelected = Boolean(showOnlySelectedBySection[section.id]);
+                              const visibleFields = showOnlySelected
+                                ? filteredFields.filter((field) => sectionConfig.selectedFields?.[field.id] !== false)
+                                : filteredFields;
+                              const minValue = sectionMode === "MIN" ? sectionMin : null;
+                              const minTooHigh = sectionMode === "MIN" && minValue > selectedCount;
+                              const ruleSummary =
+                                sectionMode === "ALL"
+                                  ? `✅ Rule: Must complete ALL selected fields (${selectedCount} selected)`
+                                  : minTooHigh
+                                    ? `⚠️ MIN (${minValue}) is greater than selected (${selectedCount}). It will behave like ALL.`
+                                    : `✅ Rule: Must complete AT LEAST ${minValue} of ${selectedCount} selected fields`;
+                              const requiredCount = sectionMode === "MIN" ? minValue : selectedCount;
 
                               return (
                                 <div key={section.id} style={{ borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
@@ -1800,6 +1997,19 @@ export default function AdminPage() {
                                     </div>
 
                                     <div className="row">
+                                      <label className="small">
+                                        <input
+                                          type="checkbox"
+                                          checked={showOnlySelected}
+                                          onChange={() =>
+                                            setShowOnlySelectedBySection((prev) => ({
+                                              ...prev,
+                                              [section.id]: !prev?.[section.id],
+                                            }))
+                                          }
+                                        />{" "}
+                                        Show only selected
+                                      </label>
                                       <label className="small">
                                         <input
                                           type="checkbox"
@@ -1841,26 +2051,60 @@ export default function AdminPage() {
                                       </button>
                                     </div>
                                   </div>
+                                  <div className="small" style={{ marginTop: 6 }}>
+                                    {ruleSummary}
+                                  </div>
+                                  <div className="small" style={{ marginTop: 4, color: "#6b7280" }}>
+                                    Selected: {selectedCount}/{totalCount} · Mode: {sectionMode} · Required: {requiredCount}
+                                  </div>
 
                                   {sectionExpanded ? (
                                     <div style={{ marginTop: 8 }}>
-                                      {!filteredFields.length ? (
+                                      {!visibleFields.length ? (
                                         <div className="small">No fields available for this section.</div>
                                       ) : (
                                         <div className="grid2" style={{ gap: 8 }}>
-                                          {filteredFields.map((field) => {
+                                          {visibleFields.map((field) => {
                                             const checked = sectionConfig.selectedFields?.[field.id] !== false;
+                                            const dynamicHint = getDynamicHint(section.id, field);
                                             return (
-                                              <label key={field.id} className="small" style={{ display: "flex", gap: 8 }}>
-                                                <input
-                                                  type="checkbox"
-                                                  checked={checked}
-                                                  onChange={(e) =>
-                                                    setProgressFieldSelected(section.id, field.id, e.target.checked)
-                                                  }
-                                                  disabled={!sectionEnabled}
-                                                />
-                                                <span>{field.label || field.id}</span>
+                                              <label
+                                                key={field.id}
+                                                className="small"
+                                                style={{
+                                                  display: "flex",
+                                                  gap: 8,
+                                                  alignItems: "center",
+                                                  justifyContent: "space-between",
+                                                  width: "100%",
+                                                }}
+                                              >
+                                                <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={(e) =>
+                                                      setProgressFieldSelected(section.id, field.id, e.target.checked)
+                                                    }
+                                                    disabled={!sectionEnabled}
+                                                  />
+                                                  <span>{field.label || field.id}</span>
+                                                </span>
+                                                {dynamicHint ? (
+                                                  <span
+                                                    style={{
+                                                      padding: "2px 8px",
+                                                      borderRadius: 999,
+                                                      background: "#eef2f7",
+                                                      color: "#374151",
+                                                      fontSize: 11,
+                                                      lineHeight: 1.4,
+                                                      whiteSpace: "nowrap",
+                                                    }}
+                                                  >
+                                                    Dynamic: {dynamicHint}
+                                                  </span>
+                                                ) : null}
                                               </label>
                                             );
                                           })}

@@ -131,6 +131,103 @@ function mergeMissingLines(a, b) {
   return out.slice(0, 15);
 }
 
+function convertInputsUsdToLocalForCopy(inputs, fx) {
+  const rate = Number(fx);
+  if (!Number.isFinite(rate) || rate <= 0) return inputs;
+
+  const mulMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return v;
+    return Math.round(n * rate * 100) / 100; // money 2 decimals
+  };
+
+  // GELIRLER (income): unitFee / amount-like fields
+  if (inputs?.gelirler) {
+    const g = inputs.gelirler;
+
+    const convertRows = (rows) => {
+      if (!Array.isArray(rows)) return;
+      rows.forEach((r) => {
+        if (!r || typeof r !== "object") return;
+        if ("unitFee" in r) r.unitFee = mulMoney(r.unitFee);
+        if ("amount" in r) r.amount = mulMoney(r.amount);
+      });
+    };
+
+    convertRows(g?.tuition?.rows);
+    convertRows(g?.nonEducationFees?.rows);
+    convertRows(g?.dormitory?.rows);
+    convertRows(g?.otherInstitutionIncome?.rows);
+
+    if (g?.governmentIncentives != null) {
+      g.governmentIncentives = mulMoney(g.governmentIncentives);
+    }
+  }
+
+  // GIDERLER (expenses): convert group.items numeric values
+  if (inputs?.giderler && typeof inputs.giderler === "object") {
+    Object.values(inputs.giderler).forEach((grp) => {
+      if (!grp || typeof grp !== "object") return;
+      if (!grp.items || typeof grp.items !== "object") return;
+      Object.keys(grp.items).forEach((k) => {
+        grp.items[k] = mulMoney(grp.items[k]);
+      });
+    });
+  }
+
+  // IK: convert unitCosts if exist
+  if (inputs?.ik?.years && typeof inputs.ik.years === "object") {
+    Object.values(inputs.ik.years).forEach((yearObj) => {
+      if (!yearObj || typeof yearObj !== "object") return;
+      if (!yearObj.unitCosts || typeof yearObj.unitCosts !== "object") return;
+      Object.keys(yearObj.unitCosts).forEach((k) => {
+        yearObj.unitCosts[k] = mulMoney(yearObj.unitCosts[k]);
+      });
+    });
+  }
+
+  // Discounts: convert only if mode === "amount"
+  if (Array.isArray(inputs?.discounts)) {
+    inputs.discounts.forEach((d) => {
+      if (!d || typeof d !== "object") return;
+      if (String(d.mode || "").toLowerCase() === "amount") {
+        d.value = mulMoney(d.value);
+      }
+    });
+  }
+
+  // Temel Bilgiler: currentSeasonAvgFee + competitor fee-like fields
+  const tb = inputs?.temelBilgiler;
+  if (tb) {
+    if (tb?.inflation?.currentSeasonAvgFee != null) {
+      tb.inflation.currentSeasonAvgFee = mulMoney(tb.inflation.currentSeasonAvgFee);
+    }
+
+    if (tb?.rakipAnalizi && typeof tb.rakipAnalizi === "object") {
+      Object.values(tb.rakipAnalizi).forEach((obj) => {
+        if (!obj || typeof obj !== "object") return;
+        ["a", "b", "c"].forEach((k) => {
+          if (k in obj) obj[k] = mulMoney(obj[k]);
+        });
+      });
+    }
+
+    if (tb?.performans?.gerceklesen && typeof tb.performans.gerceklesen === "object") {
+      Object.keys(tb.performans.gerceklesen).forEach((k) => {
+        tb.performans.gerceklesen[k] = mulMoney(tb.performans.gerceklesen[k]);
+      });
+    }
+  }
+
+  return inputs;
+}
+
+function convertInputsLocalToUsdForCopy(inputs, fx) {
+  const rate = Number(fx);
+  if (!Number.isFinite(rate) || rate <= 0) return inputs;
+  return convertInputsUsdToLocalForCopy(inputs, 1 / rate);
+}
+
 export default function SchoolPage() {
   const { id } = useParams();
   const location = useLocation();
@@ -198,7 +295,12 @@ export default function SchoolPage() {
   const [exportingPdf, setExportingPdf] = useState(false);
   const [submittingScenarioId, setSubmittingScenarioId] = useState(null);
   const [copyingScenarioId, setCopyingScenarioId] = useState(null);
-  // --- Modern scrollable tabs helpers ---
+  const [copyModalOpen, setCopyModalOpen] = useState(false);
+  const [copyModalError, setCopyModalError] = useState("");
+  const [copyTargetCurrency, setCopyTargetCurrency] = useState("USD");
+  const [copyLocalCurrencyCode, setCopyLocalCurrencyCode] = useState("");
+  const [copyPlannedFxUsdToLocal, setCopyPlannedFxUsdToLocal] = useState("");
+  const [copyFxUsdToLocal, setCopyFxUsdToLocal] = useState("");  // --- Modern scrollable tabs helpers ---
   const tabsScrollRef = useRef(null);
   const [tabsScroll, setTabsScroll] = useState({ left: false, right: false });
   // Page boot loading (used to show a spinner while auto-starting the scenario wizard)
@@ -210,6 +312,7 @@ export default function SchoolPage() {
     [schoolId, selectedScenarioId]
   );
   const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
+  const reportCurrencyDefaultedForRef = useRef(null);
   const reportTabSuffix = useMemo(() => {
     if (!selectedScenario) return "";
     const inputCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
@@ -357,18 +460,22 @@ export default function SchoolPage() {
     hasEnabledKademe,
     draftReady,
   ];
+  const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
   const inputCurrencyCode =
     selectedScenario?.input_currency === "LOCAL"
       ? (selectedScenario.local_currency_code || "LOCAL")
       : "USD";
+  const isLocalScenario = selectedScenario?.input_currency === "LOCAL";
+  const prevRealFxValue = Number(inputs?.temelBilgiler?.performans?.prevYearRealizedFxUsdToLocal || 0);
+  const prevRealFxMissing = isLocalScenario && !(Number.isFinite(prevRealFxValue) && prevRealFxValue > 0);
 
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
   const programType = useMemo(() => getProgramType(inputs, selectedScenario), [inputs, selectedScenario]);
 
   const scenarioProgress = useMemo(
-    () => computeScenarioProgress({ inputs, norm, config: progressConfig }),
-    [inputs, norm, progressConfig]
+    () => computeScenarioProgress({ inputs, norm, config: progressConfig, scenario: selectedScenario }),
+    [inputs, norm, progressConfig, selectedScenario]
   );
   const progMap = useMemo(
     () => Object.fromEntries((scenarioProgress?.tabs || []).map((t) => [t.key, t])),
@@ -863,14 +970,37 @@ export default function SchoolPage() {
   }, [schoolId, selectedScenarioId]);
 
   useEffect(() => {
+    if (!selectedScenarioId) {
+      reportCurrencyDefaultedForRef.current = null;
+      return;
+    }
+    const scenarioId = selectedScenario?.id;
+    if (!scenarioId || String(scenarioId) !== String(selectedScenarioId)) return;
+
     const isLocal =
       selectedScenario?.input_currency === "LOCAL" &&
       Number(selectedScenario?.fx_usd_to_local) > 0 &&
       selectedScenario?.local_currency_code;
+    const scenarioKey = String(scenarioId);
+
+    if (reportCurrencyDefaultedForRef.current !== scenarioKey) {
+      setReportCurrency(isLocal ? "local" : "usd");
+      reportCurrencyDefaultedForRef.current = scenarioKey;
+      return;
+    }
+
     if (!isLocal && reportCurrency !== "usd") {
       setReportCurrency("usd");
     }
-  }, [selectedScenario?.input_currency, selectedScenario?.fx_usd_to_local, selectedScenario?.local_currency_code, reportCurrency, setReportCurrency]);
+  }, [
+    selectedScenarioId,
+    selectedScenario?.id,
+    selectedScenario?.input_currency,
+    selectedScenario?.fx_usd_to_local,
+    selectedScenario?.local_currency_code,
+    reportCurrency,
+    setReportCurrency,
+  ]);
 
   // Load previous year's report (used in TEMEL BİLGİLER: performans planlanan)
   useEffect(() => {
@@ -1276,10 +1406,10 @@ export default function SchoolPage() {
   }
 
 
-  function showBlockingToast(message) {
+  function showBlockingToast(message, toastId = "blocking-toast") {
     // Small bottom-right notification (does not affect page layout)
     toast.warn(message, {
-      toastId: "norm-y2y3-missing",
+      toastId,
       position: "bottom-right",
       autoClose: false,
       closeOnClick: false,
@@ -1311,15 +1441,31 @@ export default function SchoolPage() {
 
     // Do NOT set page-level err here (it breaks layout). Use toast only.
     setErr("");
-    showBlockingToast(msg);
+    showBlockingToast(msg, "norm-y2y3-missing");
 
     if (tab !== "norm") setTab("norm");
+    return false;
+  }
+
+  function ensurePrevRealFxForLocal(actionLabel = "Islem") {
+    if (!inputs) return true;
+    if (!isLocalScenario) return true;
+    if (!prevRealFxMissing) return true;
+
+    const msg =
+      `${actionLabel} yapilamaz: Temel Bilgiler > Performans alanindaki ` +
+      `"Onceki Donem Ortalama Kur (Gerceklesen)" girilmelidir.`;
+
+    setErr("");
+    showBlockingToast(msg, "prev-realized-fx-missing");
+    if (tab !== "basics") setTab("basics");
     return false;
   }
 
 
   async function calculate(options = {}) {
     if (!selectedScenarioId) return;
+    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
     if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return;
     setCalculating(true);
     setErr("");
@@ -1337,6 +1483,7 @@ export default function SchoolPage() {
 
   async function submitScenarioForApproval(scenarioId) {
     if (!scenarioId || scenarioId !== selectedScenarioId) return;
+    if (!ensurePrevRealFxForLocal("Onaya gonderme")) return;
     if (!ensurePlanningStudentsForY2Y3("Onaya gonderme")) return;
     if (submittingScenarioId) return;
 
@@ -1364,7 +1511,89 @@ export default function SchoolPage() {
     }
   }
 
-  async function copySelectedScenario() {
+  const parseFxInput = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return NaN;
+    const normalized = raw.replace(",", ".");
+    const match = normalized.match(/-?\d+(?:\.\d+)?/);
+    if (!match) return NaN;
+    const num = Number.parseFloat(match[0]);
+    return Number.isFinite(num) ? num : NaN;
+  };
+
+  function openCopyScenarioModal() {
+    if (!selectedScenarioId || !selectedScenario || !inputs) return;
+    if (copyingScenarioId) return;
+    setErr("");
+    setCopyModalError("");
+    const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
+    setCopyTargetCurrency(sourceCurrency === "USD" ? "USD" : "LOCAL");
+    const localCodeDefault = String(
+      selectedScenario?.local_currency_code || (sourceCurrency === "USD" ? "AFN" : "")
+    )
+      .trim()
+      .toUpperCase();
+    setCopyLocalCurrencyCode(localCodeDefault);
+    const fxDefault = selectedScenario?.fx_usd_to_local != null ? String(selectedScenario.fx_usd_to_local) : "";
+    setCopyPlannedFxUsdToLocal(fxDefault);
+    setCopyFxUsdToLocal(fxDefault);
+    setCopyModalOpen(true);
+  }
+
+  function closeCopyScenarioModal() {
+    setCopyModalOpen(false);
+    setCopyModalError("");
+  }
+
+  async function confirmCopyScenarioModal() {
+    if (!selectedScenarioId || !selectedScenario || !inputs) return;
+    const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
+    const targetCurrency = String(copyTargetCurrency || sourceCurrency).toUpperCase();
+
+    let localCurrencyCodeValue = null;
+    let plannedFxUsdToLocalValue = null;
+    let copyFxUsdToLocalValue = null;
+
+    if (sourceCurrency === "USD" && targetCurrency === "LOCAL") {
+      const normalizedLocalCode = String(copyLocalCurrencyCode || "").trim().toUpperCase();
+      if (!normalizedLocalCode || !CURRENCY_CODE_REGEX.test(normalizedLocalCode)) {
+        setCopyModalError("Local para birimi kodu gecersiz.");
+        return;
+      }
+      const plannedFxNumber = parseFxInput(copyPlannedFxUsdToLocal);
+      if (!Number.isFinite(plannedFxNumber) || plannedFxNumber <= 0) {
+        setCopyModalError("Gecerli bir kur girilmelidir.");
+        return;
+      }
+      const copyFxNumber = parseFxInput(copyFxUsdToLocal);
+      if (!Number.isFinite(copyFxNumber) || copyFxNumber <= 0) {
+        setCopyModalError("Gecerli bir kopyalama kuru girilmelidir.");
+        return;
+      }
+      localCurrencyCodeValue = normalizedLocalCode;
+      plannedFxUsdToLocalValue = plannedFxNumber;
+      copyFxUsdToLocalValue = copyFxNumber;
+    }
+
+    if (sourceCurrency === "LOCAL" && targetCurrency === "USD") {
+      const copyFxNumber = parseFxInput(copyFxUsdToLocal);
+      if (!Number.isFinite(copyFxNumber) || copyFxNumber <= 0) {
+        setCopyModalError("Gecerli bir kopyalama kuru girilmelidir.");
+        return;
+      }
+      copyFxUsdToLocalValue = copyFxNumber;
+    }
+
+    closeCopyScenarioModal();
+    await copySelectedScenario({
+      targetCurrency,
+      localCurrencyCode: localCurrencyCodeValue,
+      plannedFxUsdToLocal: plannedFxUsdToLocalValue,
+      copyFxUsdToLocal: copyFxUsdToLocalValue,
+    });
+  }
+
+  async function copySelectedScenario(copyOptions = {}) {
     if (!selectedScenarioId || !selectedScenario || !inputs) return;
     if (copyingScenarioId) return;
     if (!selectedScenario.academic_year) {
@@ -1373,6 +1602,44 @@ export default function SchoolPage() {
     }
 
     setErr("");
+    const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
+    const targetCurrency = String(copyOptions?.targetCurrency || sourceCurrency).toUpperCase();
+    let localCurrencyCode = copyOptions?.localCurrencyCode ?? null;
+    let plannedFxUsdToLocal = copyOptions?.plannedFxUsdToLocal ?? null;
+    let copyFxUsdToLocal = copyOptions?.copyFxUsdToLocal ?? null;
+    let plannedFxParsed = parseFxInput(plannedFxUsdToLocal);
+    let copyFxParsed = parseFxInput(copyFxUsdToLocal);
+
+    if (sourceCurrency === "LOCAL" && targetCurrency === "LOCAL") {
+      localCurrencyCode = localCurrencyCode ?? selectedScenario.local_currency_code ?? "";
+      plannedFxUsdToLocal = plannedFxUsdToLocal ?? selectedScenario.fx_usd_to_local;
+      plannedFxParsed = parseFxInput(plannedFxUsdToLocal);
+    }
+
+    if (sourceCurrency === "LOCAL" && targetCurrency === "USD") {
+      copyFxUsdToLocal = copyFxUsdToLocal ?? selectedScenario.fx_usd_to_local;
+      copyFxParsed = parseFxInput(copyFxUsdToLocal);
+      if (!Number.isFinite(copyFxParsed) || copyFxParsed <= 0) {
+        toast.warn("Gecerli bir kopyalama kuru girilmelidir.");
+        return;
+      }
+    }
+
+    if (sourceCurrency === "USD" && targetCurrency === "LOCAL") {
+      if (!localCurrencyCode || !CURRENCY_CODE_REGEX.test(localCurrencyCode)) {
+        toast.warn("Local para birimi kodu gecersiz.");
+        return;
+      }
+      if (!Number.isFinite(plannedFxParsed) || plannedFxParsed <= 0) {
+        toast.warn("Gecerli bir kur girilmelidir.");
+        return;
+      }
+      if (!Number.isFinite(copyFxParsed) || copyFxParsed <= 0) {
+        toast.warn("Gecerli bir kopyalama kuru girilmelidir.");
+        return;
+      }
+    }
+
     setCopyingScenarioId(selectedScenarioId);
     try {
       const baseName = selectedScenario.name || "Senaryo";
@@ -1396,15 +1663,17 @@ export default function SchoolPage() {
       const kademeConfig = normalizeKademeConfig(
         inputs?.temelBilgiler?.kademeler || getDefaultKademeConfig()
       );
+      const fxForCreate =
+        targetCurrency === "LOCAL" && Number.isFinite(plannedFxParsed) && plannedFxParsed > 0
+          ? plannedFxParsed
+          : null;
       const created = await api.createScenario(schoolId, {
         name: copyName,
         academicYear: candidateYear,
         kademeConfig,
-        inputCurrency: selectedScenario.input_currency || "USD",
-        localCurrencyCode:
-          selectedScenario.input_currency === "LOCAL" ? selectedScenario.local_currency_code || "" : null,
-        fxUsdToLocal:
-          selectedScenario.input_currency === "LOCAL" ? selectedScenario.fx_usd_to_local : null,
+        inputCurrency: targetCurrency,
+        localCurrencyCode: targetCurrency === "LOCAL" ? localCurrencyCode || "" : null,
+        fxUsdToLocal: fxForCreate,
         programType: selectedScenario?.program_type || PROGRAM_TYPES.LOCAL,
       });
 
@@ -1413,6 +1682,21 @@ export default function SchoolPage() {
       clonedInputs = normalizeCapacityInputs(clonedInputs);
       clonedInputs = normalizeGradesInputs(clonedInputs);
       clonedInputs = normalizeTemelBilgilerInputs(clonedInputs);
+
+      if (sourceCurrency === "USD" && targetCurrency === "LOCAL") {
+        clonedInputs = convertInputsUsdToLocalForCopy(clonedInputs, copyFxParsed);
+        clonedInputs.temelBilgiler = clonedInputs.temelBilgiler || {};
+        clonedInputs.temelBilgiler.performans = clonedInputs.temelBilgiler.performans || {};
+        clonedInputs.temelBilgiler.performans.prevYearRealizedFxUsdToLocal = Number(copyFxParsed);
+      }
+
+      if (sourceCurrency === "LOCAL" && targetCurrency === "USD") {
+        clonedInputs = convertInputsLocalToUsdForCopy(clonedInputs, copyFxParsed);
+        clonedInputs.temelBilgiler = clonedInputs.temelBilgiler || {};
+        clonedInputs.temelBilgiler.performans = clonedInputs.temelBilgiler.performans || {};
+        clonedInputs.temelBilgiler.performans.prevYearRealizedFxUsdToLocal = Number(copyFxParsed);
+      }
+
       await api.saveScenarioInputs(schoolId, created.id, clonedInputs);
 
       await refreshScenarios();
@@ -1834,6 +2118,7 @@ export default function SchoolPage() {
                   className="topbar-btn is-primary"
                   onClick={async () => {
                     if (inputsSaving || calculating) return;
+                    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
                     if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
                     if (inputsDirty) {
                       const ok = await saveInputs();
@@ -1852,7 +2137,7 @@ export default function SchoolPage() {
                   <div className="action-menu" ref={exportMenuRef}>
                     <button
                       type="button"
-                      className="topbar-btn is-ghost"
+                      className={`topbar-btn is-ghost ${exportingPdf ? "is-loading" : ""}`}
                       onClick={() => {
                         if (exportDisabled) return;
                         setExportOpen((prev) => !prev);
@@ -1860,7 +2145,9 @@ export default function SchoolPage() {
                       disabled={exportDisabled}
                       aria-haspopup="menu"
                       aria-expanded={exportOpen}
+                      aria-busy={exportingPdf ? "true" : undefined}
                     >
+                      {exportingPdf ? <span className="pdf-export-spinner" aria-hidden="true" /> : null}
                       {exportLabel}
                     </button>
                     {exportOpen ? (
@@ -1972,6 +2259,149 @@ export default function SchoolPage() {
                 }}
               >
                 Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {copyModalOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal" style={{ width: "min(560px, 100%)" }}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 700 }}>Senaryo Kopyalama</div>
+              <button className="btn" onClick={closeCopyScenarioModal}>Kapat</button>
+            </div>
+            <div className="small" style={{ marginTop: 6 }}>
+              Yeni senaryo icin para birimini secin.
+            </div>
+
+            {copyModalError ? (
+              <div className="card" style={{ marginTop: 10, background: "#fff1f2", borderColor: "#fecaca" }}>
+                {copyModalError}
+              </div>
+            ) : null}
+
+            <div style={{ marginTop: 12 }}>
+              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Para Birimi</div>
+              <div className="row" style={{ gap: 12, alignItems: "center" }}>
+                <label className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <input
+                    type="radio"
+                    name="copy-currency"
+                    checked={copyTargetCurrency === "USD"}
+                    onChange={() => {
+                      setCopyTargetCurrency("USD");
+                      setCopyModalError("");
+                    }}
+                  />
+                  <span>USD</span>
+                </label>
+                <label className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <input
+                    type="radio"
+                    name="copy-currency"
+                    checked={copyTargetCurrency === "LOCAL"}
+                    onChange={() => {
+                      setCopyTargetCurrency("LOCAL");
+                      setCopyModalError("");
+                    }}
+                  />
+                  <span>LOCAL</span>
+                </label>
+              </div>
+            </div>
+
+            {sourceCurrency === "USD" && copyTargetCurrency === "LOCAL" ? (
+              <div style={{ marginTop: 12 }}>
+                <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                  <div className="small" style={{ fontWeight: 700 }}>Local currency code</div>
+                  <input
+                    className="input sm"
+                    list="local-currency-codes-copy"
+                    placeholder="AFN"
+                    value={copyLocalCurrencyCode}
+                    onChange={(e) => {
+                      setCopyLocalCurrencyCode(
+                        e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)
+                      );
+                      setCopyModalError("");
+                    }}
+                  />
+                  <datalist id="local-currency-codes-copy">
+                    {LOCAL_CURRENCY_OPTIONS.map((code) => (
+                      <option key={code} value={code} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10 }}>
+                  <span>1 USD =</span>
+                  <input
+                    className="input sm"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="23"
+                    value={copyPlannedFxUsdToLocal}
+                    onChange={(e) => {
+                      setCopyPlannedFxUsdToLocal(e.target.value);
+                      setCopyModalError("");
+                    }}
+                  />
+                  <span>{copyLocalCurrencyCode || "LOCAL"}</span>
+                </div>
+                <div className="small muted" style={{ marginTop: 6 }}>
+                  Yeni senaryo icin tahmini kur.
+                </div>
+
+                <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10 }}>
+                  <span>Kopya kur</span>
+                  <input
+                    className="input sm"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="23"
+                    value={copyFxUsdToLocal}
+                    onChange={(e) => {
+                      setCopyFxUsdToLocal(e.target.value);
+                      setCopyModalError("");
+                    }}
+                  />
+                  <span>{copyLocalCurrencyCode || "LOCAL"}</span>
+                </div>
+                <div className="small muted" style={{ marginTop: 6 }}>
+                  Kopyalanan USD degerlerini cevirmek icin kullanilir.
+                </div>
+              </div>
+            ) : null}
+
+            {sourceCurrency === "LOCAL" && copyTargetCurrency === "USD" ? (
+              <div style={{ marginTop: 12 }}>
+                <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                  <span>1 USD =</span>
+                  <input
+                    className="input sm"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="23"
+                    value={copyFxUsdToLocal}
+                    onChange={(e) => {
+                      setCopyFxUsdToLocal(e.target.value);
+                      setCopyModalError("");
+                    }}
+                  />
+                  <span>{copyLocalCurrencyCode || "LOCAL"}</span>
+                </div>
+                <div className="small muted" style={{ marginTop: 6 }}>
+                  Kopyalanan LOCAL degerlerini USD'ye cevirmek icin kullanilir.
+                </div>
+              </div>
+            ) : null}
+
+            <div className="row" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+              <button className="btn" onClick={closeCopyScenarioModal}>Iptal</button>
+              <button className="btn primary" onClick={confirmCopyScenarioModal}>
+                Tamam
               </button>
             </div>
           </div>
@@ -2460,7 +2890,7 @@ export default function SchoolPage() {
                             <button
                               type="button"
                               className="btn scenario-action-btn"
-                              onClick={copySelectedScenario}
+                              onClick={openCopyScenarioModal}
                               disabled={inputsSaving || calculating || isCopying}
                               title="Kopyala"
                             >

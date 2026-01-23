@@ -143,6 +143,11 @@ export const api = {
       method: "PUT",
       body: { config },
     }),
+  adminBulkSaveProgressRequirements: (countryIds, config) =>
+    request("/admin/progress-requirements/bulk", {
+      method: "PUT",
+      body: { countryIds, config },
+    }),
   listUsers: (opts = {}) => {
     const qs = opts.unassigned ? "?unassigned=1" : "";
     return request(`/admin/users${qs}`);
