@@ -111,11 +111,13 @@ const getDynamicHint = (sectionId, field) => {
   return null;
 };
 
-export default function AdminPage() {
+export default function AdminPage({ forcedTab = null } = {}) {
   const auth = useAuth();
   const outlet = useOutletContext();
   const location = useLocation();
+  const normalizedForcedTab = isValidAdminTab(forcedTab) ? forcedTab : null;
   const [activeTab, setActiveTab] = useState(() => {
+    if (normalizedForcedTab) return normalizedForcedTab;
     const fromSearch = getTabFromSearch(location.search);
     if (fromSearch) return fromSearch;
     try {
@@ -127,6 +129,7 @@ export default function AdminPage() {
     return DEFAULT_ADMIN_TAB;
   });
   useEffect(() => {
+    if (normalizedForcedTab) return;
     const fromSearch = getTabFromSearch(location.search);
     if (fromSearch && fromSearch !== activeTab) {
       setActiveTab(fromSearch);
@@ -135,14 +138,19 @@ export default function AdminPage() {
     if (!fromSearch && activeTab !== DEFAULT_ADMIN_TAB) {
       setActiveTab(DEFAULT_ADMIN_TAB);
     }
-  }, [location.search, activeTab]);
+  }, [location.search, activeTab, normalizedForcedTab]);
   useEffect(() => {
+    if (!normalizedForcedTab) return;
+    if (activeTab !== normalizedForcedTab) setActiveTab(normalizedForcedTab);
+  }, [normalizedForcedTab, activeTab]);
+  useEffect(() => {
+    if (normalizedForcedTab) return;
     try {
       localStorage.setItem("admin.activeTab", activeTab);
     } catch (_) {
       // ignore
     }
-  }, [activeTab]);
+  }, [activeTab, normalizedForcedTab]);
 
   const [countries, setCountries] = useState([]);
   const [users, setUsers] = useState([]);

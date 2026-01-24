@@ -1,15 +1,12 @@
 import React from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import Tooltip from "../components/ui/Tooltip";
 import { ADMIN_TABS } from "../data/adminTabs";
+import { readSelectedScenarioId } from "../utils/schoolNavStorage";
 import {
   FaBars,
-  FaSchool,
   FaUser,
   FaSignOutAlt,
-  FaChevronDown,
-  FaListAlt,
   FaInfoCircle,
   FaUsers,
   FaBalanceScale,
@@ -20,32 +17,6 @@ import {
   FaFileInvoiceDollar,
 } from "react-icons/fa";
 
-const DEFAULT_ADMIN_TAB = ADMIN_TABS[0]?.key || "users";
-const isValidAdminTab = (value) => ADMIN_TABS.some((tab) => tab.key === value);
-const getAdminTabFromSearch = (search) => {
-  if (!search) return null;
-  const params = new URLSearchParams(search);
-  const value = params.get("tab");
-  return isValidAdminTab(value) ? value : null;
-};
-
-const DEFAULT_SCHOOL_GROUPS = [
-  {
-    id: "school-default",
-    items: [
-      { id: "scenarios", label: "Senaryolar", icon: <FaListAlt /> },
-      { id: "basics", label: "Temel Bilgiler", icon: <FaInfoCircle /> },
-      { id: "kapasite", label: "Kapasite", icon: <FaUsers /> },
-      { id: "norm", label: "Norm", icon: <FaBalanceScale /> },
-      { id: "hr", label: "İK (HR)", icon: <FaBriefcase /> },
-      { id: "income", label: "Gelirler", icon: <FaMoneyBillWave /> },
-      { id: "expenses", label: "Giderler", icon: <FaFunnelDollar /> },
-      { id: "detailedReport", label: "Detaylı Rapor", icon: <FaRegFileAlt /> },
-      { id: "report", label: "Rapor", icon: <FaFileInvoiceDollar /> },
-    ],
-  },
-];
-const LOCKED_SCHOOL_TOOLTIP = ["Önce okul seçin."];
 
 function useLocalStorageState(key, defaultValue) {
   const [state, setState] = React.useState(() => {
@@ -65,8 +36,14 @@ function useLocalStorageState(key, defaultValue) {
 }
 
 function defaultTitle(pathname) {
+  if (pathname.startsWith("/select")) return "Okul & Senaryo Sec";
   if (pathname.startsWith("/schools/")) return "Okul";
   if (pathname.startsWith("/schools")) return "Okullar";
+  if (pathname.startsWith("/users")) return "Users";
+  if (pathname.startsWith("/countries")) return "Countries";
+  if (pathname.startsWith("/progress")) return "Progress Tracking";
+  if (pathname.startsWith("/approvals")) return "Çalışma Listeleri";
+  if (pathname.startsWith("/reports")) return "Reports";
   if (pathname.startsWith("/admin")) return "Admin";
   if (pathname.startsWith("/profile")) return "Profil";
   return "Feasibility Studio";
@@ -75,41 +52,28 @@ function defaultTitle(pathname) {
 export default function AppLayout() {
   const auth = useAuth();
   const location = useLocation();
-  const currentAdminTab = React.useMemo(
-    () => getAdminTabFromSearch(location.search) || DEFAULT_ADMIN_TAB,
-    [location.search]
-  );
+  const navigate = useNavigate();
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageState("app.sidebarCollapsed", false);
-  const [openMenus, setOpenMenus] = useLocalStorageState("app.sidebarOpenMenus", { schools: true, addon: true });
-  const [sidebarAddon, setSidebarAddon] = React.useState(null);
   const [headerMeta, setHeaderMeta] = React.useState(null);
   const [headerPortalEl, setHeaderPortalEl] = React.useState(null);
   const captureHeaderPortalEl = React.useCallback((el) => {
     setHeaderPortalEl(el);
   }, []);
-  const isSchoolRoute = location.pathname.startsWith("/schools/");
-  const isSchoolsActive = location.pathname.startsWith("/schools");
-  const schoolAddon = isSchoolRoute ? sidebarAddon : null;
-  const otherAddon = isSchoolRoute ? null : sidebarAddon;
-  const adminAddonActive = otherAddon?.label?.toLowerCase() === "admin";
+  const schoolMatch = location.pathname.match(/^\/schools\/([^/]+)/);
+  const schoolId = schoolMatch ? schoolMatch[1] : null;
+  const selectedScenarioId = schoolId ? readSelectedScenarioId(schoolId) : null;
   const showSchoolsMenu = auth.user ? auth.user.role !== "admin" : false;
-  const clearSidebarAddon = React.useCallback(() => setSidebarAddon(null), [setSidebarAddon]);
+  const selectPath = schoolId ? `/select?schoolId=${schoolId}` : "/select";
   const clearHeaderMeta = React.useCallback(() => setHeaderMeta(null), [setHeaderMeta]);
   const showDefaultHeader = !headerMeta?.hideDefault;
   const outletContext = React.useMemo(
     () => ({
-      setSidebarAddon,
-      clearSidebarAddon,
       setHeaderMeta,
       clearHeaderMeta,
       headerPortalEl,
     }),
-    [setSidebarAddon, clearSidebarAddon, setHeaderMeta, clearHeaderMeta, headerPortalEl]
+    [setHeaderMeta, clearHeaderMeta, headerPortalEl]
   );
-
-  const toggleMenu = (key) =>
-    setOpenMenus((p) => ({ ...(p || {}), [key]: !(p?.[key] ?? true) }));
-  const isMenuOpen = (key, fallback = true) => (openMenus?.[key] ?? fallback);
 
   const renderRouteLink = ({ to, label, icon }) => (
     <NavLink className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")} to={to}>
@@ -123,17 +87,22 @@ export default function AppLayout() {
     icon,
     onClick,
     disabled,
+    blocked,
     active,
-    tooltipLines,
     rightNode,
     indent,
-  }) => {
-    const btn = (
+  }) => (
       <button
         type="button"
-        className={"app-nav-item" + (active ? " is-active" : "") + (indent ? " is-sub" : "")}
+        className={
+          "app-nav-item" +
+          (active ? " is-active" : "") +
+          (indent ? " is-sub" : "") +
+          (blocked ? " is-blocked" : "")
+        }
         onClick={onClick}
         disabled={disabled}
+        aria-disabled={blocked || disabled ? "true" : undefined}
       >
         {icon ? <span className="app-nav-icon">{icon}</span> : null}
         <span className="app-label">{label}</span>
@@ -141,25 +110,16 @@ export default function AppLayout() {
       </button>
     );
 
-    if (!tooltipLines) return btn;
-    return (
-      <Tooltip lines={tooltipLines} className="tab-tooltip">
-        {btn}
-      </Tooltip>
-    );
-  };
-
   const renderAdminNavItems = () => {
     if (auth.user?.role !== "admin") return null;
     return ADMIN_TABS.map((tab) => {
       const IconComponent = tab.icon;
-      const active = currentAdminTab === tab.key;
+      const to = tab.path || `/admin?tab=${tab.key}`;
       return (
         <li key={`admin-${tab.key}`}>
           <NavLink
-            to={`/admin?tab=${tab.key}`}
-            end
-            className={() => "app-nav-link" + (active ? " is-active" : "")}
+            to={to}
+            className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
           >
             {IconComponent ? (
               <span className="app-nav-icon">
@@ -173,6 +133,59 @@ export default function AppLayout() {
     });
   };
 
+  const schoolBase = schoolId ? `/schools/${schoolId}` : null;
+  const isScenarioReady = Boolean(selectedScenarioId);
+  const userNavItems = [
+    {
+      id: "temel-bilgiler",
+      label: "Temel Bilgiler",
+      icon: <FaInfoCircle />,
+      path: schoolBase ? `${schoolBase}/temel-bilgiler` : null,
+    },
+    {
+      id: "kapasite",
+      label: "Kapasite",
+      icon: <FaUsers />,
+      path: schoolBase ? `${schoolBase}/kapasite` : null,
+    },
+    {
+      id: "norm",
+      label: "Norm",
+      icon: <FaBalanceScale />,
+      path: schoolBase ? `${schoolBase}/norm` : null,
+    },
+    {
+      id: "ik",
+      label: "IK (HR)",
+      icon: <FaBriefcase />,
+      path: schoolBase ? `${schoolBase}/ik` : null,
+    },
+    {
+      id: "gelirler",
+      label: "Gelirler",
+      icon: <FaMoneyBillWave />,
+      path: schoolBase ? `${schoolBase}/gelirler` : null,
+    },
+    {
+      id: "giderler",
+      label: "Giderler",
+      icon: <FaFunnelDollar />,
+      path: schoolBase ? `${schoolBase}/giderler` : null,
+    },
+    {
+      id: "detayli-rapor",
+      label: "Detayli Rapor",
+      icon: <FaRegFileAlt />,
+      path: schoolBase ? `${schoolBase}/detayli-rapor` : null,
+    },
+    {
+      id: "rapor",
+      label: "Rapor",
+      icon: <FaFileInvoiceDollar />,
+      path: schoolBase ? `${schoolBase}/rapor` : null,
+    },
+  ];
+
   return (
     <div className={"app-shell " + (sidebarCollapsed ? "is-collapsed" : "")}>
       <aside className={"app-sidebar " + (sidebarCollapsed ? "close" : "")}>
@@ -182,117 +195,30 @@ export default function AppLayout() {
         </div>
 
         <ul className="app-nav-links">
-          <li>
-            <div className="app-sub-title">
-              <span className="app-label">Menü</span>
-            </div>
-          </li>
           {renderAdminNavItems()}
-          {showSchoolsMenu ? (
-            <li className={isMenuOpen("schools") ? "showMenu" : ""}>
-              <div className={"app-iocn-link" + (isSchoolsActive ? " is-active" : "")}>
-                <NavLink
-                  className={({ isActive }) => "app-group-btn app-nav-link" + (isActive ? " is-active" : "")}
-                  to="/schools"
-                >
-                  <FaSchool />
-                  <span className="app-label">Okullar</span>
-                </NavLink>
-                <button
-                  type="button"
-                  className="app-arrow-btn"
-                  onClick={() => {
-                    if (sidebarCollapsed) setSidebarCollapsed(false);
-                    toggleMenu("schools");
-                  }}
-                  aria-label="Okullar menüsü aç/kapat"
-                >
-                  <FaChevronDown />
-                </button>
-              </div>
-
-              <ul className="app-sub-menu">
-                {(Array.isArray(schoolAddon?.groups) ? schoolAddon.groups : DEFAULT_SCHOOL_GROUPS).map((group) => (
-                  <React.Fragment key={group.id}>
-                    {Array.isArray(group.items)
-                      ? group.items.map((it) => {
-                        const locked = !schoolAddon;
-                        return (
-                          <li key={it.id}>
-                            {renderButtonItem({
-                              label: it.label,
-                              icon: it.icon || null,
-                              onClick: locked ? undefined : it.onClick,
-                              disabled: locked ? true : !!it.disabled,
-                              active: locked ? false : !!it.active,
-                              tooltipLines: locked ? LOCKED_SCHOOL_TOOLTIP : it.tooltipLines,
-                              rightNode: locked ? null : it.rightNode,
-                              indent: true,
-                            })}
-                          </li>
-                        );
-                      })
-                      : null}
-                  </React.Fragment>
-                ))}
-              </ul>
-            </li>
-          ) : null}
-
-          {!adminAddonActive && otherAddon ? (
-            <li className={isMenuOpen("addon") ? "showMenu" : ""}>
-              <div className="app-iocn-link">
-                <button
-                  type="button"
-                  className="app-group-btn"
-                  onClick={() => {
-                    if (sidebarCollapsed) setSidebarCollapsed(false);
-                    toggleMenu("addon");
-                  }}
-                >
-                  <FaChevronDown style={{ opacity: 0.0 }} />
-                  <span className="app-label">{otherAddon.label || "Sayfa"}</span>
-                </button>
-                <button
-                  type="button"
-                  className="app-arrow-btn"
-                  onClick={() => {
-                    if (sidebarCollapsed) setSidebarCollapsed(false);
-                    toggleMenu("addon");
-                  }}
-                  aria-label="Sayfa menüsü aç/kapat"
-                >
-                  <FaChevronDown />
-                </button>
-              </div>
-
-              <ul className="app-sub-menu">
-                {Array.isArray(otherAddon.groups)
-                  ? otherAddon.groups.map((group) => (
-                    <React.Fragment key={group.id}>
-                      {Array.isArray(group.items)
-                        ? group.items.map((it) => (
-                          <li key={it.id}>
-                            {renderButtonItem({
-                              label: it.label,
-                              icon: it.icon || null,
-                              onClick: it.onClick,
-                              disabled: !!it.disabled,
-                              active: !!it.active,
-                              tooltipLines: it.tooltipLines,
-                              rightNode: it.rightNode,
-                              indent: true,
-                            })}
-                          </li>
-                        ))
-                        : null}
-                    </React.Fragment>
-                  ))
-                  : null}
-              </ul>
-            </li>
-          ) : null}
-
+          {showSchoolsMenu
+            ? userNavItems.map((item) => {
+              const isBlocked = !isScenarioReady || !item.path;
+              const isActive = item.path ? location.pathname.startsWith(item.path) : false;
+              return (
+                <li key={item.id}>
+                  {renderButtonItem({
+                    label: item.label,
+                    icon: item.icon,
+                    onClick: () => {
+                      if (isBlocked) {
+                        navigate(selectPath);
+                        return;
+                      }
+                      navigate(item.path);
+                    },
+                    active: isActive,
+                    blocked: isBlocked,
+                  })}
+                </li>
+              );
+            })
+            : null}
           <li>{renderRouteLink({ to: "/profile", label: "Profil", icon: <FaUser /> })}</li>
         </ul>
 
@@ -301,7 +227,7 @@ export default function AppLayout() {
             <div className="app-profile-name">{auth.user?.full_name || auth.user?.email || ""}</div>
             <div className="app-profile-role">{auth.user?.role || ""}</div>
           </div>
-          <button className="app-logout" type="button" onClick={() => auth.logout()} title="Çıkış">
+          <button className="app-logout" type="button" onClick={() => auth.logout()} aria-label="Cikis">
             <FaSignOutAlt />
           </button>
         </div>
@@ -310,14 +236,26 @@ export default function AppLayout() {
       <section className="app-home-section">
         <div className="app-topbar">
           <div className={`app-topbar-row${headerMeta?.centered ? " app-topbar-row--centered" : ""}`}>
-            <button
-              className="app-menu-btn"
-              type="button"
-              onClick={() => setSidebarCollapsed((p) => !p)}
-              aria-label="Menü"
-            >
-              <FaBars />
-            </button>
+            <div className="app-topbar-left">
+              <button
+                className="app-menu-btn"
+                type="button"
+                onClick={() => setSidebarCollapsed((p) => !p)}
+                aria-label="Menu"
+              >
+                <FaBars />
+              </button>
+              {showSchoolsMenu ? (
+                <>
+                  <button type="button" className="nav-btn" onClick={() => navigate(selectPath)}>
+                    Okul Degistir
+                  </button>
+                  <button type="button" className="nav-btn" onClick={() => navigate(selectPath)}>
+                    Senaryo Degistir
+                  </button>
+                </>
+              ) : null}
+            </div>
 
             {showDefaultHeader ? (
               <div className="app-topbar-text">
@@ -326,7 +264,6 @@ export default function AppLayout() {
               </div>
             ) : null}
 
-            {/* ✅ same row, right side */}
             <div className="app-topbar-slot" ref={captureHeaderPortalEl} />
           </div>
         </div>

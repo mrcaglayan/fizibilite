@@ -64,13 +64,6 @@ export default function ProfilePage() {
 
   return (
     <div className="container">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 20 }}>Profile</div>
-          <div className="small">Update your password and account info.</div>
-        </div>
-      </div>
-
       {mustReset ? (
         <div className="card" style={{ marginTop: 12, borderColor: "#f59e0b", background: "#fffbeb" }}>
           <div style={{ fontWeight: 700 }}>Şifre değiştirme gerekli</div>

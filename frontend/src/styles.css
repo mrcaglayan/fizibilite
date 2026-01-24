@@ -1612,6 +1612,27 @@ hr {
   background: rgba(220, 38, 38, 0.1);
   color: #991b1b;
 }
+.status-badge.is-draft,
+.status-badge.is-unknown {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.12);
+  color: #64748b;
+}
+.status-badge.is-submitted {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: #fffbeb;
+  color: #92400e;
+}
+.status-badge.is-revision {
+  border-color: rgba(220, 38, 38, 0.45);
+  background: rgba(220, 38, 38, 0.1);
+  color: #991b1b;
+}
+.status-badge.is-approved {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.1);
+  color: #065f46;
+}
 
 .school-page .school-actions {
   display: flex;
@@ -2289,6 +2310,9 @@ hr {
 .tooltip-line + .tooltip-line {
   margin-top: 4px;
 }
+.app-sidebar .tooltip-bubble {
+  display: none;
+}
 
 /* Responsive: allow title to shrink nicely */
 @media (max-width: 720px) {
@@ -2827,8 +2851,10 @@ li.showMenu > .app-sub-menu {
 .app-shell.is-collapsed .app-home-section { margin-left: 88px; }
 
 .app-topbar {
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(15,23,42,0.06);
+  background: var(--sb-bg);
+  border-bottom: 1px solid var(--sb-border);
+  box-shadow: var(--sb-shadow);
+  font-family: "Poppins", "Manrope", "Segoe UI", sans-serif;
   padding: 10px 14px;
   display: flex;
   flex-direction: column;
@@ -2842,6 +2868,12 @@ li.showMenu > .app-sub-menu {
   align-items: center;
   gap: 12px;
 }
+.app-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
 .app-topbar-row--centered {
   justify-content: center;
   position: relative;
@@ -2852,7 +2884,7 @@ li.showMenu > .app-sub-menu {
   justify-content: center;
   text-align: center;
 }
-.app-topbar-row--centered .app-menu-btn {
+.app-topbar-row--centered .app-topbar-left {
   position: absolute;
   left: 14px;
   top: 50%;

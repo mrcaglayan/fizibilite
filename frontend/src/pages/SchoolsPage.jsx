@@ -187,7 +187,7 @@ export default function SchoolsPage() {
                   <td className="small">{new Date(s.updated_at || s.created_at).toLocaleString()}</td>
                   <td>
                     <div className="row">
-                      <Button as={Link} variant="primary" size="sm" to={`/schools/${s.id}?open=1`}>
+                      <Button as={Link} variant="primary" size="sm" to={`/select?schoolId=${s.id}`}>
                         <FaOpen /> Aç
                       </Button>
                     </div>

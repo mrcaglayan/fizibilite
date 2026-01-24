@@ -5,9 +5,23 @@ import { useAuth } from "./auth/AuthContext";
 import LoginPage from "./pages/LoginPage";
 import SchoolsPage from "./pages/SchoolsPage";
 import SchoolPage from "./pages/SchoolPage";
-import AdminPage from "./pages/AdminPage";
+import SelectPage from "./pages/SelectPage";
 import ProfilePage from "./pages/ProfilePage";
+import AdminRedirect from "./pages/AdminRedirect";
+import AdminUsersPage from "./pages/AdminUsersPage";
+import AdminCountriesPage from "./pages/AdminCountriesPage";
+import AdminProgressPage from "./pages/AdminProgressPage";
+import AdminApprovalsPage from "./pages/AdminApprovalsPage";
+import AdminReportsPage from "./pages/AdminReportsPage";
 import AppLayout from "./layouts/AppLayout";
+import TemelBilgilerPage from "./pages/school/TemelBilgilerPage";
+import KapasitePage from "./pages/school/KapasitePage";
+import NormPage from "./pages/school/NormPage";
+import IKPage from "./pages/school/IKPage";
+import GelirlerPage from "./pages/school/GelirlerPage";
+import GiderlerPage from "./pages/school/GiderlerPage";
+import DetayliRaporPage from "./pages/school/DetayliRaporPage";
+import RaporPage from "./pages/school/RaporPage";
 
 function PrivateRoute({ children, allowReset = false }) {
   const auth = useAuth();
@@ -21,7 +35,11 @@ function PrivateRoute({ children, allowReset = false }) {
 
 export default function App() {
   const auth = useAuth();
-  const postLoginPath = auth.user?.must_reset_password ? "/profile" : "/schools";
+  const postLoginPath = auth.user?.must_reset_password
+    ? "/profile"
+    : auth.user?.role === "admin"
+      ? "/countries"
+      : "/schools";
 
   return (
     <Routes>
@@ -34,8 +52,25 @@ export default function App() {
         }
       >
         <Route path="/schools" element={<SchoolsPage />} />
-        <Route path="/schools/:id" element={<SchoolPage />} />
-        <Route path="/admin" element={<AdminPage />} />
+        <Route path="/select" element={<SelectPage />} />
+        <Route path="/schools/:id" element={<SchoolPage />}>
+          <Route index element={<div />} />
+          <Route path="temel-bilgiler" element={<TemelBilgilerPage />} />
+          <Route path="kapasite" element={<KapasitePage />} />
+          <Route path="norm" element={<NormPage />} />
+          <Route path="ik" element={<IKPage />} />
+          <Route path="gelirler" element={<GelirlerPage />} />
+          <Route path="giderler" element={<GiderlerPage />} />
+          <Route path="detayli-rapor" element={<DetayliRaporPage />} />
+          <Route path="rapor" element={<RaporPage />} />
+        </Route>
+        <Route path="/users" element={<AdminUsersPage />} />
+        <Route path="/countries" element={<AdminCountriesPage />} />
+        <Route path="/progress" element={<AdminProgressPage />} />
+        <Route path="/approvals" element={<AdminApprovalsPage />} />
+        <Route path="/reports" element={<AdminReportsPage />} />
+        {/* legacy deep-links like /admin?tab=countries */}
+        <Route path="/admin" element={<AdminRedirect />} />
       </Route>
       <Route
         element={

@@ -2,20 +2,9 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
-import { FaCheck, FaBalanceScale, FaBriefcase, FaFileInvoiceDollar, FaFunnelDollar, FaInfoCircle, FaListAlt, FaMoneyBillWave, FaRegFileAlt, FaUsers } from "react-icons/fa";
 import { api } from "../api";
-import TabBadge from "../components/ui/TabBadge";
-import TabProgressHeatmap from "../components/ui/TabProgressHeatmap";
-import IncomeEditor from "../components/IncomeEditor";
-import ExpensesEditor from "../components/ExpensesEditor";
-import NormConfigEditor from "../components/NormConfigEditor";
-import ReportView from "../components/ReportView";
-import DetailedReportView from "../components/DetailedReportView";
-import HREditorIK from "../components/HREditorIK";
-import CapacityEditor from "../components/CapacityEditor";
-import TemelBilgilerEditor from "../components/TemelBilgilerEditor";
 import {
   getDefaultKademeConfig,
   getKademeDefinitions,
@@ -25,6 +14,12 @@ import {
 } from "../utils/kademe";
 import { computeScenarioProgress } from "../utils/scenarioProgress";
 import { useScenarioUiState, useScenarioUiString } from "../hooks/useScenarioUIState";
+import {
+  readLastVisitedPath,
+  readSelectedScenarioId,
+  writeLastVisitedPath,
+  writeSelectedScenarioId,
+} from "../utils/schoolNavStorage";
 import {
   getProgramType,
   PROGRAM_TYPES,
@@ -40,11 +35,11 @@ const COPY_SELECT_TABS = [
     label: "Temel Bilgiler",
     sections: [
       { id: "temel.core", label: "Kademeler + Program" },
-      { id: "temel.pricing", label: "Enflasyon + Ücret Artış Oranları + Ücret Hesaplama Ayarı" },
-      { id: "temel.schoolInfo", label: "Yetkililer + Okul/Eğitim Bilgileri" },
-      { id: "temel.discountsMeta", label: "İK Mevcut + Burs/İndirim Öğrenci Sayıları" },
+      { id: "temel.pricing", label: "Enflasyon + Ücret Artis Oranlari + Ücret Hesaplama Ayari" },
+      { id: "temel.schoolInfo", label: "Yetkililer + Okul/Egitim Bilgileri" },
+      { id: "temel.discountsMeta", label: "IK Mevcut + Burs/Indirim Ögrenci Sayilari" },
       { id: "temel.competitors", label: "Rakip Analizi" },
-      { id: "temel.performance", label: "Performans + Değerlendirme" },
+      { id: "temel.performance", label: "Performans + Degerlendirme" },
     ],
   },
   {
@@ -58,13 +53,13 @@ const COPY_SELECT_TABS = [
     sections: [
       { id: "norm.planned", label: "Planlanan dönem bilgileri" },
       { id: "norm.current", label: "Mevcut dönem bilgileri" },
-      { id: "norm.lessonY1", label: "Ders dağılımı (yalnızca Y1)" },
+      { id: "norm.lessonY1", label: "Ders dagilimi (yalnizca Y1)" },
     ],
   },
   {
     key: "hr",
-    label: "İK (HR)",
-    sections: [{ id: "hr.ik", label: "İK Plan (tümü)" }],
+    label: "IK (HR)",
+    sections: [{ id: "hr.ik", label: "IK Plan (tümü)" }],
   },
   {
     key: "gelirler",
@@ -76,33 +71,23 @@ const COPY_SELECT_TABS = [
     label: "Giderler",
     sections: [
       { id: "expenses.giderler", label: "Giderler (tümü)" },
-      { id: "expenses.discounts", label: "BURS VE İNDİRİMLER / YIL" },
+      { id: "expenses.discounts", label: "BURS VE INDIRIMLER / YIL" },
     ],
   },
 ];
 
-const UI_TAB_PROGRESS_KEYS = {
-  basics: ["temelBilgiler"],
-  kapasite: ["kapasite"],
-  norm: ["gradesPlan", "norm"],
-  hr: ["ik"],
-  income: ["gelirler"],
-  expenses: ["giderler", "indirimler"],
-};
-
 const INPUT_HEADER_TABS = new Set(["basics", "kapasite", "income", "expenses", "norm", "hr", "detailedReport", "report"]);
-
-const SCHOOL_NAV_ICON_COMPONENTS = {
-  scenarios: FaListAlt,
-  basics: FaInfoCircle,
-  kapasite: FaUsers,
-  norm: FaBalanceScale,
-  hr: FaBriefcase,
-  income: FaMoneyBillWave,
-  expenses: FaFunnelDollar,
-  detailedReport: FaRegFileAlt,
-  report: FaFileInvoiceDollar,
+const TAB_TO_ROUTE = {
+  basics: "temel-bilgiler",
+  kapasite: "kapasite",
+  norm: "norm",
+  hr: "ik",
+  income: "gelirler",
+  expenses: "giderler",
+  detailedReport: "detayli-rapor",
+  report: "rapor",
 };
+const ROUTE_TO_TAB = Object.fromEntries(Object.entries(TAB_TO_ROUTE).map(([key, value]) => [value, key]));
 
 const DEFAULT_START_YEAR = "2026";
 const DEFAULT_END_YEAR = "2027";
@@ -475,16 +460,11 @@ export default function SchoolPage() {
   const [scenarioWizardScenario, setScenarioWizardScenario] = useState(null);
   const [scenarioWizardLoading, setScenarioWizardLoading] = useState(false);
   const [scenarioWizardSaving, setScenarioWizardSaving] = useState(false);
-  const [selectedScenarioId, setSelectedScenarioId] = useScenarioUiState(
-    "school.selectedScenarioId",
-    null,
-    { scope: `school:${schoolId}` }
-  );
+  const [selectedScenarioId, setSelectedScenarioId] = useState(() => readSelectedScenarioId(schoolId));
   const [pendingTabAfterSelect, setPendingTabAfterSelect] = useState(null);
   // inputs
   const [inputs, setInputs] = useState(null);
   const [inputsSaving, setInputsSaving] = useState(false);
-  const [confirmTabChange, setConfirmTabChange] = useState(null);
   const [dirtyPaths, setDirtyPaths] = useState(() => new Set());
   const [baselineInputs, setBaselineInputs] = useState(null);
   const [baselineNorm, setBaselineNorm] = useState(null);
@@ -514,7 +494,11 @@ export default function SchoolPage() {
   const [copyFxUsdToLocal, setCopyFxUsdToLocal] = useState("");
   // Page boot loading (used to show a spinner while auto-starting the scenario wizard)
   const [bootLoading, setBootLoading] = useState(true);
-  const [bootLoadingLabel, setBootLoadingLabel] = useState("Okul açılıyor...");
+  const [bootLoadingLabel, setBootLoadingLabel] = useState("Okul açiliyor...");
+
+  useEffect(() => {
+    setSelectedScenarioId(readSelectedScenarioId(schoolId));
+  }, [schoolId]);
 
   const uiScopeKey = useMemo(
     () => `school:${schoolId}:scenario:${selectedScenarioId ?? "none"}`,
@@ -522,32 +506,40 @@ export default function SchoolPage() {
   );
   const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
   const reportCurrencyDefaultedForRef = useRef(null);
-  const [tab, setTab] = useScenarioUiString("school.activeTab", "scenarios", { scope: uiScopeKey });
   const [detailedReportMode, setDetailedReportMode] = useScenarioUiString("school.detailedReportMode", "detailed", { scope: uiScopeKey });
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get("open") !== "1") return;
-    setTab("scenarios");
-    params.delete("open");
-    const nextSearch = params.toString();
-    navigate(
-      { pathname: location.pathname, search: nextSearch ? `?${nextSearch}` : "" },
-      { replace: true }
-    );
-  }, [location.pathname, location.search, navigate, setTab]);
+  const activeRouteSegment = useMemo(() => {
+    const base = `/schools/${schoolId}/`;
+    if (!location.pathname.startsWith(base)) return "";
+    return location.pathname.slice(base.length).split("/")[0] || "";
+  }, [location.pathname, schoolId]);
+  const tab = ROUTE_TO_TAB[activeRouteSegment] || "";
+  const setTab = React.useCallback(
+    (nextTab) => {
+      const segment = TAB_TO_ROUTE[nextTab];
+      if (!segment) return;
+      navigate(`/schools/${schoolId}/${segment}`);
+    },
+    [navigate, schoolId]
+  );
 
   useEffect(() => {
-    autoScenarioWizardOpenedRef.current = false;
+    if (!selectedScenarioId) return;
+    if (!ROUTE_TO_TAB[activeRouteSegment]) return;
+    writeLastVisitedPath(schoolId, selectedScenarioId, activeRouteSegment);
+  }, [activeRouteSegment, schoolId, selectedScenarioId]);
+
+  useEffect(() => {
+    if (!selectedScenarioId) return;
+    const base = `/schools/${schoolId}`;
+    if (location.pathname !== base && location.pathname !== `${base}/`) return;
+    const last = readLastVisitedPath(schoolId, selectedScenarioId);
+    const target = last ? `${base}/${last}` : `${base}/${TAB_TO_ROUTE.basics}`;
+    navigate(target, { replace: true });
+  }, [location.pathname, navigate, schoolId, selectedScenarioId]);
+
+  useEffect(() => {
     setBootLoading(true);
-    setBootLoadingLabel("Okul açılıyor...");
-  }, [schoolId]);
-
-  // Auto-open "Yeni Senaryo" wizard once when the school has zero scenarios.
-  // Reset when the schoolId changes.
-  const autoScenarioWizardOpenedRef = useRef(false);
-
-  useEffect(() => {
-    autoScenarioWizardOpenedRef.current = false;
+    setBootLoadingLabel("Okul açiliyor...");
   }, [schoolId]);
 
   useEffect(() => {
@@ -730,8 +722,8 @@ export default function SchoolPage() {
     return scenarioSort.dir === "asc" ? "ascending" : "descending";
   };
   const sortIcon = (key) => {
-    if (scenarioSort.key !== key) return <span className="sort-icon is-idle">↕</span>;
-    return <span className="sort-icon">{scenarioSort.dir === "asc" ? "▲" : "▼"}</span>;
+    if (scenarioSort.key !== key) return <span className="sort-icon is-idle">?</span>;
+    return <span className="sort-icon">{scenarioSort.dir === "asc" ? "?" : "?"}</span>;
   };
   const copySectionIds = useMemo(() => getAllCopySectionIds(), []);
   const selectedCopyCount = copySelection
@@ -779,139 +771,8 @@ export default function SchoolPage() {
     () => mergeMissingLines(progMap.giderler?.missingLines, progMap.indirimler?.missingLines),
     [progMap]
   );
-  const uiTabProgress = useMemo(() => {
-    const map = new Map();
-    (scenarioProgress?.tabs || []).forEach((t) => map.set(t.key, t));
-    const out = {};
-    Object.entries(UI_TAB_PROGRESS_KEYS).forEach(([uiKey, keys]) => {
-      let done = true;
-      const missing = [];
-      keys.forEach((key) => {
-        const tab = map.get(key);
-        if (!tab) {
-          done = false;
-          return;
-        }
-        if (!tab.done) {
-          done = false;
-          if (Array.isArray(tab.missingLines) && tab.missingLines.length) {
-            missing.push(...tab.missingLines);
-          } else if (tab.missingPreview) {
-            missing.push(tab.missingPreview);
-          }
-        }
-      });
-      out[uiKey] = {
-        done,
-        missingReasons: Array.from(new Set(missing.filter(Boolean))),
-      };
-    });
-    return out;
-  }, [scenarioProgress]);
-  const showScenarioProgress = Boolean(selectedScenarioId && inputs);
-
-  const isTabDirty = React.useCallback(
-    (key) => {
-      const prefixes = {
-        basics: ["inputs.temelBilgiler."],
-        kapasite: ["inputs.kapasite."],
-        income: ["inputs.gelirler."],
-        expenses: ["inputs.giderler.", "inputs.discounts."],
-        hr: ["inputs.ik."],
-        norm: ["norm.", "inputs.grades.", "inputs.gradesYears.", "inputs.gradesCurrent."],
-      };
-
-      const list = prefixes[key] || [];
-      if (!list.length) return false;
-      for (const prefix of list) {
-        for (const path of dirtyPaths) {
-          if (path === prefix || path.startsWith(prefix)) return true;
-        }
-      }
-      return false;
-    },
-    [dirtyPaths]
-  );
-
-  const requestTabChange = React.useCallback(
-    (nextTab) => {
-      if (nextTab === tab) return;
-      if (isTabDirty(tab)) {
-        setConfirmTabChange({ nextTab });
-        return;
-      }
-      setTab(nextTab);
-    },
-    [isTabDirty, setConfirmTabChange, setTab, tab]
-  );
-
-  const buildNavItem = React.useCallback(
-    (tabKey, label) => {
-      const IconComponent = SCHOOL_NAV_ICON_COMPONENTS[tabKey];
-      const disabled = tabKey !== "scenarios" && !selectedScenarioId;
-      const active = tab === tabKey;
-      const dirty = isTabDirty(tabKey);
-
-      const showBadge = showScenarioProgress && !["scenarios", "detailedReport", "report"].includes(tabKey);
-      const prog = showBadge ? (uiTabProgress[tabKey] || { done: true, missingReasons: [] }) : null;
-
-      const tooltipLines = disabled
-        ? ["Önce senaryo seçin."]
-        : showBadge
-          ? (prog.done ? ["Tamamlandı"] : ["Eksik:", ...(prog.missingReasons || [])])
-          : null;
-
-      return {
-        id: tabKey,
-        label,
-        icon: IconComponent ? <IconComponent aria-hidden="true" /> : null,
-        active,
-        disabled,
-        tooltipLines,
-        rightNode: (
-          <span className="app-rightmeta">
-            {showBadge ? <TabBadge done={prog.done} /> : null}
-            {dirty ? <span className="app-dirty-dot" title="Kaydedilmemiş değişiklik" /> : null}
-          </span>
-        ),
-        onClick: () => {
-          if (!disabled) requestTabChange(tabKey);
-        },
-      };
-    },
-    [isTabDirty, requestTabChange, selectedScenarioId, showScenarioProgress, tab, uiTabProgress]
-  );
-
   useEffect(() => {
-    if (!outlet?.setSidebarAddon) return;
-
-    outlet.setSidebarAddon({
-      label: "Okul",
-      groups: [
-        { id: "senaryo", label: "Senaryo", items: [buildNavItem("scenarios", "Senaryolar")] },
-        {
-          id: "planlama",
-          label: "Planlama",
-          items: [
-            buildNavItem("basics", "Temel Bilgiler"),
-            buildNavItem("kapasite", "Kapasite"),
-            buildNavItem("norm", "Norm"),
-            buildNavItem("hr", "İK (HR)"),
-          ],
-        },
-        {
-          id: "finans",
-          label: "Finans",
-          items: [buildNavItem("income", "Gelirler"), buildNavItem("expenses", "Giderler")],
-        },
-        {
-          id: "raporlar",
-          label: "Raporlar",
-          items: [buildNavItem("detailedReport", "Detaylı Rapor"), buildNavItem("report", "Rapor")],
-        },
-      ],
-    });
-
+    if (!outlet?.setHeaderMeta) return;
     outlet.setHeaderMeta({
       title: school?.name ? school.name : "Okul",
       subtitle: selectedScenario
@@ -920,16 +781,12 @@ export default function SchoolPage() {
       hideDefault: false,
       centered: true,
     });
-
-
-
     return () => {
-      outlet.clearSidebarAddon?.();
       outlet.clearHeaderMeta?.();
     };
-  }, [outlet, buildNavItem, selectedScenario, school?.name]);
+  }, [outlet, selectedScenario, school?.name]);
 
-  // A) Helper: HR(İK) -> Expenses(İşletme) 5 salary rows auto patch (uses 1.Yıl / y1)
+  // A) Helper: HR(IK) -> Expenses(Isletme) 5 salary rows auto patch (uses 1.Yil / y1)
   const applyIkSalariesToGiderler = (inInputs) => {
     const src = inInputs || {};
     const ik = src.ik || {};
@@ -1245,7 +1102,7 @@ export default function SchoolPage() {
   async function loadAll() {
     setErr("");
     setBootLoading(true);
-    setBootLoadingLabel("Okul açılıyor...");
+    setBootLoadingLabel("Okul açiliyor...");
     try {
       const s = await api.getSchool(schoolId);
       setSchool(s);
@@ -1266,22 +1123,14 @@ export default function SchoolPage() {
       setBootLoadingLabel("Senaryolar kontrol ediliyor...");
       const sc = await api.listScenarios(schoolId);
       setScenarios(sc);
-      if (sc.length === 0 && !autoScenarioWizardOpenedRef.current) {
-        setBootLoadingLabel("Yeni senaryo başlatılıyor...");
-        autoScenarioWizardOpenedRef.current = true;
-        setTab("scenarios");
-        openScenarioWizardCreate();
-        setBootLoading(false);
-        return;
+      if (selectedScenarioId != null) {
+        const exists = sc.some((x) => String(x.id) === String(selectedScenarioId));
+        if (!exists) {
+          writeSelectedScenarioId(schoolId, null);
+          setSelectedScenarioId(null);
+        }
       }
-
-
-
-      if (sc.length) {
-        const exists =
-          selectedScenarioId != null && sc.some((x) => String(x.id) === String(selectedScenarioId));
-        if (!exists) setSelectedScenarioId(sc[0].id);
-      } setBootLoading(false);
+      setBootLoading(false);
 
     } catch (e) {
       setErr(e.message || "Failed to load school");
@@ -1329,7 +1178,16 @@ export default function SchoolPage() {
 
   useEffect(() => {
     async function loadScenario() {
-      if (!selectedScenarioId) return;
+      if (!selectedScenarioId) {
+        setSelectedScenario(null);
+        setInputs(null);
+        setBaselineInputs(null);
+        setReport(null);
+        setPrevReport(null);
+        setPrevScenarioMeta(null);
+        clearDirtyPrefix("inputs.");
+        return;
+      }
       setErr("");
       setReport(null);
       setLastSavedAt(null);
@@ -1390,7 +1248,7 @@ export default function SchoolPage() {
     setReportCurrency,
   ]);
 
-  // Load previous year's report (used in TEMEL BİLGİLER: performans planlanan)
+  // Load previous year's report (used in TEMEL BILGILER: performans planlanan)
   useEffect(() => {
     async function loadPrev() {
       try {
@@ -1513,7 +1371,7 @@ export default function SchoolPage() {
     try {
       const data = await api.getScenarioInputs(schoolId, scenarioId);
       const scenario = data?.scenario;
-      if (!scenario) throw new Error("Senaryo bulunamadı.");
+      if (!scenario) throw new Error("Senaryo bulunamadi.");
       setScenarioWizardScenario(scenario);
       setNewScenarioName(scenario.name || "");
       const years = parseAcademicYear(scenario.academic_year);
@@ -1561,15 +1419,15 @@ export default function SchoolPage() {
     const name = newScenarioName.trim();
     if (!name) return;
     if (!draftAcademicYear) {
-      setErr("Lütfen geçerli bir akademik yıl girin.");
+      setErr("Lütfen geçerli bir akademik yil girin.");
       return;
     }
     if (!draftRangeOk) {
-      setErr("Bitiş yılı, başlangıç yılından 1 fazla olmalı.");
+      setErr("Bitis yili, baslangiç yilindan 1 fazla olmali.");
       return;
     }
     if (yearConflict) {
-      setErr("Bu yıl türü için zaten bir senaryo var. Lütfen başka bir yıl seçin.");
+      setErr("Bu yil türü için zaten bir senaryo var. Lütfen baska bir yil seçin.");
       return;
     }
     if (!hasEnabledKademe) {
@@ -1608,7 +1466,7 @@ export default function SchoolPage() {
       setNewScenarioStep(0);
     } catch (e) {
       setPendingTabAfterSelect(null);
-      setErr(e.message || "Senaryo oluşturulamadı.");
+      setErr(e.message || "Senaryo olusturulamadi.");
     } finally {
       setScenarioWizardSaving(false);
     }
@@ -1619,15 +1477,15 @@ export default function SchoolPage() {
     const name = newScenarioName.trim();
     if (!name) return;
     if (!draftAcademicYear) {
-      setErr("Lütfen geçerli bir akademik yıl girin.");
+      setErr("Lütfen geçerli bir akademik yil girin.");
       return;
     }
     if (!draftRangeOk) {
-      setErr("Bitiş yılı, başlangıç yılından 1 fazla olmalı.");
+      setErr("Bitis yili, baslangiç yilindan 1 fazla olmali.");
       return;
     }
     if (yearConflict) {
-      setErr("Bu yıl türü için zaten bir senaryo var. Lütfen başka bir yıl seçin.");
+      setErr("Bu yil türü için zaten bir senaryo var. Lütfen baska bir yil seçin.");
       return;
     }
     if (!hasEnabledKademe) {
@@ -1801,7 +1659,7 @@ export default function SchoolPage() {
       autoClose: false,
       closeOnClick: false,
       draggable: true,
-      icon: "⚠️",
+      icon: "??",
       style: {
         background: "rgba(15, 23, 42, 0.96)",
         color: "#f8fafc",
@@ -1931,7 +1789,7 @@ export default function SchoolPage() {
       if (id === "hr.ik" || id === "expenses.giderler") {
         next["hr.ik"] = value;
         next["expenses.giderler"] = value;
-        showCopySelectionMsg(`İK ve Giderler birlikte ${value ? "seçildi" : "kaldırıldı"}.`);
+        showCopySelectionMsg(`IK ve Giderler birlikte ${value ? "seçildi" : "kaldirildi"}.`);
       } else {
         next[id] = value;
       }
@@ -1985,7 +1843,7 @@ export default function SchoolPage() {
     const selectionIk = !!selection["hr.ik"];
     const selectionGiderler = !!selection["expenses.giderler"];
     if (selectionIk !== selectionGiderler) {
-      setCopyModalError("İK ve Giderler birlikte seçilmelidir.");
+      setCopyModalError("IK ve Giderler birlikte seçilmelidir.");
       return;
     }
     const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
@@ -2046,7 +1904,7 @@ export default function SchoolPage() {
     setErr("");
     const selection = enforceIkGiderlerPair(copyOptions?.selection || buildDefaultCopySelection("all"));
     if (!!selection["hr.ik"] !== !!selection["expenses.giderler"]) {
-      toast.warn("İK ve Giderler birlikte seçilmelidir.");
+      toast.warn("IK ve Giderler birlikte seçilmelidir.");
       return;
     }
     const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
@@ -2448,6 +2306,60 @@ export default function SchoolPage() {
 
   const inputsDirty = hasDirtyPrefix("inputs.") || hasDirtyPrefix("norm.");
   const inputsLocked = selectedScenario?.status === "submitted" || selectedScenario?.status === "approved";
+  const handleIkSalaryComputed = React.useCallback(
+    (salaryByYear) => {
+      if (inputsLocked) return;
+      const patch = salaryByYear?.y1 || {};
+      const keys = [
+        "turkPersonelMaas",
+        "turkDestekPersonelMaas",
+        "yerelPersonelMaas",
+        "yerelDestekPersonelMaas",
+        "internationalPersonelMaas",
+      ];
+
+      setInputs((prev) => {
+        const p = prev || {};
+        const prevItems = p?.giderler?.isletme?.items || {};
+
+        let changed = false;
+        for (const k of keys) {
+          const a = Number(prevItems?.[k] || 0);
+          const b = Number(patch?.[k] || 0);
+          if (Math.abs(a - b) > 1e-6) {
+            changed = true;
+            break;
+          }
+        }
+        if (!changed) return prev;
+
+        const next = structuredClone(p);
+        next.giderler = next.giderler || {};
+        next.giderler.isletme = next.giderler.isletme || {};
+        next.giderler.isletme.items = next.giderler.isletme.items || {};
+        for (const k of keys) next.giderler.isletme.items[k] = Number(patch?.[k] || 0);
+        for (const k of keys) {
+          markDirty(`inputs.giderler.isletme.items.${k}`, Number(patch?.[k] || 0));
+        }
+        return next;
+      });
+    },
+    [inputsLocked, markDirty]
+  );
+  const handlePlanningGradesChange = React.useCallback(
+    (v) => {
+      if (!v || typeof v !== "object") return;
+      setInputs((prev) => {
+        const p = prev || {};
+        let next = structuredClone(p);
+        next.gradesYears = v;
+        if (Array.isArray(v.y1)) next.grades = structuredClone(v.y1);
+        next = applyTuitionStudentCounts(next);
+        return next;
+      });
+    },
+    [applyTuitionStudentCounts]
+  );
   const deleteConfirmScenario =
     deleteConfirmScenarioId != null
       ? scenarios.find((s) => String(s.id) === String(deleteConfirmScenarioId))
@@ -2799,11 +2711,43 @@ export default function SchoolPage() {
     );
   }
 
+  const outletContextValue = {
+    schoolId,
+    school,
+    me,
+    inputs,
+    setField,
+    norm,
+    setNorm,
+    handlePlanningGradesChange,
+    dirtyPaths,
+    markDirty,
+    baseYear,
+    programType,
+    inputCurrencyCode,
+    selectedScenario,
+    prevReport,
+    prevScenarioMeta,
+    report,
+    reportCurrency,
+    setReportCurrency,
+    detailedReportMode,
+    setDetailedReportMode,
+    reportExportRef,
+    progMap,
+    normAvgPct,
+    expensesAvgPct,
+    normMissingLines,
+    expensesMissingLines,
+    uiScopeKey,
+    handleIkSalaryComputed,
+  };
+
   return (
     <div className="container school-page">
       <ToastContainer position="bottom-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover hideProgressBar theme="dark" />
       <style>{`@keyframes schoolSpin{to{transform:rotate(360deg)}}`}</style>
-      {bootLoading && !scenarioWizardOpen ? (
+      {bootLoading ? (
         <div className="modal-backdrop" role="status" aria-live="polite" aria-busy="true">
           <div
             className="card"
@@ -2826,16 +2770,16 @@ export default function SchoolPage() {
               }}
             />
             <div style={{ fontWeight: 800, marginTop: 12 }}>
-              {bootLoadingLabel || "Yükleniyor..."}
+              {bootLoadingLabel || "Yukleniyor..."}
             </div>
             <div className="small muted" style={{ marginTop: 6 }}>
-              Lütfen bekleyin…
+              Lutfen bekleyin...
             </div>
           </div>
         </div>
       ) : null}
 
-      {err && !scenarioWizardOpen ? (
+      {err ? (
         <div
           className="card"
           style={{
@@ -2848,626 +2792,6 @@ export default function SchoolPage() {
         </div>
       ) : null}
 
-      {confirmTabChange ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Unsaved Changes</div>
-            <div className="small" style={{ marginBottom: 12 }}>
-              You have unsaved changes. If you leave this tab, unsaved changes may be lost.
-            </div>
-            <div className="row" style={{ justifyContent: "flex-end" }}>
-              <button className="btn" onClick={() => setConfirmTabChange(null)}>Stay</button>
-              <button
-                className="btn primary"
-                onClick={() => {
-                  const nextTab = confirmTabChange.nextTab;
-                  setConfirmTabChange(null);
-                  setTab(nextTab);
-                }}
-              >
-                Leave
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {deleteConfirmScenarioId ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Senaryo Sil</div>
-            <div className="small">{deleteConfirmMessage}</div>
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-              <button
-                className="btn"
-                onClick={() => setDeleteConfirmScenarioId(null)}
-                disabled={scenarioOpsBusy}
-              >
-                Iptal
-              </button>
-              <button
-                className="btn danger"
-                onClick={confirmDeleteScenario}
-                disabled={scenarioOpsBusy}
-              >
-                Sil
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {copyModalOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div
-            className="modal"
-            style={{
-              width: "min(980px, 96vw)",
-              maxHeight: "86vh",
-              overflowY: "auto",
-            }}
-          >
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <div style={{ fontWeight: 700 }}>Senaryo Kopyalama</div>
-              <button className="btn" onClick={closeCopyScenarioModal} disabled={scenarioOpsBusy}>
-                Kapat
-              </button>
-            </div>
-            <div className="small" style={{ marginTop: 6 }}>
-              Yeni senaryo icin para birimini secin.
-            </div>
-
-            {copyModalError ? (
-              <div className="card" style={{ marginTop: 10, background: "#fff1f2", borderColor: "#fecaca" }}>
-                {copyModalError}
-              </div>
-            ) : null}
-
-            <div style={{ marginTop: 12 }}>
-              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Para Birimi</div>
-              <div className="row" style={{ gap: 12, alignItems: "center" }}>
-                <label className="row" style={{ gap: 6, alignItems: "center" }}>
-                  <input
-                    type="radio"
-                    name="copy-currency"
-                    checked={copyTargetCurrency === "USD"}
-                    onChange={() => {
-                      setCopyTargetCurrency("USD");
-                      setCopyModalError("");
-                    }}
-                  />
-                  <span>USD</span>
-                </label>
-                <label className="row" style={{ gap: 6, alignItems: "center" }}>
-                  <input
-                    type="radio"
-                    name="copy-currency"
-                    checked={copyTargetCurrency === "LOCAL"}
-                    onChange={() => {
-                      setCopyTargetCurrency("LOCAL");
-                      setCopyModalError("");
-                    }}
-                  />
-                  <span>LOCAL</span>
-                </label>
-              </div>
-            </div>
-
-            {sourceCurrency === "USD" && copyTargetCurrency === "LOCAL" ? (
-              <div style={{ marginTop: 12 }}>
-                <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                  <div className="small" style={{ fontWeight: 700 }}>Local currency code</div>
-                  <input
-                    className="input sm"
-                    list="local-currency-codes-copy"
-                    placeholder="AFN"
-                    value={copyLocalCurrencyCode}
-                    onChange={(e) => {
-                      setCopyLocalCurrencyCode(
-                        e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)
-                      );
-                      setCopyModalError("");
-                    }}
-                  />
-                  <datalist id="local-currency-codes-copy">
-                    {LOCAL_CURRENCY_OPTIONS.map((code) => (
-                      <option key={code} value={code} />
-                    ))}
-                  </datalist>
-                </div>
-
-                <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10 }}>
-                  <span>1 USD =</span>
-                  <input
-                    className="input sm"
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="23"
-                    value={copyPlannedFxUsdToLocal}
-                    onChange={(e) => {
-                      setCopyPlannedFxUsdToLocal(e.target.value);
-                      setCopyModalError("");
-                    }}
-                  />
-                  <span>{copyLocalCurrencyCode || "LOCAL"}</span>
-                </div>
-                <div className="small muted" style={{ marginTop: 6 }}>
-                  Yeni senaryo icin tahmini kur.
-                </div>
-
-                <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10 }}>
-                  <span>Kopya kur</span>
-                  <input
-                    className="input sm"
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="23"
-                    value={copyFxUsdToLocal}
-                    onChange={(e) => {
-                      setCopyFxUsdToLocal(e.target.value);
-                      setCopyModalError("");
-                    }}
-                  />
-                  <span>{copyLocalCurrencyCode || "LOCAL"}</span>
-                </div>
-                <div className="small muted" style={{ marginTop: 6 }}>
-                  Kopyalanan USD degerlerini cevirmek icin kullanilir.
-                </div>
-              </div>
-            ) : null}
-
-            {sourceCurrency === "LOCAL" && copyTargetCurrency === "USD" ? (
-              <div style={{ marginTop: 12 }}>
-                <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                  <span>1 USD =</span>
-                  <input
-                    className="input sm"
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="23"
-                    value={copyFxUsdToLocal}
-                    onChange={(e) => {
-                      setCopyFxUsdToLocal(e.target.value);
-                      setCopyModalError("");
-                    }}
-                  />
-                  <span>{copyLocalCurrencyCode || "LOCAL"}</span>
-                </div>
-                <div className="small muted" style={{ marginTop: 6 }}>
-                  Kopyalanan LOCAL degerlerini USD'ye cevirmek icin kullanilir.
-                </div>
-              </div>
-            ) : null}
-
-            <div style={{ marginTop: 16 }}>
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 700 }}>Kopya Icerigi</div>
-                <div className="small">Secili: {selectedCopyCount} / {copySectionIds.length}</div>
-              </div>
-              <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                <button type="button" className="btn" onClick={() => applyPresetSelection("all")} disabled={scenarioOpsBusy}>
-                  Tumu
-                </button>
-                <button type="button" className="btn" onClick={() => applyPresetSelection("none")} disabled={scenarioOpsBusy}>
-                  Hicbiri
-                </button>
-                <button type="button" className="btn" onClick={() => applyPresetSelection("structure")} disabled={scenarioOpsBusy}>
-                  Yapi
-                </button>
-                <button type="button" className="btn" onClick={() => applyPresetSelection("financial")} disabled={scenarioOpsBusy}>
-                  Finans
-                </button>
-              </div>
-              {copySelectionMsg ? (
-                <div className="small" style={{ marginTop: 6, color: "#0f766e" }}>
-                  {copySelectionMsg}
-                </div>
-              ) : null}
-              <div style={{ marginTop: 12, overflowX: "auto", paddingBottom: 4 }}>
-                <div style={{ display: "flex", gap: 12, minWidth: 960 }}>
-                  {COPY_SELECT_TABS.map((tab) => (
-                    <div
-                      key={tab.key}
-                      style={{
-                        minWidth: 220,
-                        flex: "0 0 220px",
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 8,
-                        padding: 10,
-                        background: "#f8fafc",
-                      }}
-                    >
-                      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                        <div style={{ fontWeight: 700 }}>{tab.label}</div>
-                        <div className="row" style={{ gap: 6 }}>
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ padding: "2px 6px", fontSize: 12 }}
-                            onClick={() => setCopyTabSelectionAll(tab.key, true)}
-                            disabled={scenarioOpsBusy}
-                          >
-                            Tumu
-                          </button>
-                          <button
-                            type="button"
-                            className="btn"
-                            style={{ padding: "2px 6px", fontSize: 12 }}
-                            onClick={() => setCopyTabSelectionAll(tab.key, false)}
-                            disabled={scenarioOpsBusy}
-                          >
-                            Temizle
-                          </button>
-                        </div>
-                      </div>
-                      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-                        {tab.sections.map((section) => (
-                          <label key={section.id} className="row" style={{ gap: 6, alignItems: "center" }}>
-                            <input
-                              type="checkbox"
-                              checked={!!copySelection?.[section.id]}
-                              onChange={(e) => toggleCopySelection(section.id, e.target.checked)}
-                              disabled={scenarioOpsBusy}
-                            />
-                            <span className="small">{section.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-              <button className="btn" onClick={closeCopyScenarioModal} disabled={scenarioOpsBusy}>
-                Iptal
-              </button>
-              <button
-                className="btn primary"
-                onClick={confirmCopyScenarioModal}
-                disabled={scenarioOpsBusy || copyingScenarioId || !copySelection || !isIkGiderlerValid}
-              >
-                {copyingScenarioId ? (
-                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <InlineSpinner />
-                    <span>Kopyalanıyor...</span>
-                  </span>
-                ) : (
-                  "Tamam"
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {scenarioWizardOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal scenario-wizard-modal">
-            <div className="scenario-wizard-header">
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div style={{ fontWeight: 700 }}>
-                  {scenarioWizardMode === "edit" ? "Senaryo Kurulumunu Düzenle" : "Yeni Senaryo Kurulumu"}
-                </div>
-                <button
-                  className="btn"
-                  onClick={closeScenarioWizard}
-                  disabled={scenarioWizardSaving || scenarioWizardLoading}
-                >
-                  Kapat
-                </button>
-              </div>
-              <div className="small" style={{ marginTop: 6 }}>
-                {scenarioWizardMode === "edit"
-                  ? "Senaryo ayarlarını güncelleyip kaydedebilirsiniz."
-                  : "Adım adım kurulum tamamlayın."}
-              </div>
-            </div>
-            <div className="scenario-wizard-body">
-              {err ? (
-                <div className="card" style={{ marginTop: 10, background: "#fff1f2", borderColor: "#fecaca" }}>
-                  {err}
-                </div>
-              ) : null}
-
-              {scenarioWizardLoading ? (
-                <div className="card" style={{ marginTop: 12 }}>Yükleniyor...</div>
-              ) : (
-                <div style={{ marginTop: 12 }}>
-                  <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontWeight: 700 }}>Kurulum Adımı</div>
-                    <div className="small">{`Adım ${newScenarioStep + 1} / ${scenarioStepTotal}: ${scenarioStepLabels[newScenarioStep]}`}</div>
-                  </div>
-
-                  {newScenarioStep === 0 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Dönem Türü</div>
-                      <div className="row" style={{ gap: 12, alignItems: "center" }}>
-                        <label className="row" style={{ gap: 6, alignItems: "center" }}>
-                          <input
-                            type="radio"
-                            name="scenario-period"
-                            checked={newScenarioPeriod === "full"}
-                            onChange={() => setNewScenarioPeriod("full")}
-                          />
-                          <span>Tam Yıl (tek yıl)</span>
-                        </label>
-                        <label className="row" style={{ gap: 6, alignItems: "center" }}>
-                          <input
-                            type="radio"
-                            name="scenario-period"
-                            checked={newScenarioPeriod === "split"}
-                            onChange={() => setNewScenarioPeriod("split")}
-                          />
-                          <span>Yıl ortasında başlar, sonraki yıl biter</span>
-                        </label>
-                      </div>
-                    </div>
-                  )}
-
-                  {newScenarioStep === 1 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Para Birimi</div>
-                      <div className="row" style={{ gap: 12, alignItems: "center" }}>
-                        <label className="row" style={{ gap: 6, alignItems: "center" }}>
-                          <input
-                            type="radio"
-                            name="scenario-currency"
-                            checked={newScenarioInputCurrency === "USD"}
-                            onChange={() => handleScenarioCurrencyChange("USD")}
-                            disabled={scenarioWizardMode === "edit"}
-                          />
-                          <span>USD</span>
-                        </label>
-                        <label className="row" style={{ gap: 6, alignItems: "center" }}>
-                          <input
-                            type="radio"
-                            name="scenario-currency"
-                            checked={newScenarioInputCurrency === "LOCAL"}
-                            onChange={() => handleScenarioCurrencyChange("LOCAL")}
-                            disabled={scenarioWizardMode === "edit"}
-                          />
-                          <span>Local currency</span>
-                        </label>
-                      </div>
-
-                      {newScenarioInputCurrency === "LOCAL" && (
-                        <div style={{ marginTop: 10 }}>
-                          <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                            <div className="small" style={{ fontWeight: 700 }}>Local currency code</div>
-                            <input
-                              className="input sm"
-                              list="local-currency-codes"
-                              placeholder="TRY"
-                              value={newScenarioLocalCurrencyCode}
-                              onChange={(e) =>
-                                setNewScenarioLocalCurrencyCode(
-                                  e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10)
-                                )
-                              }
-                            />
-                            <datalist id="local-currency-codes">
-                              {LOCAL_CURRENCY_OPTIONS.map((code) => (
-                                <option key={code} value={code} />
-                              ))}
-                            </datalist>
-                          </div>
-                          {!localCodeOk ? (
-                            <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>
-                              Code 2-10 chars, A-Z0-9.
-                            </div>
-                          ) : null}
-
-                          <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10 }}>
-                            <span>1 USD =</span>
-                            <input
-                              className="input sm"
-                              type="number"
-                              step="0.000001"
-                              value={newScenarioFxUsdToLocal}
-                              onChange={(e) => setNewScenarioFxUsdToLocal(e.target.value)}
-                            />
-                            <span>{normalizedLocalCode || "LOCAL"}</span>
-                          </div>
-                          {!fxOk ? (
-                            <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>
-                              FX rate must be {'>'} 0.
-                            </div>
-                          ) : null}
-                          <div className="small muted" style={{ marginTop: 6 }}>
-                            Kur formati: 1 USD = X LOCAL
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {newScenarioStep === 2 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Program Turu</div>
-                      <div className="row" style={{ gap: 12 }}>
-                        {[
-                          {
-                            key: PROGRAM_TYPES.LOCAL,
-                            label: "Yerel",
-                            hint: "Yerel kademeleri planlayin",
-                          },
-                          {
-                            key: PROGRAM_TYPES.INTERNATIONAL,
-                            label: "International",
-                            hint: "Uluslararasi kademeleri planlayin",
-                          },
-                        ].map((option) => (
-                          <button
-                            key={option.key}
-                            type="button"
-                            className={`btn ${newScenarioProgramType === option.key ? "primary" : "ghost"}`}
-                            aria-pressed={newScenarioProgramType === option.key}
-                            onClick={() => setNewScenarioProgramType(option.key)}
-                          >
-                            <div style={{ fontWeight: 700 }}>{option.label}</div>
-                            <div className="small" style={{ opacity: 0.75 }}>{option.hint}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {newScenarioStep === 3 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Yil</div>
-                      {newScenarioPeriod === "full" ? (
-                        <input
-                          className="input sm"
-                          placeholder={DEFAULT_START_YEAR}
-                          value={newScenarioStartYear}
-                          onChange={(e) => setNewScenarioStartYear(e.target.value)}
-                        />
-                      ) : (
-                        <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                          <input
-                            className="input sm"
-                            placeholder={DEFAULT_START_YEAR}
-                            value={newScenarioStartYear}
-                            onChange={(e) => setNewScenarioStartYear(e.target.value)}
-                          />
-                          <span className="muted">-</span>
-                          <input
-                            className="input sm"
-                            placeholder={DEFAULT_END_YEAR}
-                            value={newScenarioEndYear}
-                            onChange={(e) => setNewScenarioEndYear(e.target.value)}
-                          />
-                        </div>
-                      )}
-                      <div className="small muted" style={{ marginTop: 6 }}>
-                        Akademik yil: {draftAcademicYear || "-"}
-                        {newScenarioPeriod === "split" && draftAcademicYear && !draftRangeOk ? (
-                          <span style={{ color: "#b91c1c", marginLeft: 8 }}>
-                            Bitis yili, baslangic yilindan 1 fazla olmali.
-                          </span>
-                        ) : null}
-                        {draftAcademicYear && yearConflict ? (
-                          <span style={{ color: "#b91c1c", marginLeft: 8 }}>
-                            Bu yil turu icin zaten bir senaryo var.
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  )}
-
-                  {newScenarioStep === 4 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Kademeler</div>
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Kademe</th>
-                            <th style={{ width: 120 }}>Aktif</th>
-                            <th style={{ width: 160 }}>Baslangic</th>
-                            <th style={{ width: 160 }}>Bitis</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {kademeDefs.map((def) => {
-                            const row = draftKademeConfig[def.key];
-                            return (
-                              <tr key={def.key}>
-                                <td style={{ fontWeight: 700 }}>{def.label}</td>
-                                <td>
-                                  <input
-                                    type="checkbox"
-                                    checked={!!row?.enabled}
-                                    onChange={(e) => updateNewKademe(def.key, { enabled: e.target.checked })}
-                                  />
-                                </td>
-                                <td>
-                                  <select
-                                    className="input sm"
-                                    value={row?.from || ""}
-                                    onChange={(e) => updateNewKademe(def.key, { from: e.target.value })}
-                                    disabled={!row?.enabled}
-                                  >
-                                    {gradeOptions.map((g) => (
-                                      <option key={g} value={g}>{g}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td>
-                                  <select
-                                    className="input sm"
-                                    value={row?.to || ""}
-                                    onChange={(e) => updateNewKademe(def.key, { to: e.target.value })}
-                                    disabled={!row?.enabled}
-                                  >
-                                    {gradeOptions.map((g) => (
-                                      <option key={g} value={g}>{g}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                      {!hasEnabledKademe ? (
-                        <div className="small" style={{ color: "#b91c1c" }}>En az bir kademe secmelisiniz.</div>
-                      ) : null}
-                    </div>
-                  )}
-
-                  {newScenarioStep === 5 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Senaryo Adi</div>
-                      <div className="row">
-                        <input
-                          className="input"
-                          placeholder="Senaryo adi"
-                          value={newScenarioName}
-                          onChange={(e) => setNewScenarioName(e.target.value)}
-                        />
-                      </div>
-                      {!newScenarioName.trim() ? (
-                        <div className="small" style={{ color: "#b91c1c", marginTop: 6 }}>Senaryo adi zorunludur.</div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            {!scenarioWizardLoading ? (
-              <div className="scenario-wizard-footer">
-                <button
-                  className="btn"
-                  onClick={goScenarioBack}
-                  disabled={newScenarioStep === 0 || scenarioWizardSaving}
-                >
-                  Geri
-                </button>
-                <button
-                  className="btn primary"
-                  onClick={goScenarioNext}
-                  disabled={scenarioWizardSaving || !scenarioStepOk[newScenarioStep]}
-                >
-                  {scenarioWizardSaving ? (
-                    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                      <InlineSpinner />
-                      <span>{scenarioWizardMode === "edit" ? "Kaydediliyor..." : "Oluşturuluyor..."}</span>
-                    </span>
-                  ) : (
-                    newScenarioStep < scenarioStepTotal - 1
-                      ? "İleri"
-                      : scenarioWizardMode === "edit"
-                        ? "Kaydet"
-                        : "Bitir"
-                  )}
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       {outlet?.headerPortalEl
         ? createPortal(renderTopbarMetaAndActions(), outlet.headerPortalEl)
         : (
@@ -3476,512 +2800,25 @@ export default function SchoolPage() {
           </div>
         )}
 
-
-
-
-
-      {tab === "scenarios" && (
+      {!selectedScenarioId ? (
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-            <div className="row" style={{ gap: 8, alignItems: "center" }}>
-              <button className="btn primary" onClick={openScenarioWizardCreate} disabled={scenarioOpsBusy}>
-                Yeni Senaryo
-              </button>
-            </div>
+          <div style={{ fontWeight: 700 }}>Okul & Senaryo Sec</div>
+          <div className="small" style={{ marginTop: 6 }}>
+            Bu bolumu acmak icin once okul ve senaryo secin.
           </div>
-
-          <div className="scenario-toolbar" style={{ marginTop: 10 }}>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                if (!selectedRowScenario) return;
-                openScenarioWizardEdit(selectedRowScenario.id);
-              }}
-              disabled={!canEditToolbar || scenarioOpsBusy}
-              title="Planlamayi Duzenle"
-            >
-              <span className="btn-inner">
-                <span>Planlamayi Duzenle</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={openCopyScenarioModal}
-              disabled={!canCopyToolbar || inputsSaving || calculating || scenarioOpsBusy}
-              title="Kopyala"
-            >
-              <span className="btn-inner">
-                {toolbarIsCopying ? <InlineSpinner /> : null}
-                <span>Kopyala</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => {
-                if (!selectedRowScenario) return;
-                submitScenarioForApproval(selectedRowScenario.id);
-              }}
-              disabled={!canSubmitToolbar || inputsSaving || calculating || scenarioOpsBusy}
-              title="Onaya Gonder"
-            >
-              <span className="btn-inner">
-                {toolbarIsSubmitting ? <InlineSpinner /> : null}
-                <span>Onaya Gonder</span>
-              </span>
-            </button>
-            <button
-              type="button"
-              className="btn danger"
-              onClick={() => {
-                if (!selectedRowScenario) return;
-                openDeleteScenarioModal(selectedRowScenario.id);
-              }}
-              disabled={!canDeleteToolbar || inputsSaving || calculating || scenarioOpsBusy}
-              title="Sil"
-            >
-              <span className="btn-inner">
-                {toolbarIsDeleting ? <InlineSpinner /> : null}
-                <span>Sil</span>
-              </span>
-            </button>
-          </div>
-          {!selectedRowScenario ? (
-            <div className="small muted" style={{ marginTop: 6, textAlign: "right" }}>
-              Bir senaryo secin.
-            </div>
-          ) : null}
-
-          <table className="table scenario-table" style={{ marginTop: 10 }}>
-            <thead>
-              <tr>
-                <th aria-sort={getSortAria("name")}>
-                  <button
-                    type="button"
-                    className="sort-th"
-                    onClick={() => toggleScenarioSort("name")}
-                    aria-label="Sırala: Ad"
-                  >
-                    <span>Ad</span>
-                    {sortIcon("name")}
-                  </button>
-                </th>
-                <th aria-sort={getSortAria("year")}>
-                  <button
-                    type="button"
-                    className="sort-th"
-                    onClick={() => toggleScenarioSort("year")}
-                    aria-label="Sırala: Yıl"
-                  >
-                    <span>Yıl</span>
-                    {sortIcon("year")}
-                  </button>
-                </th>
-                <th aria-sort={getSortAria("currency")}>
-                  <button
-                    type="button"
-                    className="sort-th"
-                    onClick={() => toggleScenarioSort("currency")}
-                    aria-label="Sırala: Para Birimi"
-                  >
-                    <span>Para Birimi</span>
-                    {sortIcon("currency")}
-                  </button>
-                </th>
-                <th aria-sort={getSortAria("status")}>
-                  <button
-                    type="button"
-                    className="sort-th"
-                    onClick={() => toggleScenarioSort("status")}
-                    aria-label="Sırala: Durum"
-                  >
-                    <span>Durum</span>
-                    {sortIcon("status")}
-                  </button>
-                </th>
-                <th aria-sort={getSortAria("date")}>
-                  <button
-                    type="button"
-                    className="sort-th"
-                    onClick={() => toggleScenarioSort("date")}
-                    aria-label="Sırala: Tarih"
-                  >
-                    <span>Tarih</span>
-                    {sortIcon("date")}
-                  </button>
-                </th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {scenarios.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="small">
-                    Henüz senaryo yok.
-                  </td>
-                </tr>
-              ) : (
-                sortedScenarios.map((s) => {
-                  const statusMeta = getScenarioStatusMeta(s.status);
-                  const isSelected = selectedScenarioId === s.id;
-                  const isThisRowBusy = String(s.id) === String(busyRowId);
-                  const isOtherRowDisabled = scenarioOpsBusy && busyRowId && !isThisRowBusy;
-                  const disableThisRowActions = scenarioOpsBusy;
-                  const currencyLabel =
-                    s.input_currency === "LOCAL"
-                      ? `${s.local_currency_code || "LOCAL"} (LOCAL)`
-                      : "USD";
-                  return (
-                    <tr
-                      key={s.id}
-                      className={isSelected ? "scenario-row is-selected" : "scenario-row"}
-                      style={{
-                        opacity: isOtherRowDisabled ? 0.5 : 1,
-                        pointerEvents: isOtherRowDisabled ? "none" : "auto",
-                      }}
-                    >
-                      <td>
-                        <b className="scenario-name" title={s.name}>
-                          {s.name}
-                        </b>
-                      </td>
-                      <td>{s.academic_year}</td>
-                      <td>{currencyLabel}</td>
-                      <td>
-                        <span className={`status-badge ${statusMeta.className}`}>
-                          {statusMeta.label}
-                        </span>
-                      </td>
-                      <td className="small">{new Date(s.created_at).toLocaleString()}</td>
-                      <td>
-                        <div className="scenario-row-actions">
-                          <button
-                            type="button"
-                            className={"btn scenario-action-btn " + (isSelected ? "primary" : "")}
-                            onClick={() => setSelectedScenarioId(s.id)}
-                            disabled={isSelected || disableThisRowActions || isOtherRowDisabled}
-                            title={isSelected ? "Secili" : "Sec"}
-                          >
-                            <FaCheck />
-                            <span>{isSelected ? "Secildi" : "Sec"}</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {tab === "basics" && (
-        <div style={{ marginTop: 12 }}>
-          {inputs ? (
-            <TabProgressHeatmap
-              pct={pctValue(progMap.temelBilgiler)}
-              title="Temel Bilgiler"
-              missingLines={progMap.temelBilgiler?.missingLines}
-              missingPreview={progMap.temelBilgiler?.missingPreview}
-            >
-              <TemelBilgilerEditor
-                value={inputs.temelBilgiler}
-                onChange={(v) => setField("temelBilgiler", v)}
-                school={school}
-                me={me}
-                baseYear={baseYear}
-                kapasite={inputs.kapasite}
-                gradesCurrent={inputs.gradesCurrent}
-                ik={inputs.ik}
-                prevReport={prevReport}
-                prevCurrencyMeta={prevScenarioMeta}
-                dirtyPaths={dirtyPaths}
-                programType={programType}
-                currencyCode={inputCurrencyCode}
-                isScenarioLocal={selectedScenario?.input_currency === "LOCAL"}
-                reportCurrency={reportCurrency}
-                currencyMeta={{
-                  input_currency: selectedScenario?.input_currency,
-                  fx_usd_to_local: selectedScenario?.fx_usd_to_local,
-                  local_currency_code: selectedScenario?.local_currency_code,
-                }}
-                onDirty={markDirty}
-              />
-            </TabProgressHeatmap>
-          ) : null}
-        </div>
-      )}
-
-      {tab === "kapasite" && (
-        <div style={{ marginTop: 12 }}>
-          {inputs ? (
-            <TabProgressHeatmap
-              pct={pctValue(progMap.kapasite)}
-              title="Kapasite"
-              missingLines={progMap.kapasite?.missingLines}
-              missingPreview={progMap.kapasite?.missingPreview}
-            >
-              <CapacityEditor
-                school={school}
-                me={me}
-                baseYear={baseYear}
-                kapasite={inputs.kapasite}
-                plannedGrades={inputs.gradesYears || inputs.grades}
-                currentGrades={inputs.gradesCurrent}
-                kademeConfig={inputs.temelBilgiler?.kademeler}
-                programType={programType}
-                onChange={(v) => {
-                  setField("kapasite", v);
-                }}
-                dirtyPaths={dirtyPaths}
-                onDirty={markDirty}
-              />
-            </TabProgressHeatmap>
-          ) : null}
-        </div>
-      )}
-
-
-      {tab === "income" && (
-        <div style={{ marginTop: 12 }}>
-          {inputs ? (
-            <TabProgressHeatmap
-              pct={pctValue(progMap.gelirler)}
-              title="Gelirler"
-              missingLines={progMap.gelirler?.missingLines}
-              missingPreview={progMap.gelirler?.missingPreview}
-            >
-              <IncomeEditor
-                gelirler={inputs.gelirler}
-                temelBilgiler={inputs.temelBilgiler}
-                baseYear={baseYear}
-                gradesYears={inputs.gradesYears}
-                grades={inputs.gradesYears?.y1 || inputs.grades}
-                discounts={inputs.discounts}
-                currencyCode={inputCurrencyCode}
-                onChange={(v) => {
-                  setField("gelirler", v);
-                }}
-                dirtyPaths={dirtyPaths}
-                onDirty={markDirty}
-              />
-            </TabProgressHeatmap>
-          ) : null}
-        </div>
-      )}
-
-      {tab === "expenses" && (
-        <div style={{ marginTop: 12 }}>
-          {inputs ? (
-            <TabProgressHeatmap
-              pct={expensesAvgPct}
-              title="Giderler"
-              missingLines={expensesMissingLines}
-              missingPreview={expensesMissingLines.join(" / ")}
-            >
-              <ExpensesEditor
-                baseYear={baseYear}
-                giderler={inputs.giderler}
-                temelBilgiler={inputs.temelBilgiler}
-                ik={inputs.ik}
-                grades={inputs.grades}
-                gelirler={inputs.gelirler}
-                discounts={inputs.discounts}
-                currencyCode={inputCurrencyCode}
-                onDiscountsChange={(v) => {
-                  setField("discounts", v);
-                }}
-                onChange={(v) => {
-                  setField("giderler", v);
-                }}
-                dirtyPaths={dirtyPaths}
-                onDirty={markDirty}
-                uiScopeKey={uiScopeKey}
-              />
-            </TabProgressHeatmap>
-          ) : null}
-        </div>
-      )}
-
-      {tab === "norm" && (
-        <div style={{ marginTop: 12 }}>
-          <TabProgressHeatmap
-            pct={normAvgPct}
-            title="Norm"
-            missingLines={normMissingLines}
-            missingPreview={normMissingLines.join(" / ")}
+          <button
+            type="button"
+            className="btn primary"
+            style={{ marginTop: 12 }}
+            onClick={() => navigate(`/select?schoolId=${schoolId}`)}
           >
-            <NormConfigEditor
-              value={norm || null}
-              onChange={(v) => {
-                setNorm((prev) => ({ ...(prev || {}), ...v }));
-              }}
-              lastUpdatedAt={norm?.updatedAt}
-              planningGrades={inputs?.gradesYears || inputs?.grades}
-              currentGrades={inputs?.gradesCurrent}
-              onPlanningGradesChange={
-                inputs
-                  ? (v) => {
-                    if (!v || typeof v !== "object") return;
-                    setInputs((prev) => {
-                      const p = prev || {};
-                      let next = structuredClone(p);
-                      next.gradesYears = v;
-                      if (Array.isArray(v.y1)) next.grades = structuredClone(v.y1);
-                      next = applyTuitionStudentCounts(next);
-                      return next;
-                    });
-                  }
-                  : null
-              }
-              onCurrentGradesChange={inputs ? (v) => setField("gradesCurrent", v) : null}
-              kademeConfig={inputs?.temelBilgiler?.kademeler}
-              programType={programType}
-              dirtyPaths={dirtyPaths}
-              onDirty={markDirty}
-            />
-          </TabProgressHeatmap>
+            Okul & Senaryo Sec
+          </button>
         </div>
-      )}
-
-      {/* C) HR tab: auto compute salaries and inject into Expenses instantly (no copy button) */}
-      {tab === "hr" && (
-        <div style={{ marginTop: 12 }}>
-          {inputs ? (
-            <TabProgressHeatmap
-              pct={pctValue(progMap.ik)}
-              title="IK / HR"
-              missingLines={progMap.ik?.missingLines}
-              missingPreview={progMap.ik?.missingPreview}
-            >
-              <HREditorIK
-                value={inputs.ik}
-                kademeConfig={inputs.temelBilgiler?.kademeler}
-                currencyCode={inputCurrencyCode}
-                programType={programType}
-                temelBilgiler={inputs.temelBilgiler}
-                onChange={(v) => {
-                  setField("ik", v);
-                }}
-                onSalaryComputed={(salaryByYear) => {
-                  if (inputsLocked) return;
-                  const patch = salaryByYear?.y1 || {};
-                  const keys = [
-                    "turkPersonelMaas",
-                    "turkDestekPersonelMaas",
-                    "yerelPersonelMaas",
-                    "yerelDestekPersonelMaas",
-                    "internationalPersonelMaas",
-                  ];
-
-                  setInputs((prev) => {
-                    const p = prev || {};
-                    const prevItems = p?.giderler?.isletme?.items || {};
-
-                    let changed = false;
-                    for (const k of keys) {
-                      const a = Number(prevItems?.[k] || 0);
-                      const b = Number(patch?.[k] || 0);
-                      if (Math.abs(a - b) > 1e-6) {
-                        changed = true;
-                        break;
-                      }
-                    }
-                    if (!changed) return prev;
-
-                    const next = structuredClone(p);
-                    next.giderler = next.giderler || {};
-                    next.giderler.isletme = next.giderler.isletme || {};
-                    next.giderler.isletme.items = next.giderler.isletme.items || {};
-                    for (const k of keys) next.giderler.isletme.items[k] = Number(patch?.[k] || 0);
-                    for (const k of keys) {
-                      markDirty(`inputs.giderler.isletme.items.${k}`, Number(patch?.[k] || 0));
-                    }
-                    return next;
-                  });
-                }}
-                dirtyPaths={dirtyPaths}
-                onDirty={markDirty}
-                uiScopeKey={uiScopeKey}
-              />
-            </TabProgressHeatmap>
-          ) : null}
-        </div>
-      )}
-
-      {tab === "detailedReport" && (
-        <div style={{ marginTop: 12 }}>
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <button
-                  className={detailedReportMode === "onepager" ? "btn primary" : "btn"}
-                  onClick={() => setDetailedReportMode("onepager")}
-                >
-                  Tek Sayfa (Özet)
-                </button>
-                <button
-                  className={detailedReportMode === "detailed" ? "btn primary" : "btn"}
-                  onClick={() => setDetailedReportMode("detailed")}
-                >
-                  Detaylı (RAPOR)
-                </button>
-                {selectedScenario?.input_currency === "LOCAL" &&
-                  Number(selectedScenario?.fx_usd_to_local) > 0 &&
-                  selectedScenario?.local_currency_code ? (
-                  <div className="tabs">
-                    <button
-                      type="button"
-                      className={`tab ${reportCurrency === "usd" ? "active" : ""}`}
-                      onClick={() => setReportCurrency("usd")}
-                    >
-                      USD
-                    </button>
-                    <button
-                      type="button"
-                      className={`tab ${reportCurrency === "local" ? "active" : ""}`}
-                      onClick={() => setReportCurrency("local")}
-                    >
-                      {selectedScenario.local_currency_code}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-
-          <div ref={reportExportRef} data-report-export="1" className="report-export">
-            <DetailedReportView
-              mode={detailedReportMode}
-              school={school}
-              scenario={selectedScenario}
-              inputs={inputs}
-              report={report}
-              prevReport={prevReport}
-              prevCurrencyMeta={prevScenarioMeta}
-              reportCurrency={reportCurrency}
-              currencyMeta={selectedScenario}
-              programType={programType}
-            />
-          </div>
-        </div>
-      )}
-
-      {tab === "report" && (
-        <div style={{ marginTop: 12 }}>
-          <div ref={reportExportRef} data-report-export="1" className="report-export">
-            <ReportView
-              results={report}
-              currencyMeta={selectedScenario}
-              reportCurrency={reportCurrency}
-              onReportCurrencyChange={setReportCurrency}
-            />
-          </div>
-        </div>
+      ) : (
+        <Outlet context={outletContextValue} />
       )}
     </div>
-
   );
 }
+
