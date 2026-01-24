@@ -1,7 +1,7 @@
 //frontend/src/pages/ProfilePage.jsx
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import Button from "../components/ui/Button";
@@ -9,6 +9,7 @@ import Button from "../components/ui/Button";
 export default function ProfilePage() {
   const auth = useAuth();
   const navigate = useNavigate();
+  const outlet = useOutletContext();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -18,6 +19,12 @@ export default function ProfilePage() {
   useEffect(() => {
     document.title = "Profile · Feasibility Studio";
   }, []);
+
+  useEffect(() => {
+    if (!outlet?.setHeaderMeta) return;
+    outlet.setHeaderMeta({ title: "Profil", subtitle: "Şifre ve hesap bilgileri" });
+    return () => outlet.clearHeaderMeta?.();
+  }, [outlet]);
 
   const mustReset = useMemo(() => Boolean(auth.user?.must_reset_password), [auth.user?.must_reset_password]);
 
@@ -61,11 +68,6 @@ export default function ProfilePage() {
         <div>
           <div style={{ fontWeight: 800, fontSize: 20 }}>Profile</div>
           <div className="small">Update your password and account info.</div>
-        </div>
-        <div className="row">
-          {auth.user?.role === "admin" ? <Button as={Link} variant="ghost" to="/admin">Admin</Button> : null}
-          <Button as={Link} variant="ghost" to="/schools">Geri</Button>
-          <Button variant="danger" onClick={() => auth.logout()}>Çıkış</Button>
         </div>
       </div>
 

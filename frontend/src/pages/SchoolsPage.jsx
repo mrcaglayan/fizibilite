@@ -3,7 +3,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import { Link } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import Button from "../components/ui/Button";
 import { FaFolderOpen as FaOpen } from "react-icons/fa";
@@ -12,6 +12,7 @@ import { computeScenarioProgress } from "../utils/scenarioProgress";
 
 export default function SchoolsPage() {
   const auth = useAuth();
+  const outlet = useOutletContext();
   const [schools, setSchools] = useState([]);
   const [err, setErr] = useState("");
   const [schoolProgress, setSchoolProgress] = useState({});
@@ -22,6 +23,12 @@ export default function SchoolsPage() {
   useEffect(() => {
     document.title = "Schools · Feasibility Studio";
   }, []);
+
+  useEffect(() => {
+    if (!outlet?.setHeaderMeta) return;
+    outlet.setHeaderMeta({ title: "Okullar", subtitle: "Atanan okullarınız listelenir." });
+    return () => outlet.clearHeaderMeta?.();
+  }, [outlet]);
 
   const computeSchoolProgressForSchool = useCallback(async (schoolId) => {
     const scenarios = await api.listScenarios(schoolId);
@@ -132,26 +139,6 @@ export default function SchoolsPage() {
 
   return (
     <div className="container">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 20 }}>Okullar</div>
-          <div className="small">Atanan okullariniz listelenir.</div>
-        </div>
-        <div className="row">
-          {auth.user?.role === "admin" ? (
-            <Button as={Link} variant="ghost" to="/admin">
-              Admin
-            </Button>
-          ) : null}
-          <Button as={Link} variant="ghost" to="/profile">
-            Hesabım
-          </Button>
-          <Button variant="danger" onClick={() => auth.logout()}>
-            Çıkış
-          </Button>
-        </div>
-      </div>
-
       {err ? <div className="card" style={{ marginTop: 10, background: "#fff1f2", borderColor: "#fecaca" }}>{err}</div> : null}
 
       {!isAssigned && auth.user ? (

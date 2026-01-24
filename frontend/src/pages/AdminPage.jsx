@@ -1,22 +1,26 @@
 //frontend/src/pages/AdminPage.jsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { createPortal } from "react-dom";
+import { Link, useLocation, useOutletContext } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import Tooltip from "../components/ui/Tooltip";
 import { buildProgressCatalog, DEFAULT_PROGRESS_CONFIG } from "../utils/progressCatalog";
+import { ADMIN_TABS } from "../data/adminTabs";
 
-const ADMIN_TABS = [
-  { key: "users", label: "Users" },
-  { key: "countries", label: "Countries" },
-  { key: "progress", label: "Progress Tracking" },
-  { key: "approvals", label: "Çalışma Listeleri" },
-  { key: "reports", label: "Reports" },
-];
+
 
 const YEAR_KEYS = ["y1", "y2", "y3"];
+const DEFAULT_ADMIN_TAB = ADMIN_TABS[0]?.key || "users";
+const isValidAdminTab = (value) => ADMIN_TABS.some((tab) => tab.key === value);
+const getTabFromSearch = (search) => {
+  if (!search) return null;
+  const params = new URLSearchParams(search);
+  const value = params.get("tab");
+  return isValidAdminTab(value) ? value : null;
+};
 
 const fmt = (v) => {
   const n = Number(v);
@@ -109,7 +113,36 @@ const getDynamicHint = (sectionId, field) => {
 
 export default function AdminPage() {
   const auth = useAuth();
-  const [activeTab, setActiveTab] = useState("users");
+  const outlet = useOutletContext();
+  const location = useLocation();
+  const [activeTab, setActiveTab] = useState(() => {
+    const fromSearch = getTabFromSearch(location.search);
+    if (fromSearch) return fromSearch;
+    try {
+      const stored = localStorage.getItem("admin.activeTab");
+      if (isValidAdminTab(stored)) return stored;
+    } catch (_) {
+      // ignore
+    }
+    return DEFAULT_ADMIN_TAB;
+  });
+  useEffect(() => {
+    const fromSearch = getTabFromSearch(location.search);
+    if (fromSearch && fromSearch !== activeTab) {
+      setActiveTab(fromSearch);
+      return;
+    }
+    if (!fromSearch && activeTab !== DEFAULT_ADMIN_TAB) {
+      setActiveTab(DEFAULT_ADMIN_TAB);
+    }
+  }, [location.search, activeTab]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("admin.activeTab", activeTab);
+    } catch (_) {
+      // ignore
+    }
+  }, [activeTab]);
 
   const [countries, setCountries] = useState([]);
   const [users, setUsers] = useState([]);
@@ -188,6 +221,16 @@ export default function AdminPage() {
     document.title = "Admin · Feasibility Studio";
   }, []);
 
+  useEffect(() => {
+    outlet?.setHeaderMeta({
+      title: "Admin",
+      subtitle: "Create users, manage countries, and review scenarios.",
+    });
+    return () => {
+      outlet?.clearHeaderMeta?.();
+    };
+  }, [outlet]);
+
   // Keep latest queue filters without making loadQueue depend on queueFilters
   const queueFiltersRef = useRef(queueFilters);
   useEffect(() => {
@@ -234,16 +277,14 @@ export default function AdminPage() {
 
   const currentAssignmentLabel = selectedUser
     ? selectedUser.country_name
-      ? `${selectedUser.country_name} (${selectedUser.country_code})${
-          selectedUser.region ? ` - ${selectedUser.region}` : ""
-        }`
+      ? `${selectedUser.country_name} (${selectedUser.country_code})${selectedUser.region ? ` - ${selectedUser.region}` : ""
+      }`
       : "Unassigned"
     : "Select a user";
 
   const newAssignmentLabel = selectedCountry
-    ? `${selectedCountry.name} (${selectedCountry.code})${
-        selectedCountry.region ? ` - ${selectedCountry.region}` : ""
-      }`
+    ? `${selectedCountry.name} (${selectedCountry.code})${selectedCountry.region ? ` - ${selectedCountry.region}` : ""
+    }`
     : "Select a country";
 
   const actionLabel = selectedUser?.country_id != null ? "Update Country" : "Assign Country";
@@ -1158,48 +1199,28 @@ export default function AdminPage() {
 
   const rollupExportDisabled = rollupLoading || !rollupData;
   const rollupXlsxReady = false;
+  const refreshDisabled = loading || queueLoading || rollupLoading || progressLoading;
+  const renderRefreshButton = () => (
+    <button className="btn" onClick={handleRefresh} disabled={refreshDisabled}>
+      Refresh
+    </button>
+  );
 
   return (
-    <div className="container">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 20 }}>Admin</div>
-          <div className="small">Create users, manage countries, and review scenarios.</div>
-        </div>
-        <div className="row">
-          <Link className="btn" to="/profile">
-            Profile
-          </Link>
-          <Link className="btn" to="/schools">
-            Back
-          </Link>
-          <button
-            className="btn"
-            onClick={handleRefresh}
-            disabled={loading || queueLoading || rollupLoading || progressLoading}
-          >
-            Refresh
-          </button>
-          <button className="btn danger" onClick={() => auth.logout()}>
-            Logout
-          </button>
-        </div>
-      </div>
+    <>
+      {outlet?.headerPortalEl ? createPortal(renderRefreshButton(), outlet.headerPortalEl) : null}
+      <div className="container">
+        {!outlet?.headerPortalEl && (
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 20 }}>Admin</div>
+              <div className="small">Create users, manage countries, and review scenarios.</div>
+            </div>
+            {renderRefreshButton()}
+          </div>
+        )}
 
-      <div className="tabs" style={{ marginTop: 12 }}>
-        {ADMIN_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            className={`tab ${activeTab === tab.key ? "active" : ""}`}
-            onClick={() => setActiveTab(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      <ToastContainer position="top-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover />
+        <ToastContainer position="top-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover />
 
       {userUpdateLoading ? (
         <div className="modal-backdrop" role="status" aria-live="polite" aria-busy="true">
@@ -1488,9 +1509,8 @@ export default function AdminPage() {
               <div style={{ fontWeight: 700, marginBottom: 8 }}>Assign / Edit User Country</div>
               <div className="small" style={{ marginBottom: 6 }}>
                 {selectedUser
-                  ? `Editing: ${selectedUser.email}${
-                      selectedUser.full_name ? ` (${selectedUser.full_name})` : ""
-                    } #${selectedUser.id}`
+                  ? `Editing: ${selectedUser.email}${selectedUser.full_name ? ` (${selectedUser.full_name})` : ""
+                  } #${selectedUser.id}`
                   : "Select a user to assign or edit."}
               </div>
               <div className="row">
@@ -1948,10 +1968,10 @@ export default function AdminPage() {
                                 .filter(Boolean);
                               const filteredFields = progressSearchValue
                                 ? allFields.filter((field) => {
-                                    const label = String(field.label || "").toLowerCase();
-                                    const id = String(field.id || "").toLowerCase();
-                                    return label.includes(progressSearchValue) || id.includes(progressSearchValue);
-                                  })
+                                  const label = String(field.label || "").toLowerCase();
+                                  const id = String(field.id || "").toLowerCase();
+                                  return label.includes(progressSearchValue) || id.includes(progressSearchValue);
+                                })
                                 : allFields;
 
                               if (!filteredFields.length && progressSearchValue) return null;
@@ -2542,45 +2562,45 @@ export default function AdminPage() {
 
                             {regionExpanded
                               ? region.countries?.map((country) => {
-                                  const countryKey = `${regionKey}::${country.id}`;
-                                  const countryExpanded = expandedCountries.has(countryKey);
-                                  return (
-                                    <React.Fragment key={countryKey}>
-                                      <tr className="rollup-row rollup-country">
-                                        <td className="rollup-name level-1">
-                                          <button
-                                            type="button"
-                                            className="tree-toggle"
-                                            onClick={() => toggleCountry(regionKey, country.id)}
-                                            aria-label="Toggle country"
-                                          >
-                                            {countryExpanded ? "-" : "+"}
-                                          </button>
-                                          <span className="rollup-title">{country.name}</span>
-                                        </td>
-                                        <td>{renderYearCell(country.years?.y1)}</td>
-                                        <td>{renderYearCell(country.years?.y2)}</td>
-                                        <td>{renderYearCell(country.years?.y3)}</td>
-                                      </tr>
+                                const countryKey = `${regionKey}::${country.id}`;
+                                const countryExpanded = expandedCountries.has(countryKey);
+                                return (
+                                  <React.Fragment key={countryKey}>
+                                    <tr className="rollup-row rollup-country">
+                                      <td className="rollup-name level-1">
+                                        <button
+                                          type="button"
+                                          className="tree-toggle"
+                                          onClick={() => toggleCountry(regionKey, country.id)}
+                                          aria-label="Toggle country"
+                                        >
+                                          {countryExpanded ? "-" : "+"}
+                                        </button>
+                                        <span className="rollup-title">{country.name}</span>
+                                      </td>
+                                      <td>{renderYearCell(country.years?.y1)}</td>
+                                      <td>{renderYearCell(country.years?.y2)}</td>
+                                      <td>{renderYearCell(country.years?.y3)}</td>
+                                    </tr>
 
-                                      {countryExpanded
-                                        ? country.schools?.map((school) => (
-                                            <tr key={`school-${school.id}`} className="rollup-row rollup-school">
-                                              <td className="rollup-name level-2">
-                                                {school.name}
-                                                {school.included_years?.length ? (
-                                                  <span className="rollup-sub">({school.included_years.join(", ")})</span>
-                                                ) : null}
-                                              </td>
-                                              <td>{renderYearCell(school.years?.y1)}</td>
-                                              <td>{renderYearCell(school.years?.y2)}</td>
-                                              <td>{renderYearCell(school.years?.y3)}</td>
-                                            </tr>
-                                          ))
-                                        : null}
-                                    </React.Fragment>
-                                  );
-                                })
+                                    {countryExpanded
+                                      ? country.schools?.map((school) => (
+                                        <tr key={`school-${school.id}`} className="rollup-row rollup-school">
+                                          <td className="rollup-name level-2">
+                                            {school.name}
+                                            {school.included_years?.length ? (
+                                              <span className="rollup-sub">({school.included_years.join(", ")})</span>
+                                            ) : null}
+                                          </td>
+                                          <td>{renderYearCell(school.years?.y1)}</td>
+                                          <td>{renderYearCell(school.years?.y2)}</td>
+                                          <td>{renderYearCell(school.years?.y3)}</td>
+                                        </tr>
+                                      ))
+                                      : null}
+                                  </React.Fragment>
+                                );
+                              })
                               : null}
                           </React.Fragment>
                         );
@@ -2624,5 +2644,6 @@ export default function AdminPage() {
         </div>
       )}
     </div>
+    </>
   );
 }

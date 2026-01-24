@@ -7,6 +7,7 @@ import SchoolsPage from "./pages/SchoolsPage";
 import SchoolPage from "./pages/SchoolPage";
 import AdminPage from "./pages/AdminPage";
 import ProfilePage from "./pages/ProfilePage";
+import AppLayout from "./layouts/AppLayout";
 
 function PrivateRoute({ children, allowReset = false }) {
   const auth = useAuth();
@@ -25,10 +26,26 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={auth.token ? <Navigate to={postLoginPath} replace /> : <LoginPage />} />
-      <Route path="/schools" element={<PrivateRoute><SchoolsPage /></PrivateRoute>} />
-      <Route path="/schools/:id" element={<PrivateRoute><SchoolPage /></PrivateRoute>} />
-      <Route path="/admin" element={<PrivateRoute><AdminPage /></PrivateRoute>} />
-      <Route path="/profile" element={<PrivateRoute allowReset><ProfilePage /></PrivateRoute>} />
+      <Route
+        element={
+          <PrivateRoute>
+            <AppLayout />
+          </PrivateRoute>
+        }
+      >
+        <Route path="/schools" element={<SchoolsPage />} />
+        <Route path="/schools/:id" element={<SchoolPage />} />
+        <Route path="/admin" element={<AdminPage />} />
+      </Route>
+      <Route
+        element={
+          <PrivateRoute allowReset>
+            <AppLayout />
+          </PrivateRoute>
+        }
+      >
+        <Route path="/profile" element={<ProfilePage />} />
+      </Route>
       <Route path="*" element={<Navigate to={auth.token ? postLoginPath : "/login"} replace />} />
     </Routes>
   );
