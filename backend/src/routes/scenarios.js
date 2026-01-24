@@ -65,6 +65,16 @@ async function convertXlsxBufferToPdf(buffer, baseName = "rapor") {
   }
 }
 
+function formatAttachmentHeader(filename) {
+  const ascii = (filename || "download")
+    .replace(/[^ -~]/g, "_")
+    .replace(/"/g, "'")
+    .trim();
+  const safeAscii = ascii || "download";
+  const encoded = encodeURIComponent(filename || safeAscii);
+  return `attachment; filename="${safeAscii}"${encoded !== safeAscii ? `; filename*=UTF-8''${encoded}` : ""}`;
+}
+
 function normalizeKademeConfig(input) {
   const base = {
     okulOncesi: { enabled: true, from: "KG", to: "KG" },
@@ -3331,12 +3341,12 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       }
       res.setHeader("Content-Type", "application/pdf");
       const pdfName = baseName.replace(/\\.xlsx$/i, ".pdf");
-      res.setHeader("Content-Disposition", `attachment; filename=\"${pdfName}\"`);
+      res.setHeader("Content-Disposition", formatAttachmentHeader(pdfName));
       return res.send(pdfBuf);
     }
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=\"${baseName}\"`);
+    res.setHeader("Content-Disposition", formatAttachmentHeader(baseName));
     return res.send(buf);
   } catch (e) {
     if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
