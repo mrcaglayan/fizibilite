@@ -2977,9 +2977,10 @@ li.showMenu > .app-sub-menu {
 .app-shell.is-collapsed .app-home-section { margin-left: 88px; }
 
 .app-topbar {
-  background: var(--sb-bg);
-  border-bottom: 1px solid var(--sb-border);
-  box-shadow: var(--sb-shadow);
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(10px);
   font-family: "Poppins", "Manrope", "Segoe UI", sans-serif;
   padding: 10px 14px;
   display: flex;

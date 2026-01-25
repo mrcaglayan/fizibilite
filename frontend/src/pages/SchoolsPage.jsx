@@ -26,7 +26,15 @@ export default function SchoolsPage() {
 
   useEffect(() => {
     if (!outlet?.setHeaderMeta) return;
-    outlet.setHeaderMeta({ title: "Okullar", subtitle: "Atanan okullarınız listelenir." });
+    // Ensure the header layout matches the school pages (e.g. Temel Bilgiler) by centering
+    // the title and placing the "Okul / Senaryo Değiştir" button consistently.
+    // Without the `centered` flag the top bar uses a left‑aligned layout which causes
+    // the switch button to appear misaligned on the dashboard compared to other pages.
+    outlet.setHeaderMeta({
+      title: "Okullar",
+      subtitle: "Atanan okullarınız listelenir.",
+      centered: true,
+    });
     return () => outlet.clearHeaderMeta?.();
   }, [outlet]);
 

@@ -1208,7 +1208,7 @@ export default function SchoolPage() {
       try {
         // Clear the flag on unmount or when navigating away from this page.
         window.__fsUnsavedChanges = false;
-      } catch (_) {}
+      } catch (_) { }
     };
   }, [inputsDirty]);
   const handleIkSalaryComputed = React.useCallback(

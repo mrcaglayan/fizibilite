@@ -102,6 +102,33 @@ export default function AppLayout() {
   // custom modal instead of relying on the browser's built-in confirm. This
   // state holds the target path to navigate to once the user confirms.
   const [confirmNav, setConfirmNav] = React.useState(null);
+  const handleGuardedNavigate = React.useCallback(
+    (path) => {
+      try {
+        if (window.__fsUnsavedChanges) {
+          setConfirmNav({ path });
+          return;
+        }
+      } catch (_) {
+        // ignore if window is not defined (e.g. SSR)
+      }
+      navigate(path);
+    },
+    [navigate, setConfirmNav]
+  );
+  const handleGuardedNavLink = React.useCallback(
+    (path) => (event) => {
+      try {
+        if (window.__fsUnsavedChanges) {
+          event.preventDefault();
+          setConfirmNav({ path });
+        }
+      } catch (_) {
+        // ignore if window is not defined (e.g. SSR)
+      }
+    },
+    [setConfirmNav]
+  );
 
   // Persist the last active school ID in localStorage so that when navigating
   // to non-school pages (like /profile) we can still determine the most
@@ -116,18 +143,7 @@ export default function AppLayout() {
     <NavLink
       className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
       to={to}
-      onClick={(e) => {
-        // When unsaved changes are present, open a modal instead of navigating
-        try {
-          if (window.__fsUnsavedChanges) {
-            e.preventDefault();
-            setConfirmNav({ path: to });
-            return;
-          }
-        } catch (_) {
-          // ignore if window is not defined (e.g. SSR)
-        }
-      }}
+      onClick={handleGuardedNavLink(to)}
     >
       {/* Wrap icons in a span to consistently apply sizing and color styles. */}
       {icon ? <span className="app-nav-icon">{icon}</span> : null}
@@ -173,6 +189,7 @@ export default function AppLayout() {
           <NavLink
             to={to}
             className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
+            onClick={handleGuardedNavLink(to)}
           >
             {IconComponent ? (
               <span className="app-nav-icon">
@@ -283,6 +300,7 @@ export default function AppLayout() {
               className={({ isActive }) =>
                 "app-nav-link" + (isActive ? " is-active" : "")
               }
+              onClick={handleGuardedNavLink("/schools")}
             >
               <span className="app-nav-icon">
                 <FaTachometerAlt aria-hidden="true" />
@@ -322,17 +340,10 @@ export default function AppLayout() {
                     icon: item.icon,
                     onClick: () => {
                       if (isBlocked) {
-                        navigate(selectPath);
+                        handleGuardedNavigate(selectPath);
                         return;
                       }
-                      // If there are unsaved changes on the current school page, open the confirm modal
-                      try {
-                        if (window.__fsUnsavedChanges) {
-                          setConfirmNav({ path: item.path });
-                          return;
-                        }
-                      } catch (_) {}
-                      navigate(item.path);
+                      handleGuardedNavigate(item.path);
                     },
                     active: isActive,
                     blocked: isBlocked,
@@ -363,7 +374,7 @@ export default function AppLayout() {
               <button
                 type="button"
                 className="nav-btn"
-                onClick={() => navigate(selectPath)}
+                onClick={() => handleGuardedNavigate(selectPath)}
                 title="Okul / Senaryo Değiştir"
               >
                 {/* Use a school icon followed by the combined label and a chevron, similar to the example design. */}
