@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { ADMIN_TABS } from "../data/adminTabs";
 import { readSelectedScenarioId } from "../utils/schoolNavStorage";
 import {
-  FaBars,
+  FaChevronRight,
   FaUser,
   FaSignOutAlt,
   FaInfoCircle,
@@ -76,8 +76,12 @@ export default function AppLayout() {
   );
 
   const renderRouteLink = ({ to, label, icon }) => (
-    <NavLink className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")} to={to}>
-      {icon}
+    <NavLink
+      className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
+      to={to}
+    >
+      {/* Wrap icons in a span to consistently apply sizing and color styles. */}
+      {icon ? <span className="app-nav-icon">{icon}</span> : null}
       <span className="app-label">{label}</span>
     </NavLink>
   );
@@ -188,10 +192,24 @@ export default function AppLayout() {
 
   return (
     <div className={"app-shell " + (sidebarCollapsed ? "is-collapsed" : "")}>
-      <aside className={"app-sidebar " + (sidebarCollapsed ? "close" : "")}>
+      <aside className={"app-sidebar " + (sidebarCollapsed ? "close" : "")}> 
         <div className="app-logo-details">
           <div className="app-logo-mark">FS</div>
           <span className="app-logo-name">Feasibility Studio</span>
+          {/* Sidebar toggle placed next to the logo. When clicked, it collapses/expands the sidebar. */}
+          <button
+            type="button"
+            className="app-sidebar-toggle"
+            onClick={() => setSidebarCollapsed((p) => !p)}
+            aria-label="Toggle sidebar"
+          >
+            <FaChevronRight
+              style={{
+                transform: sidebarCollapsed ? "rotate(0deg)" : "rotate(180deg)",
+                transition: "transform 0.3s ease",
+              }}
+            />
+          </button>
         </div>
 
         <ul className="app-nav-links">
@@ -237,14 +255,6 @@ export default function AppLayout() {
         <div className="app-topbar">
           <div className={`app-topbar-row${headerMeta?.centered ? " app-topbar-row--centered" : ""}`}>
             <div className="app-topbar-left">
-              <button
-                className="app-menu-btn"
-                type="button"
-                onClick={() => setSidebarCollapsed((p) => !p)}
-                aria-label="Menu"
-              >
-                <FaBars />
-              </button>
               {showSchoolsMenu ? (
                 <>
                   <button type="button" className="nav-btn" onClick={() => navigate(selectPath)}>

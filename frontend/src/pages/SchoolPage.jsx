@@ -1,17 +1,11 @@
 // frontend/src/pages/SchoolPage.jsx
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
 import { api } from "../api";
-import {
-  getDefaultKademeConfig,
-  getKademeDefinitions,
-  getGradeOptions,
-  normalizeKademeConfig,
-  summarizeGradesByKademe,
-} from "../utils/kademe";
+import { getGradeOptions, normalizeKademeConfig, summarizeGradesByKademe } from "../utils/kademe";
 import { computeScenarioProgress } from "../utils/scenarioProgress";
 import { useScenarioUiState, useScenarioUiString } from "../hooks/useScenarioUIState";
 import {
@@ -20,61 +14,9 @@ import {
   writeLastVisitedPath,
   writeSelectedScenarioId,
 } from "../utils/schoolNavStorage";
-import {
-  getProgramType,
-  PROGRAM_TYPES,
-  mapBaseKademeToVariant,
-  normalizeProgramType,
-} from "../utils/programType";
+import { getProgramType, mapBaseKademeToVariant, normalizeProgramType } from "../utils/programType";
 
 
-
-const COPY_SELECT_TABS = [
-  {
-    key: "temel",
-    label: "Temel Bilgiler",
-    sections: [
-      { id: "temel.core", label: "Kademeler + Program" },
-      { id: "temel.pricing", label: "Enflasyon + Ücret Artis Oranlari + Ücret Hesaplama Ayari" },
-      { id: "temel.schoolInfo", label: "Yetkililer + Okul/Egitim Bilgileri" },
-      { id: "temel.discountsMeta", label: "IK Mevcut + Burs/Indirim Ögrenci Sayilari" },
-      { id: "temel.competitors", label: "Rakip Analizi" },
-      { id: "temel.performance", label: "Performans + Degerlendirme" },
-    ],
-  },
-  {
-    key: "kapasite",
-    label: "Kapasite",
-    sections: [{ id: "kapasite.all", label: "Kapasite (tümü)" }],
-  },
-  {
-    key: "norm",
-    label: "Norm",
-    sections: [
-      { id: "norm.planned", label: "Planlanan dönem bilgileri" },
-      { id: "norm.current", label: "Mevcut dönem bilgileri" },
-      { id: "norm.lessonY1", label: "Ders dagilimi (yalnizca Y1)" },
-    ],
-  },
-  {
-    key: "hr",
-    label: "IK (HR)",
-    sections: [{ id: "hr.ik", label: "IK Plan (tümü)" }],
-  },
-  {
-    key: "gelirler",
-    label: "Gelirler",
-    sections: [{ id: "income.gelirler", label: "Gelirler (tümü)" }],
-  },
-  {
-    key: "giderler",
-    label: "Giderler",
-    sections: [
-      { id: "expenses.giderler", label: "Giderler (tümü)" },
-      { id: "expenses.discounts", label: "BURS VE INDIRIMLER / YIL" },
-    ],
-  },
-];
 
 const INPUT_HEADER_TABS = new Set(["basics", "kapasite", "income", "expenses", "norm", "hr", "detailedReport", "report"]);
 const TAB_TO_ROUTE = {
@@ -88,26 +30,6 @@ const TAB_TO_ROUTE = {
   report: "rapor",
 };
 const ROUTE_TO_TAB = Object.fromEntries(Object.entries(TAB_TO_ROUTE).map(([key, value]) => [value, key]));
-
-const DEFAULT_START_YEAR = "2026";
-const DEFAULT_END_YEAR = "2027";
-const CURRENCY_CODE_REGEX = /^[A-Z0-9]{2,10}$/;
-const LOCAL_CURRENCY_OPTIONS = ["USD", "EUR", "TRY", "GBP", "JPY", "CNY", "INR", "RUB", "AED", "SAR", "AFN"];
-
-function normalizeYearInput(value) {
-  const s = String(value || "").trim();
-  if (!/^\d{4}$/.test(s)) return null;
-  return Number(s);
-}
-
-function formatAcademicYear(periodType, startYearValue, endYearValue) {
-  const start = normalizeYearInput(startYearValue);
-  if (!start) return "";
-  if (periodType === "full") return String(start);
-  const end = normalizeYearInput(endYearValue);
-  if (!end) return "";
-  return `${start}-${end}`;
-}
 
 function parseAcademicYear(academicYear) {
   const s = String(academicYear || "").trim();
@@ -125,22 +47,6 @@ function parseAcademicYear(academicYear) {
     if (Number.isFinite(startYear)) return { startYear, endYear: startYear };
   }
   return { startYear: null, endYear: null };
-}
-
-function incrementAcademicYearString(academicYear) {
-  const raw = String(academicYear || "").trim();
-  const single = raw.match(/^(\d{4})$/);
-  if (single) {
-    const start = Number(single[1]);
-    return Number.isFinite(start) ? String(start + 1) : "";
-  }
-  const range = raw.match(/^(\d{4})\s*-\s*(\d{4})$/);
-  if (range) {
-    const start = Number(range[1]);
-    const end = Number(range[2]);
-    if (Number.isFinite(start) && Number.isFinite(end)) return `${start + 1}-${end + 1}`;
-  }
-  return "";
 }
 
 function pctValue(tab) {
@@ -161,259 +67,6 @@ function mergeMissingLines(a, b) {
     });
   });
   return out.slice(0, 15);
-}
-
-function getAllCopySectionIds() {
-  return COPY_SELECT_TABS.flatMap((tab) => tab.sections.map((section) => section.id));
-}
-
-function enforceIkGiderlerPair(selection) {
-  const next = { ...(selection || {}) };
-  const ikSelected = !!next["hr.ik"];
-  const giderlerSelected = !!next["expenses.giderler"];
-  if (ikSelected !== giderlerSelected) {
-    const nextValue = ikSelected || giderlerSelected;
-    next["hr.ik"] = nextValue;
-    next["expenses.giderler"] = nextValue;
-  }
-  return next;
-}
-
-function buildDefaultCopySelection(presetKey = "all") {
-  const sectionIds = getAllCopySectionIds();
-  const selection = Object.fromEntries(sectionIds.map((id) => [id, false]));
-  if (presetKey === "all") {
-    sectionIds.forEach((id) => {
-      selection[id] = true;
-    });
-  } else if (presetKey === "structure") {
-    ["temel.core", "kapasite.all", "norm.planned", "norm.lessonY1"].forEach((id) => {
-      selection[id] = true;
-    });
-  } else if (presetKey === "financial") {
-    ["temel.core", "income.gelirler", "expenses.discounts", "hr.ik", "expenses.giderler"].forEach((id) => {
-      selection[id] = true;
-    });
-  }
-  return enforceIkGiderlerPair(selection);
-}
-
-function filterInputsForCopyBySelection(srcInputs, selection) {
-  const sel = selection || {};
-  const keep = (id) => !!sel[id];
-  const next = structuredClone(srcInputs || {});
-  const buildDefaultGrades = () =>
-    getGradeOptions().map((g) => ({ grade: g, branchCount: 0, studentsPerBranch: 0 }));
-  const srcGradesYears =
-    srcInputs?.gradesYears && typeof srcInputs.gradesYears === "object" ? srcInputs.gradesYears : {};
-  const srcGrades = Array.isArray(srcInputs?.grades) ? srcInputs.grades : null;
-  const y1Source = Array.isArray(srcGradesYears?.y1)
-    ? srcGradesYears.y1
-    : Array.isArray(srcGrades)
-      ? srcGrades
-      : buildDefaultGrades();
-  const keepPlanned = keep("norm.planned");
-  const keepLessonY1 = keep("norm.lessonY1");
-  const y2Source = Array.isArray(srcGradesYears?.y2)
-    ? srcGradesYears.y2
-    : keepLessonY1
-      ? y1Source
-      : buildDefaultGrades();
-  const y3Source = Array.isArray(srcGradesYears?.y3)
-    ? srcGradesYears.y3
-    : keepLessonY1
-      ? y1Source
-      : buildDefaultGrades();
-  next.temelBilgiler = next.temelBilgiler || {};
-
-  if (!keep("temel.core")) {
-    delete next.temelBilgiler.kademeler;
-    delete next.temelBilgiler.programType;
-  }
-
-  if (!keep("temel.pricing")) {
-    delete next.temelBilgiler.inflation;
-    delete next.temelBilgiler.ucretArtisOranlari;
-    delete next.temelBilgiler.okulUcretleriHesaplama;
-  }
-
-  if (!keep("temel.schoolInfo")) {
-    delete next.temelBilgiler.yetkililer;
-    delete next.temelBilgiler.okulEgitimBilgileri;
-  }
-
-  if (!keep("temel.discountsMeta")) {
-    delete next.temelBilgiler.ikMevcut;
-    delete next.temelBilgiler.bursIndirimOgrenciSayilari;
-  }
-
-  if (!keep("temel.competitors")) {
-    delete next.temelBilgiler.rakipAnalizi;
-  }
-
-  if (!keep("temel.performance")) {
-    delete next.temelBilgiler.performans;
-    delete next.temelBilgiler.degerlendirme;
-  }
-  if (next.temelBilgiler?.performans && typeof next.temelBilgiler.performans === "object") {
-    delete next.temelBilgiler.performans.gerceklesen;
-  }
-
-  if (!keep("kapasite.all")) {
-    delete next.kapasite;
-    delete next.schoolCapacity;
-  }
-
-  if (!keep("norm.current")) {
-    delete next.gradesCurrent;
-  }
-
-  if (!keepPlanned && !keepLessonY1) {
-    delete next.gradesYears;
-    delete next.grades;
-  } else {
-    const y1 = keepLessonY1 ? structuredClone(y1Source) : structuredClone(buildDefaultGrades());
-    const y2 = keepPlanned ? structuredClone(y2Source) : structuredClone(buildDefaultGrades());
-    const y3 = keepPlanned ? structuredClone(y3Source) : structuredClone(buildDefaultGrades());
-    next.gradesYears = { y1, y2, y3 };
-    if (keepLessonY1) {
-      next.grades = structuredClone(y1);
-    } else {
-      delete next.grades;
-    }
-  }
-
-  if (!keep("hr.ik")) {
-    delete next.ik;
-  }
-
-  if (!keep("income.gelirler")) {
-    delete next.gelirler;
-  }
-
-  if (!keep("expenses.giderler")) {
-    delete next.giderler;
-  }
-
-  if (!keep("expenses.discounts")) {
-    delete next.discounts;
-  }
-
-  return next;
-}
-
-function convertInputsUsdToLocalForCopy(inputs, fx) {
-  const rate = Number(fx);
-  if (!Number.isFinite(rate) || rate <= 0) return inputs;
-
-  const mulMoney = (v) => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return v;
-    return Math.round(n * rate * 100) / 100; // money 2 decimals
-  };
-
-  // GELIRLER (income): unitFee / amount-like fields
-  if (inputs?.gelirler) {
-    const g = inputs.gelirler;
-
-    const convertRows = (rows) => {
-      if (!Array.isArray(rows)) return;
-      rows.forEach((r) => {
-        if (!r || typeof r !== "object") return;
-        if ("unitFee" in r) r.unitFee = mulMoney(r.unitFee);
-        if ("amount" in r) r.amount = mulMoney(r.amount);
-      });
-    };
-
-    convertRows(g?.tuition?.rows);
-    convertRows(g?.nonEducationFees?.rows);
-    convertRows(g?.dormitory?.rows);
-    convertRows(g?.otherInstitutionIncome?.rows);
-
-    if (g?.governmentIncentives != null) {
-      g.governmentIncentives = mulMoney(g.governmentIncentives);
-    }
-  }
-
-  // GIDERLER (expenses): convert group.items numeric values
-  if (inputs?.giderler && typeof inputs.giderler === "object") {
-    Object.values(inputs.giderler).forEach((grp) => {
-      if (!grp || typeof grp !== "object") return;
-      if (!grp.items || typeof grp.items !== "object") return;
-      Object.keys(grp.items).forEach((k) => {
-        grp.items[k] = mulMoney(grp.items[k]);
-      });
-    });
-  }
-
-  // IK: convert unitCosts if exist
-  if (inputs?.ik?.years && typeof inputs.ik.years === "object") {
-    Object.values(inputs.ik.years).forEach((yearObj) => {
-      if (!yearObj || typeof yearObj !== "object") return;
-      if (!yearObj.unitCosts || typeof yearObj.unitCosts !== "object") return;
-      Object.keys(yearObj.unitCosts).forEach((k) => {
-        yearObj.unitCosts[k] = mulMoney(yearObj.unitCosts[k]);
-      });
-    });
-  }
-
-  // Discounts: convert only if mode === "amount"
-  if (Array.isArray(inputs?.discounts)) {
-    inputs.discounts.forEach((d) => {
-      if (!d || typeof d !== "object") return;
-      if (String(d.mode || "").toLowerCase() === "amount") {
-        d.value = mulMoney(d.value);
-      }
-    });
-  }
-
-  // Temel Bilgiler: currentSeasonAvgFee + competitor fee-like fields
-  const tb = inputs?.temelBilgiler;
-  if (tb) {
-    if (tb?.inflation?.currentSeasonAvgFee != null) {
-      tb.inflation.currentSeasonAvgFee = mulMoney(tb.inflation.currentSeasonAvgFee);
-    }
-
-    if (tb?.rakipAnalizi && typeof tb.rakipAnalizi === "object") {
-      Object.values(tb.rakipAnalizi).forEach((obj) => {
-        if (!obj || typeof obj !== "object") return;
-        ["a", "b", "c"].forEach((k) => {
-          if (k in obj) obj[k] = mulMoney(obj[k]);
-        });
-      });
-    }
-
-    if (tb?.performans?.gerceklesen && typeof tb.performans.gerceklesen === "object") {
-      Object.keys(tb.performans.gerceklesen).forEach((k) => {
-        tb.performans.gerceklesen[k] = mulMoney(tb.performans.gerceklesen[k]);
-      });
-    }
-  }
-
-  return inputs;
-}
-
-function convertInputsLocalToUsdForCopy(inputs, fx) {
-  const rate = Number(fx);
-  if (!Number.isFinite(rate) || rate <= 0) return inputs;
-  return convertInputsUsdToLocalForCopy(inputs, 1 / rate);
-}
-
-function InlineSpinner({ size = 12 }) {
-  return (
-    <span
-      aria-hidden
-      style={{
-        width: size,
-        height: size,
-        borderRadius: "50%",
-        border: "2px solid rgba(0,0,0,0.18)",
-        borderTopColor: "rgba(0,0,0,0.65)",
-        display: "inline-block",
-        animation: "schoolSpin .8s linear infinite",
-      }}
-    />
-  );
 }
 
 export default function SchoolPage() {
@@ -445,21 +98,6 @@ export default function SchoolPage() {
 
   // scenarios
   const [scenarios, setScenarios] = useState([]);
-  const [newScenarioName, setNewScenarioName] = useState("");
-  const [newScenarioPeriod, setNewScenarioPeriod] = useState("split");
-  const [newScenarioStartYear, setNewScenarioStartYear] = useState(DEFAULT_START_YEAR);
-  const [newScenarioEndYear, setNewScenarioEndYear] = useState(DEFAULT_END_YEAR);
-  const [newScenarioKademeler, setNewScenarioKademeler] = useState(getDefaultKademeConfig());
-  const [newScenarioInputCurrency, setNewScenarioInputCurrency] = useState("USD");
-  const [newScenarioLocalCurrencyCode, setNewScenarioLocalCurrencyCode] = useState("");
-  const [newScenarioFxUsdToLocal, setNewScenarioFxUsdToLocal] = useState("");
-  const [newScenarioProgramType, setNewScenarioProgramType] = useState(null);
-  const [newScenarioStep, setNewScenarioStep] = useState(0);
-  const [scenarioWizardOpen, setScenarioWizardOpen] = useState(false);
-  const [scenarioWizardMode, setScenarioWizardMode] = useState("create");
-  const [scenarioWizardScenario, setScenarioWizardScenario] = useState(null);
-  const [scenarioWizardLoading, setScenarioWizardLoading] = useState(false);
-  const [scenarioWizardSaving, setScenarioWizardSaving] = useState(false);
   const [selectedScenarioId, setSelectedScenarioId] = useState(() => readSelectedScenarioId(schoolId));
   const [pendingTabAfterSelect, setPendingTabAfterSelect] = useState(null);
   // inputs
@@ -475,23 +113,9 @@ export default function SchoolPage() {
   const [lastCalculatedAt, setLastCalculatedAt] = useState(null);
   const [nowTick, setNowTick] = useState(0);
   const [exportOpen, setExportOpen] = useState(false);
-  const [scenarioSort, setScenarioSort] = useState({ key: null, dir: "asc" });
   const exportMenuRef = useRef(null);
   const reportExportRef = useRef(null);
-  const copySelectionMsgTimerRef = useRef(null);
   const [exportingPdf, setExportingPdf] = useState(false);
-  const [submittingScenarioId, setSubmittingScenarioId] = useState(null);
-  const [copyingScenarioId, setCopyingScenarioId] = useState(null);
-  const [deletingScenarioId, setDeletingScenarioId] = useState(null);
-  const [deleteConfirmScenarioId, setDeleteConfirmScenarioId] = useState(null);
-  const [copyModalOpen, setCopyModalOpen] = useState(false);
-  const [copyModalError, setCopyModalError] = useState("");
-  const [copySelection, setCopySelection] = useState(null);
-  const [copySelectionMsg, setCopySelectionMsg] = useState("");
-  const [copyTargetCurrency, setCopyTargetCurrency] = useState("USD");
-  const [copyLocalCurrencyCode, setCopyLocalCurrencyCode] = useState("");
-  const [copyPlannedFxUsdToLocal, setCopyPlannedFxUsdToLocal] = useState("");
-  const [copyFxUsdToLocal, setCopyFxUsdToLocal] = useState("");
   // Page boot loading (used to show a spinner while auto-starting the scenario wizard)
   const [bootLoading, setBootLoading] = useState(true);
   const [bootLoadingLabel, setBootLoadingLabel] = useState("Okul açiliyor...");
@@ -576,163 +200,6 @@ export default function SchoolPage() {
 
   const scenarioYears = parseAcademicYear(selectedScenario?.academic_year);
   const baseYear = scenarioYears.startYear;
-  const draftStartYear = normalizeYearInput(newScenarioStartYear);
-  const draftEndYear = normalizeYearInput(newScenarioEndYear);
-  const draftAcademicYear = formatAcademicYear(newScenarioPeriod, newScenarioStartYear, newScenarioEndYear);
-  const draftRangeOk = newScenarioPeriod === "full" || (draftStartYear != null && draftEndYear === draftStartYear + 1);
-  const yearConflict = useMemo(() => {
-    if (!draftAcademicYear) return false;
-    const excludeId =
-      scenarioWizardMode === "edit"
-        ? Number(scenarioWizardScenario?.id || selectedScenarioId || 0)
-        : null;
-    return scenarios.some(
-      (s) =>
-        String(s?.academic_year || "").trim() === String(draftAcademicYear).trim() &&
-        (excludeId == null || Number(s?.id) !== excludeId)
-    );
-  }, [draftAcademicYear, scenarios, scenarioWizardMode, scenarioWizardScenario?.id, selectedScenarioId]);
-
-  const draftKademeConfig = useMemo(() => normalizeKademeConfig(newScenarioKademeler), [newScenarioKademeler]);
-  const hasEnabledKademe = useMemo(
-    () => Object.values(draftKademeConfig).some((row) => row && row.enabled),
-    [draftKademeConfig]
-  );
-  const normalizedLocalCode = String(newScenarioLocalCurrencyCode || "").trim().toUpperCase();
-  const localCodeOk = newScenarioInputCurrency !== "LOCAL" || CURRENCY_CODE_REGEX.test(normalizedLocalCode);
-  const fxValue = Number(newScenarioFxUsdToLocal);
-  const fxOk = newScenarioInputCurrency !== "LOCAL" || (Number.isFinite(fxValue) && fxValue > 0);
-  const currencyStepOk = newScenarioInputCurrency === "USD" || (localCodeOk && fxOk);
-  const draftReady =
-    Boolean(newScenarioName.trim()) &&
-    Boolean(draftAcademicYear) &&
-    draftRangeOk &&
-    !yearConflict &&
-    hasEnabledKademe &&
-    currencyStepOk;
-  const scenarioStepTotal = 6;
-  const scenarioStepLabels = [
-    "Donem Turu",
-    "Para Birimi",
-    "Program Turu",
-    "Yil",
-    "Kademeler",
-    "Senaryo Adi",
-  ];
-  const scenarioStepOk = [
-    true,
-    currencyStepOk,
-    Boolean(newScenarioProgramType),
-    Boolean(draftAcademicYear) && draftRangeOk && !yearConflict,
-    hasEnabledKademe,
-    draftReady,
-  ];
-  const scenarioOpsBusy = Boolean(
-    copyingScenarioId ||
-    submittingScenarioId ||
-    deletingScenarioId ||
-    scenarioWizardSaving ||
-    scenarioWizardLoading
-  );
-  const busyRowId = copyingScenarioId ?? submittingScenarioId ?? deletingScenarioId ?? null;
-  const selectedRowScenario = useMemo(
-    () => scenarios.find((s) => String(s.id) === String(selectedScenarioId)) || null,
-    [scenarios, selectedScenarioId]
-  );
-  const sortedScenarios = useMemo(() => {
-    if (!scenarioSort.key) return scenarios;
-    const indexed = scenarios.map((s, idx) => ({ s, idx }));
-    const dirMul = scenarioSort.dir === "asc" ? 1 : -1;
-
-    const getYearParts = (ay) => {
-      const m = String(ay || "").match(/(\d{4})(?:\s*-\s*(\d{4}))?/);
-      const a = m ? Number(m[1]) : 0;
-      const b = m && m[2] ? Number(m[2]) : a;
-      return [a || 0, b || 0];
-    };
-
-    const getCurrencyCode = (s) =>
-      String(s.input_currency || "USD").toUpperCase() === "LOCAL"
-        ? String(s.local_currency_code || "LOCAL").toUpperCase()
-        : "USD";
-
-    const getStatusLabel = (status) => {
-      switch (status) {
-        case "submitted":
-          return "Onayda";
-        case "revision_requested":
-          return "Revize Istendi";
-        case "approved":
-          return "Onaylandi";
-        default:
-          return "Taslak";
-      }
-    };
-
-    indexed.sort((a, b) => {
-      const A = a.s;
-      const B = b.s;
-      let res = 0;
-
-      switch (scenarioSort.key) {
-        case "name":
-          res = String(A.name || "").localeCompare(String(B.name || ""), "tr", {
-            sensitivity: "base",
-            numeric: true,
-          });
-          break;
-        case "year": {
-          const [a1, a2] = getYearParts(A.academic_year);
-          const [b1, b2] = getYearParts(B.academic_year);
-          res = (a1 - b1) || (a2 - b2);
-          break;
-        }
-        case "currency":
-          res = getCurrencyCode(A).localeCompare(getCurrencyCode(B), "tr", {
-            sensitivity: "base",
-            numeric: true,
-          });
-          break;
-        case "status":
-          res = getStatusLabel(A.status).localeCompare(getStatusLabel(B.status), "tr", {
-            sensitivity: "base",
-            numeric: true,
-          });
-          break;
-        case "date":
-          res = new Date(A.created_at).getTime() - new Date(B.created_at).getTime();
-          break;
-        default:
-          res = 0;
-      }
-
-      if (res === 0) res = a.idx - b.idx;
-      return res * dirMul;
-    });
-
-    return indexed.map((item) => item.s);
-  }, [scenarios, scenarioSort]);
-  const toggleScenarioSort = (key) => {
-    setScenarioSort((prev) =>
-      prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }
-    );
-  };
-  const getSortAria = (key) => {
-    if (scenarioSort.key !== key) return "none";
-    return scenarioSort.dir === "asc" ? "ascending" : "descending";
-  };
-  const sortIcon = (key) => {
-    if (scenarioSort.key !== key) return <span className="sort-icon is-idle">?</span>;
-    return <span className="sort-icon">{scenarioSort.dir === "asc" ? "?" : "?"}</span>;
-  };
-  const copySectionIds = useMemo(() => getAllCopySectionIds(), []);
-  const selectedCopyCount = copySelection
-    ? copySectionIds.reduce((sum, id) => sum + (copySelection[id] ? 1 : 0), 0)
-    : 0;
-  const selIk = !!copySelection?.["hr.ik"];
-  const selGiderler = !!copySelection?.["expenses.giderler"];
-  const isIkGiderlerValid = selIk === selGiderler;
-  const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
   const inputCurrencyCode =
     selectedScenario?.input_currency === "LOCAL"
       ? (selectedScenario.local_currency_code || "LOCAL")
@@ -741,8 +208,6 @@ export default function SchoolPage() {
   const prevRealFxValue = Number(inputs?.temelBilgiler?.performans?.prevYearRealizedFxUsdToLocal || 0);
   const prevRealFxMissing = isLocalScenario && !(Number.isFinite(prevRealFxValue) && prevRealFxValue > 0);
 
-  const kademeDefs = useMemo(() => getKademeDefinitions(), []);
-  const gradeOptions = useMemo(() => getGradeOptions(), []);
   const programType = useMemo(() => getProgramType(inputs, selectedScenario), [inputs, selectedScenario]);
 
   const scenarioProgress = useMemo(
@@ -1050,7 +515,7 @@ export default function SchoolPage() {
     return next;
   };
 
-  const applyTuitionStudentCounts = (src) => {
+  const applyTuitionStudentCounts = useCallback((src) => {
     const s = src && typeof src === "object" ? src : {};
     const grades = s?.gradesYears?.y1 || s?.grades || [];
     const sums = summarizeGradesByKademe(grades, s?.temelBilgiler?.kademeler);
@@ -1096,7 +561,7 @@ export default function SchoolPage() {
       next.gelirler.tuition.rows = tuitionSync.rows;
     }
     return next;
-  };
+  }, []);
 
 
   async function loadAll() {
@@ -1155,22 +620,6 @@ export default function SchoolPage() {
       active = false;
     };
   }, []);
-
-  async function refreshScenarios() {
-    try {
-      const sc = await api.listScenarios(schoolId);
-      setScenarios(sc);
-      if (selectedScenarioId != null) {
-        const current = sc.find((x) => String(x.id) === String(selectedScenarioId));
-        if (current) {
-          setSelectedScenario((prev) => ({ ...(prev || {}), ...current }));
-        }
-      }
-      return sc;
-    } catch (_) {
-      return null;
-    }
-  }
 
   useEffect(() => {
     loadAll(); /* eslint-disable-next-line */
@@ -1277,296 +726,6 @@ export default function SchoolPage() {
     }
     loadPrev();
   }, [schoolId, selectedScenario?.academic_year, scenarios]);
-
-  const handleScenarioCurrencyChange = (next) => {
-    setNewScenarioInputCurrency(next);
-    if (next !== "LOCAL") {
-      setNewScenarioLocalCurrencyCode("");
-      setNewScenarioFxUsdToLocal("");
-    }
-  };
-
-  function getScenarioStepError(step) {
-    if (step === 1) {
-      if (newScenarioInputCurrency === "LOCAL") {
-        if (!localCodeOk) return "Local currency code zorunludur.";
-        if (!fxOk) return "Kur degeri zorunlu ve 0'dan buyuk olmali.";
-      }
-    }
-    if (step === 2) {
-      if (!newScenarioProgramType) return "Program Turu secilmelidir.";
-    }
-    if (step === 3) {
-      if (!draftAcademicYear) return "Lutfen gecerli bir akademik yil girin.";
-      if (!draftRangeOk) return "Bitis yili, baslangic yilindan 1 fazla olmali.";
-      if (yearConflict) return "Bu yil turu icin zaten bir senaryo var. Lutfen baska bir yil secin.";
-    }
-    if (step === 4 && !hasEnabledKademe) return "En az bir kademe secmelisiniz.";
-    if (step === 5 && !newScenarioName.trim()) return "Senaryo adi zorunludur.";
-    return "";
-  }
-
-  function goScenarioNext() {
-    setErr("");
-    if (scenarioWizardSaving) return;
-    const msg = getScenarioStepError(newScenarioStep);
-    if (msg) {
-      setErr(msg);
-      return;
-    }
-    if (newScenarioStep < scenarioStepTotal - 1) {
-      setNewScenarioStep((prev) => Math.min(prev + 1, scenarioStepTotal - 1));
-      return;
-    }
-    submitScenarioWizard();
-  }
-
-  function goScenarioBack() {
-    setErr("");
-    setNewScenarioStep((prev) => Math.max(0, prev - 1));
-  }
-
-  function resetScenarioWizard() {
-    setNewScenarioName("");
-    setNewScenarioPeriod("split");
-    setNewScenarioStartYear(DEFAULT_START_YEAR);
-    setNewScenarioEndYear(DEFAULT_END_YEAR);
-    setNewScenarioKademeler(getDefaultKademeConfig());
-    setNewScenarioInputCurrency("USD");
-    setNewScenarioLocalCurrencyCode("");
-    setNewScenarioFxUsdToLocal("");
-    setNewScenarioProgramType(null);
-    setNewScenarioStep(0);
-  }
-
-  function closeScenarioWizard() {
-    setErr("");
-    setScenarioWizardOpen(false);
-    setScenarioWizardLoading(false);
-    setScenarioWizardSaving(false);
-    setNewScenarioStep(0);
-  }
-
-  function openScenarioWizardCreate() {
-    setErr("");
-    resetScenarioWizard();
-    setScenarioWizardMode("create");
-    setScenarioWizardScenario(null);
-    setScenarioWizardOpen(true);
-  }
-
-  async function openScenarioWizardEdit(scenarioId) {
-    setErr("");
-    const targetScenario = scenarios.find((s) => String(s.id) === String(scenarioId));
-    if (targetScenario && (targetScenario.status === "submitted" || targetScenario.status === "approved")) {
-      setErr("Senaryo onayda veya onaylandi, duzenlenemez.");
-      return;
-    }
-    setSelectedScenarioId(scenarioId);
-    setScenarioWizardMode("edit");
-    setScenarioWizardScenario(null);
-    setScenarioWizardOpen(true);
-    setScenarioWizardLoading(true);
-    setNewScenarioStep(0);
-    try {
-      const data = await api.getScenarioInputs(schoolId, scenarioId);
-      const scenario = data?.scenario;
-      if (!scenario) throw new Error("Senaryo bulunamadi.");
-      setScenarioWizardScenario(scenario);
-      setNewScenarioName(scenario.name || "");
-      const years = parseAcademicYear(scenario.academic_year);
-      if (years.startYear && years.endYear && years.endYear !== years.startYear) {
-        setNewScenarioPeriod("split");
-        setNewScenarioStartYear(String(years.startYear));
-        setNewScenarioEndYear(String(years.endYear));
-      } else if (years.startYear) {
-        setNewScenarioPeriod("full");
-        setNewScenarioStartYear(String(years.startYear));
-        setNewScenarioEndYear(String(years.startYear + 1));
-      } else {
-        setNewScenarioPeriod("split");
-        setNewScenarioStartYear(DEFAULT_START_YEAR);
-        setNewScenarioEndYear(DEFAULT_END_YEAR);
-      }
-      const existingKademe = data?.inputs?.temelBilgiler?.kademeler;
-      setNewScenarioKademeler(
-        existingKademe ? normalizeKademeConfig(existingKademe) : getDefaultKademeConfig()
-      );
-      const scenarioCurrency = scenario.input_currency || "USD";
-      setNewScenarioInputCurrency(scenarioCurrency);
-      setNewScenarioLocalCurrencyCode(scenario.local_currency_code || "");
-      setNewScenarioFxUsdToLocal(
-        scenario.fx_usd_to_local != null ? String(scenario.fx_usd_to_local) : ""
-      );
-      setNewScenarioProgramType(scenario.program_type || PROGRAM_TYPES.LOCAL);
-    } catch (e) {
-      setErr(e.message || "Senaryo yüklenemedi.");
-      setScenarioWizardOpen(false);
-    } finally {
-      setScenarioWizardLoading(false);
-    }
-  }
-
-  async function submitScenarioWizard() {
-    if (scenarioWizardMode === "edit") {
-      await updateScenario();
-      return;
-    }
-    await createScenario();
-  }
-
-  async function createScenario() {
-    const name = newScenarioName.trim();
-    if (!name) return;
-    if (!draftAcademicYear) {
-      setErr("Lütfen geçerli bir akademik yil girin.");
-      return;
-    }
-    if (!draftRangeOk) {
-      setErr("Bitis yili, baslangiç yilindan 1 fazla olmali.");
-      return;
-    }
-    if (yearConflict) {
-      setErr("Bu yil türü için zaten bir senaryo var. Lütfen baska bir yil seçin.");
-      return;
-    }
-    if (!hasEnabledKademe) {
-      setErr("En az bir kademe seçmelisiniz.");
-      return;
-    }
-    if (newScenarioInputCurrency === "LOCAL") {
-      if (!localCodeOk) {
-        setErr("Local currency code zorunludur.");
-        return;
-      }
-      if (!fxOk) {
-        setErr("Kur degeri zorunlu ve 0'dan buyuk olmali.");
-        return;
-      }
-    }
-    setErr("");
-    setScenarioWizardSaving(true);
-    try {
-      const scenarioProgramType = newScenarioProgramType || PROGRAM_TYPES.LOCAL;
-      const kademeConfig = normalizeKademeConfig(newScenarioKademeler);
-      const created = await api.createScenario(schoolId, {
-        name,
-        academicYear: draftAcademicYear,
-        kademeConfig,
-        inputCurrency: newScenarioInputCurrency,
-        localCurrencyCode: newScenarioInputCurrency === "LOCAL" ? normalizedLocalCode : null,
-        fxUsdToLocal: newScenarioInputCurrency === "LOCAL" ? newScenarioFxUsdToLocal : null,
-        programType: scenarioProgramType,
-      });
-      const sc = await api.listScenarios(schoolId);
-      setScenarios(sc);
-      setPendingTabAfterSelect({ scenarioId: created.id, tab: "basics" });
-      setSelectedScenarioId(created.id);
-      setScenarioWizardOpen(false);
-      setNewScenarioStep(0);
-    } catch (e) {
-      setPendingTabAfterSelect(null);
-      setErr(e.message || "Senaryo olusturulamadi.");
-    } finally {
-      setScenarioWizardSaving(false);
-    }
-  }
-
-  async function updateScenario() {
-    if (!scenarioWizardScenario?.id) return;
-    const name = newScenarioName.trim();
-    if (!name) return;
-    if (!draftAcademicYear) {
-      setErr("Lütfen geçerli bir akademik yil girin.");
-      return;
-    }
-    if (!draftRangeOk) {
-      setErr("Bitis yili, baslangiç yilindan 1 fazla olmali.");
-      return;
-    }
-    if (yearConflict) {
-      setErr("Bu yil türü için zaten bir senaryo var. Lütfen baska bir yil seçin.");
-      return;
-    }
-    if (!hasEnabledKademe) {
-      setErr("En az bir kademe seçmelisiniz.");
-      return;
-    }
-    if (scenarioWizardScenario?.input_currency === "LOCAL") {
-      if (!localCodeOk) {
-        setErr("Local currency code zorunludur.");
-        return;
-      }
-      if (!fxOk) {
-        setErr("Kur degeri zorunlu ve 0'dan buyuk olmali.");
-        return;
-      }
-    }
-    setErr("");
-    setScenarioWizardSaving(true);
-    try {
-      const scenarioProgramType = newScenarioProgramType || PROGRAM_TYPES.LOCAL;
-      const kademeConfig = normalizeKademeConfig(newScenarioKademeler);
-      await api.updateScenario(schoolId, scenarioWizardScenario.id, {
-        name,
-        academicYear: draftAcademicYear,
-        kademeConfig,
-        programType: scenarioProgramType,
-        localCurrencyCode:
-          scenarioWizardScenario?.input_currency === "LOCAL" ? normalizedLocalCode : undefined,
-        fxUsdToLocal:
-          scenarioWizardScenario?.input_currency === "LOCAL" ? newScenarioFxUsdToLocal : undefined,
-      });
-      const sc = await api.listScenarios(schoolId);
-      setScenarios(sc);
-      setSelectedScenarioId(scenarioWizardScenario.id);
-      setSelectedScenario((prev) =>
-        prev && prev.id === scenarioWizardScenario.id
-          ? {
-            ...prev,
-            name,
-            academic_year: draftAcademicYear,
-            program_type: scenarioProgramType,
-            ...(scenarioWizardScenario?.input_currency === "LOCAL"
-              ? { local_currency_code: normalizedLocalCode, fx_usd_to_local: fxValue }
-              : {}),
-          }
-          : prev
-      );
-      setInputs((prev) => {
-        if (!prev || typeof prev !== "object") return prev;
-        const next = structuredClone(prev);
-        next.temelBilgiler = next.temelBilgiler || {};
-        next.temelBilgiler.kademeler = kademeConfig;
-        next.temelBilgiler.programType = scenarioProgramType;
-        return next;
-      });
-      setBaselineInputs((prev) => {
-        if (!prev || typeof prev !== "object") return prev;
-        const next = structuredClone(prev);
-        next.temelBilgiler = next.temelBilgiler || {};
-        next.temelBilgiler.kademeler = kademeConfig;
-        next.temelBilgiler.programType = scenarioProgramType;
-        return next;
-      });
-      clearDirtyPrefix("inputs.temelBilgiler.kademeler");
-      clearDirtyPrefix("inputs.temelBilgiler.programType");
-      setScenarioWizardOpen(false);
-      setNewScenarioStep(0);
-    } catch (e) {
-      setErr(e.message || "Senaryo güncellenemedi.");
-    } finally {
-      setScenarioWizardSaving(false);
-    }
-  }
-
-  const updateNewKademe = (key, patch) => {
-    setNewScenarioKademeler((prev) => {
-      const base = normalizeKademeConfig(prev);
-      const next = { ...base, [key]: { ...base[key], ...patch } };
-      return normalizeKademeConfig(next);
-    });
-  };
 
   async function saveNormConfig() {
     if (!norm) return;
@@ -1726,348 +885,6 @@ export default function SchoolPage() {
     }
   }
 
-  async function submitScenarioForApproval(scenarioId) {
-    if (!scenarioId || scenarioId !== selectedScenarioId) return;
-    if (!ensurePrevRealFxForLocal("Onaya gonderme")) return;
-    if (!ensurePlanningStudentsForY2Y3("Onaya gonderme")) return;
-    if (submittingScenarioId) return;
-
-    setErr("");
-    setSubmittingScenarioId(scenarioId);
-    try {
-      const shouldCalculate = inputsDirty || !report;
-      if (inputsDirty) {
-        const ok = await saveInputs();
-        if (!ok) return;
-      }
-      if (shouldCalculate) {
-        await calculate({ keepTab: true });
-      }
-      const data = await api.submitScenario(schoolId, scenarioId);
-      toast.success("Senaryo onaya gonderildi.");
-      if (data?.scenario) {
-        setSelectedScenario((prev) => ({ ...(prev || {}), ...data.scenario }));
-      }
-      await refreshScenarios();
-    } catch (e) {
-      setErr(e.message || "Submit failed");
-    } finally {
-      setSubmittingScenarioId(null);
-    }
-  }
-
-  const parseFxInput = (value) => {
-    const raw = String(value ?? "").trim();
-    if (!raw) return NaN;
-    const normalized = raw.replace(",", ".");
-    const match = normalized.match(/-?\d+(?:\.\d+)?/);
-    if (!match) return NaN;
-    const num = Number.parseFloat(match[0]);
-    return Number.isFinite(num) ? num : NaN;
-  };
-
-  const showCopySelectionMsg = (message) => {
-    if (copySelectionMsgTimerRef.current) {
-      clearTimeout(copySelectionMsgTimerRef.current);
-    }
-    setCopySelectionMsg(message);
-    copySelectionMsgTimerRef.current = setTimeout(() => {
-      setCopySelectionMsg("");
-    }, 2000);
-  };
-
-  const applyPresetSelection = (presetKey) => {
-    setCopySelection(buildDefaultCopySelection(presetKey));
-    setCopySelectionMsg("");
-  };
-
-  const toggleCopySelection = (id, value) => {
-    if (scenarioOpsBusy) return;
-    setCopySelection((prev) => {
-      const base = prev || buildDefaultCopySelection("all");
-      const next = { ...base };
-      if (id === "hr.ik" || id === "expenses.giderler") {
-        next["hr.ik"] = value;
-        next["expenses.giderler"] = value;
-        showCopySelectionMsg(`IK ve Giderler birlikte ${value ? "seçildi" : "kaldirildi"}.`);
-      } else {
-        next[id] = value;
-      }
-      return enforceIkGiderlerPair(next);
-    });
-  };
-
-  const setCopyTabSelectionAll = (tabKey, value) => {
-    if (scenarioOpsBusy) return;
-    const tab = COPY_SELECT_TABS.find((entry) => entry.key === tabKey);
-    if (!tab) return;
-    setCopySelection((prev) => {
-      const base = prev || buildDefaultCopySelection("all");
-      const next = { ...base };
-      tab.sections.forEach((section) => {
-        next[section.id] = value;
-      });
-      return enforceIkGiderlerPair(next);
-    });
-  };
-
-  function openCopyScenarioModal() {
-    if (!selectedScenarioId || !selectedScenario || !inputs) return;
-    if (copyingScenarioId) return;
-    setErr("");
-    setCopyModalError("");
-    setCopySelection(buildDefaultCopySelection("all"));
-    setCopySelectionMsg("");
-    const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
-    setCopyTargetCurrency(sourceCurrency === "USD" ? "USD" : "LOCAL");
-    const localCodeDefault = String(
-      selectedScenario?.local_currency_code || (sourceCurrency === "USD" ? "AFN" : "")
-    )
-      .trim()
-      .toUpperCase();
-    setCopyLocalCurrencyCode(localCodeDefault);
-    const fxDefault = selectedScenario?.fx_usd_to_local != null ? String(selectedScenario.fx_usd_to_local) : "";
-    setCopyPlannedFxUsdToLocal(fxDefault);
-    setCopyFxUsdToLocal(fxDefault);
-    setCopyModalOpen(true);
-  }
-
-  function closeCopyScenarioModal() {
-    setCopyModalOpen(false);
-    setCopyModalError("");
-  }
-
-  async function confirmCopyScenarioModal() {
-    if (!selectedScenarioId || !selectedScenario || !inputs) return;
-    const selection = enforceIkGiderlerPair(copySelection || buildDefaultCopySelection("all"));
-    const selectionIk = !!selection["hr.ik"];
-    const selectionGiderler = !!selection["expenses.giderler"];
-    if (selectionIk !== selectionGiderler) {
-      setCopyModalError("IK ve Giderler birlikte seçilmelidir.");
-      return;
-    }
-    const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
-    const targetCurrency = String(copyTargetCurrency || sourceCurrency).toUpperCase();
-
-    let localCurrencyCodeValue = null;
-    let plannedFxUsdToLocalValue = null;
-    let copyFxUsdToLocalValue = null;
-
-    if (sourceCurrency === "USD" && targetCurrency === "LOCAL") {
-      const normalizedLocalCode = String(copyLocalCurrencyCode || "").trim().toUpperCase();
-      if (!normalizedLocalCode || !CURRENCY_CODE_REGEX.test(normalizedLocalCode)) {
-        setCopyModalError("Local para birimi kodu gecersiz.");
-        return;
-      }
-      const plannedFxNumber = parseFxInput(copyPlannedFxUsdToLocal);
-      if (!Number.isFinite(plannedFxNumber) || plannedFxNumber <= 0) {
-        setCopyModalError("Gecerli bir kur girilmelidir.");
-        return;
-      }
-      const copyFxNumber = parseFxInput(copyFxUsdToLocal);
-      if (!Number.isFinite(copyFxNumber) || copyFxNumber <= 0) {
-        setCopyModalError("Gecerli bir kopyalama kuru girilmelidir.");
-        return;
-      }
-      localCurrencyCodeValue = normalizedLocalCode;
-      plannedFxUsdToLocalValue = plannedFxNumber;
-      copyFxUsdToLocalValue = copyFxNumber;
-    }
-
-    if (sourceCurrency === "LOCAL" && targetCurrency === "USD") {
-      const copyFxNumber = parseFxInput(copyFxUsdToLocal);
-      if (!Number.isFinite(copyFxNumber) || copyFxNumber <= 0) {
-        setCopyModalError("Gecerli bir kopyalama kuru girilmelidir.");
-        return;
-      }
-      copyFxUsdToLocalValue = copyFxNumber;
-    }
-
-    closeCopyScenarioModal();
-    await copySelectedScenario({
-      targetCurrency,
-      localCurrencyCode: localCurrencyCodeValue,
-      plannedFxUsdToLocal: plannedFxUsdToLocalValue,
-      copyFxUsdToLocal: copyFxUsdToLocalValue,
-      selection,
-    });
-  }
-
-  async function copySelectedScenario(copyOptions = {}) {
-    if (!selectedScenarioId || !selectedScenario || !inputs) return;
-    if (copyingScenarioId) return;
-    if (!selectedScenario.academic_year) {
-      setErr("Akademik yil bulunamadi.");
-      return;
-    }
-
-    setErr("");
-    const selection = enforceIkGiderlerPair(copyOptions?.selection || buildDefaultCopySelection("all"));
-    if (!!selection["hr.ik"] !== !!selection["expenses.giderler"]) {
-      toast.warn("IK ve Giderler birlikte seçilmelidir.");
-      return;
-    }
-    const sourceCurrency = String(selectedScenario?.input_currency || "USD").toUpperCase();
-    const targetCurrency = String(copyOptions?.targetCurrency || sourceCurrency).toUpperCase();
-    let localCurrencyCode = copyOptions?.localCurrencyCode ?? null;
-    let plannedFxUsdToLocal = copyOptions?.plannedFxUsdToLocal ?? null;
-    let copyFxUsdToLocal = copyOptions?.copyFxUsdToLocal ?? null;
-    let plannedFxParsed = parseFxInput(plannedFxUsdToLocal);
-    let copyFxParsed = parseFxInput(copyFxUsdToLocal);
-
-    if (sourceCurrency === "LOCAL" && targetCurrency === "LOCAL") {
-      localCurrencyCode = localCurrencyCode ?? selectedScenario.local_currency_code ?? "";
-      plannedFxUsdToLocal = plannedFxUsdToLocal ?? selectedScenario.fx_usd_to_local;
-      plannedFxParsed = parseFxInput(plannedFxUsdToLocal);
-    }
-
-    if (sourceCurrency === "LOCAL" && targetCurrency === "USD") {
-      copyFxUsdToLocal = copyFxUsdToLocal ?? selectedScenario.fx_usd_to_local;
-      copyFxParsed = parseFxInput(copyFxUsdToLocal);
-      if (!Number.isFinite(copyFxParsed) || copyFxParsed <= 0) {
-        toast.warn("Gecerli bir kopyalama kuru girilmelidir.");
-        return;
-      }
-    }
-
-    if (sourceCurrency === "USD" && targetCurrency === "LOCAL") {
-      if (!localCurrencyCode || !CURRENCY_CODE_REGEX.test(localCurrencyCode)) {
-        toast.warn("Local para birimi kodu gecersiz.");
-        return;
-      }
-      if (!Number.isFinite(plannedFxParsed) || plannedFxParsed <= 0) {
-        toast.warn("Gecerli bir kur girilmelidir.");
-        return;
-      }
-      if (!Number.isFinite(copyFxParsed) || copyFxParsed <= 0) {
-        toast.warn("Gecerli bir kopyalama kuru girilmelidir.");
-        return;
-      }
-    }
-
-    setCopyingScenarioId(selectedScenarioId);
-    try {
-      const baseName = selectedScenario.name || "Senaryo";
-      const copyName = `${baseName} (Kopya)`;
-      let candidateYear = incrementAcademicYearString(selectedScenario.academic_year);
-      if (!candidateYear) {
-        throw new Error("Akademik yil formati gecersiz.");
-      }
-      let guard = 0;
-      const hasAcademicYear = (yearStr) =>
-        scenarios.some((s) => String(s?.academic_year || "").trim() === String(yearStr).trim());
-
-      while (hasAcademicYear(candidateYear)) {
-        candidateYear = incrementAcademicYearString(candidateYear);
-        guard += 1;
-        if (!candidateYear || guard > 20) {
-          throw new Error("Uygun yeni akademik yil bulunamadi.");
-        }
-      }
-
-      const shouldCopyCore = !!selection["temel.core"];
-      const kademeConfig = normalizeKademeConfig(
-        shouldCopyCore ? inputs?.temelBilgiler?.kademeler || getDefaultKademeConfig() : getDefaultKademeConfig()
-      );
-      const programType = shouldCopyCore
-        ? selectedScenario?.program_type || PROGRAM_TYPES.LOCAL
-        : PROGRAM_TYPES.LOCAL;
-      const fxForCreate =
-        targetCurrency === "LOCAL" && Number.isFinite(plannedFxParsed) && plannedFxParsed > 0
-          ? plannedFxParsed
-          : null;
-      const created = await api.createScenario(schoolId, {
-        name: copyName,
-        academicYear: candidateYear,
-        kademeConfig,
-        inputCurrency: targetCurrency,
-        localCurrencyCode: targetCurrency === "LOCAL" ? localCurrencyCode || "" : null,
-        fxUsdToLocal: fxForCreate,
-        programType,
-      });
-
-      let clonedInputs = filterInputsForCopyBySelection(inputs, selection);
-      if (selection["hr.ik"] && selection["expenses.giderler"]) {
-        clonedInputs = applyIkSalariesToGiderler(clonedInputs);
-      }
-      clonedInputs = normalizeTemelBilgilerInputs(clonedInputs);
-      clonedInputs = normalizeCapacityInputs(clonedInputs);
-      clonedInputs = normalizeGradesInputs(clonedInputs);
-
-      if (sourceCurrency === "USD" && targetCurrency === "LOCAL") {
-        clonedInputs = convertInputsUsdToLocalForCopy(clonedInputs, copyFxParsed);
-        clonedInputs.temelBilgiler = clonedInputs.temelBilgiler || {};
-        clonedInputs.temelBilgiler.performans = clonedInputs.temelBilgiler.performans || {};
-        clonedInputs.temelBilgiler.performans.prevYearRealizedFxUsdToLocal = Number(copyFxParsed);
-      }
-
-      if (sourceCurrency === "LOCAL" && targetCurrency === "USD") {
-        clonedInputs = convertInputsLocalToUsdForCopy(clonedInputs, copyFxParsed);
-        clonedInputs.temelBilgiler = clonedInputs.temelBilgiler || {};
-        clonedInputs.temelBilgiler.performans = clonedInputs.temelBilgiler.performans || {};
-        clonedInputs.temelBilgiler.performans.prevYearRealizedFxUsdToLocal = Number(copyFxParsed);
-      }
-
-      await api.saveScenarioInputs(schoolId, created.id, clonedInputs);
-
-      await refreshScenarios();
-      setSelectedScenarioId(created.id);
-      setPendingTabAfterSelect({ scenarioId: created.id, tab: "basics" });
-      toast.success("Senaryo kopyalandi.");
-    } catch (e) {
-      setPendingTabAfterSelect(null);
-      setErr(e.message || "Scenario copy failed");
-    } finally {
-      setCopyingScenarioId(null);
-    }
-  }
-
-  function openDeleteScenarioModal(scenarioId) {
-    if (!scenarioId || scenarioOpsBusy) return;
-    setDeleteConfirmScenarioId(scenarioId);
-  }
-
-  async function confirmDeleteScenario() {
-    if (!deleteConfirmScenarioId) return;
-    const scenarioId = deleteConfirmScenarioId;
-    setDeleteConfirmScenarioId(null);
-    await deleteScenario(scenarioId);
-  }
-
-  async function deleteScenario(scenarioId) {
-    if (!scenarioId) return;
-    if (scenarioOpsBusy) return;
-    const target = scenarios.find((s) => String(s.id) === String(scenarioId));
-    if (!target) return;
-    if (target.status === "submitted" || target.status === "approved") {
-      setErr("Senaryo onayda veya onaylandi, silinemez.");
-      return;
-    }
-
-    setErr("");
-    setDeletingScenarioId(scenarioId);
-    try {
-      await api.deleteScenario(schoolId, scenarioId);
-      const sc = await refreshScenarios();
-      if (Array.isArray(sc)) {
-        if (!sc.length) {
-          setSelectedScenarioId(null);
-          setInputs(null);
-          setReport(null);
-          setPrevReport(null);
-          setTab("scenarios");
-        } else if (!sc.some((s) => String(s.id) === String(selectedScenarioId))) {
-          setSelectedScenarioId(sc[0].id);
-        }
-      }
-      toast.success("Senaryo silindi.");
-    } catch (e) {
-      setErr(e.message || "Senaryo silinemedi.");
-    } finally {
-      setDeletingScenarioId(null);
-    }
-  }
-
   async function handleExport() {
     if (!selectedScenarioId) return;
     setErr("");
@@ -2160,126 +977,116 @@ export default function SchoolPage() {
   }
 
   // ...existing code...
-  function getBaselineValue(path) {
-    if (!path) return undefined;
-    const parts = path.split(".");
-    if (!parts.length) return undefined;
-    if (parts[0] === "inputs") {
-      const val = getValueAtPath(baselineInputs, parts.slice(1));
-      if (val !== undefined) return val;
+  const getBaselineValue = useCallback(
+    (path) => {
+      if (!path) return undefined;
+      const parts = path.split(".");
+      if (!parts.length) return undefined;
+      if (parts[0] === "inputs") {
+        const val = getValueAtPath(baselineInputs, parts.slice(1));
+        if (val !== undefined) return val;
 
-      const last = parts[parts.length - 1];
+        const last = parts[parts.length - 1];
 
-      // If field ends with Y2/Y3 try base field fallback (e.g. unitCostY2 -> unitCost)
-      if (last.endsWith("Y2") || last.endsWith("Y3")) {
-        const suffix = last.endsWith("Y2") ? "Y2" : "Y3";
-        const baseField = last.slice(0, -2);
-        const baseVal = getValueAtPath(baselineInputs, parts.slice(1, -1).concat(baseField));
-        if (baseVal !== undefined) {
-          // For unitCost-like fields, return the inflation-adjusted derived value so UI matches display logic
-          if (baseField === "unitCost" || baseField.startsWith("unitCost")) {
-            const infl = getValueAtPath(baselineInputs, ["temelBilgiler", "inflation"]) || {};
-            const y2f = 1 + Number(infl?.y2 || 0);
-            const y3f = y2f * (1 + Number(infl?.y3 || 0));
-            return suffix === "Y2" ? Number(baseVal) * y2f : Number(baseVal) * y3f;
-          }
-          // Other Y2/Y3 fields (studentCountY2, ratioY2, valueY2, etc.) fall back to base field
-          return baseVal;
-        }
-      }
-
-      // studentCountY2/Y3 fallback -> studentCount
-      if ((last === "studentCountY2" || last === "studentCountY3") && baselineInputs) {
-        const parent = getValueAtPath(baselineInputs, parts.slice(1, -1));
-        if (parent && typeof parent === "object") {
-          const sc = parent.studentCount;
-          if (sc != null) return sc;
-        }
-      }
-
-      // kapasite / year fallbacks handled elsewhere above; generic years fallback:
-      const yearsIdx = parts.indexOf("years");
-      if (yearsIdx >= 0 && parts.length > yearsIdx + 1 && baselineInputs) {
-        const yearKey = parts[yearsIdx + 1]; // e.g. 'y1','y2','y3'
-        if (yearKey === "y2" || yearKey === "y3") {
-          const altParts = [...parts];
-          altParts[yearsIdx + 1] = "y1";
-          const altVal = getValueAtPath(baselineInputs, altParts.slice(1));
-          if (altVal !== undefined) {
-            if (parts.includes("ik") && parts.includes("unitCosts")) {
-              const ratio = getValueAtPath(baselineInputs, ["ik", "unitCostRatio"]);
-              const r = Number(ratio);
-              if (Number.isFinite(r)) {
-                const base = Number(altVal);
-                const multiplier = yearKey === "y2" ? r : r * r;
-                return Number.isFinite(base) ? base * multiplier : undefined;
-              }
+        // If field ends with Y2/Y3 try base field fallback (e.g. unitCostY2 -> unitCost)
+        if (last.endsWith("Y2") || last.endsWith("Y3")) {
+          const suffix = last.endsWith("Y2") ? "Y2" : "Y3";
+          const baseField = last.slice(0, -2);
+          const baseVal = getValueAtPath(baselineInputs, parts.slice(1, -1).concat(baseField));
+          if (baseVal !== undefined) {
+            // For unitCost-like fields, return the inflation-adjusted derived value so UI matches display logic
+            if (baseField === "unitCost" || baseField.startsWith("unitCost")) {
+              const infl = getValueAtPath(baselineInputs, ["temelBilgiler", "inflation"]) || {};
+              const y2f = 1 + Number(infl?.y2 || 0);
+              const y3f = y2f * (1 + Number(infl?.y3 || 0));
+              return suffix === "Y2" ? Number(baseVal) * y2f : Number(baseVal) * y3f;
             }
-            return altVal;
+            // Other Y2/Y3 fields (studentCountY2, ratioY2, valueY2, etc.) fall back to base field
+            return baseVal;
           }
         }
-      }
 
-      // ik specific fallbacks:
-      if (parts.slice(1, 3).join(".") === "ik.years" && baselineInputs) {
-        if (parts.includes("unitCostRatio")) {
-          const u = getValueAtPath(baselineInputs, ["ik", "unitCostRatio"]);
-          if (u !== undefined) return u;
-          return 1;
-        }
-        const leafCandidates = ["unitCosts", "headcountsByLevel"];
-        if (leafCandidates.some((c) => parts.includes(c))) {
-          return 0;
-        }
-      }
-
-      // generic kapasite fallbacks (years.cur/y1/y2/y3 etc.)
-      if ((last === "y1" || last === "y2" || last === "y3") && baselineInputs) {
-        const parent = getValueAtPath(baselineInputs, parts.slice(1, -1));
-        if (parent && typeof parent === "object" && parent.y1 != null) return parent.y1;
-
-        const byIdx = parts.indexOf("byKademe");
-        if (byIdx >= 1 && parts.length > byIdx + 1) {
-          const lvlKey = parts[byIdx + 1];
-          const per = getValueAtPath(baselineInputs, ["kapasite", "byKademe", lvlKey, "caps", "y1"]);
-          if (per !== undefined) return per;
+        // studentCountY2/Y3 fallback -> studentCount
+        if ((last === "studentCountY2" || last === "studentCountY3") && baselineInputs) {
+          const parent = getValueAtPath(baselineInputs, parts.slice(1, -1));
+          if (parent && typeof parent === "object") {
+            const sc = parent.studentCount;
+            if (sc != null) return sc;
+          }
         }
 
-        const yearsY1 = getValueAtPath(baselineInputs, ["kapasite", "years", "y1"]);
-        if (yearsY1 !== undefined) return yearsY1;
-      }
-
-      // cur fallback for kapasite -> per-kademe caps.cur or kapasite.currentStudents
-      if (last === "cur" && baselineInputs) {
-        const byIdx = parts.indexOf("byKademe");
-        if (byIdx >= 1 && parts.length > byIdx + 1) {
-          const lvlKey = parts[byIdx + 1];
-          const per = getValueAtPath(baselineInputs, ["kapasite", "byKademe", lvlKey, "caps", "cur"]);
-          if (per !== undefined) return per;
+        // kapasite / year fallbacks handled elsewhere above; generic years fallback:
+        const yearsIdx = parts.indexOf("years");
+        if (yearsIdx >= 0 && parts.length > yearsIdx + 1 && baselineInputs) {
+          const yearKey = parts[yearsIdx + 1]; // e.g. 'y1','y2','y3'
+          if (yearKey === "y2" || yearKey === "y3") {
+            const altParts = [...parts];
+            altParts[yearsIdx + 1] = "y1";
+            const altVal = getValueAtPath(baselineInputs, altParts.slice(1));
+            if (altVal !== undefined) {
+              if (parts.includes("ik") && parts.includes("unitCosts")) {
+                const ratio = getValueAtPath(baselineInputs, ["ik", "unitCostRatio"]);
+                const r = Number(ratio);
+                if (Number.isFinite(r)) {
+                  const base = Number(altVal);
+                  const multiplier = yearKey === "y2" ? r : r * r;
+                  return Number.isFinite(base) ? base * multiplier : undefined;
+                }
+              }
+              return altVal;
+            }
+          }
         }
-        const curAll = getValueAtPath(baselineInputs, ["kapasite", "currentStudents"]);
-        if (curAll !== undefined) return curAll;
-      }
 
+        // ik specific fallbacks:
+        if (parts.slice(1, 3).join(".") === "ik.years" && baselineInputs) {
+          if (parts.includes("unitCostRatio")) {
+            const u = getValueAtPath(baselineInputs, ["ik", "unitCostRatio"]);
+            if (u !== undefined) return u;
+            return 1;
+          }
+          const leafCandidates = ["unitCosts", "headcountsByLevel"];
+          if (leafCandidates.some((c) => parts.includes(c))) {
+            return 0;
+          }
+        }
+
+        // generic kapasite fallbacks (years.cur/y1/y2/y3 etc.)
+        if ((last === "y1" || last === "y2" || last === "y3") && baselineInputs) {
+          const parent = getValueAtPath(baselineInputs, parts.slice(1, -1));
+          if (parent && typeof parent === "object" && parent.y1 != null) return parent.y1;
+
+          const byIdx = parts.indexOf("byKademe");
+          if (byIdx >= 1 && parts.length > byIdx + 1) {
+            const lvlKey = parts[byIdx + 1];
+            const per = getValueAtPath(baselineInputs, ["kapasite", "byKademe", lvlKey, "caps", "y1"]);
+            if (per !== undefined) return per;
+          }
+
+          const yearsY1 = getValueAtPath(baselineInputs, ["kapasite", "years", "y1"]);
+          if (yearsY1 !== undefined) return yearsY1;
+        }
+
+        // cur fallback for kapasite -> per-kademe caps.cur or kapasite.currentStudents
+        if (last === "cur" && baselineInputs) {
+          const byIdx = parts.indexOf("byKademe");
+          if (byIdx >= 1 && parts.length > byIdx + 1) {
+            const lvlKey = parts[byIdx + 1];
+            const per = getValueAtPath(baselineInputs, ["kapasite", "byKademe", lvlKey, "caps", "cur"]);
+            if (per !== undefined) return per;
+          }
+          const curAll = getValueAtPath(baselineInputs, ["kapasite", "currentStudents"]);
+          if (curAll !== undefined) return curAll;
+        }
+
+        return undefined;
+      }
+      if (parts[0] === "norm") return getValueAtPath(baselineNorm, parts.slice(1));
       return undefined;
-    }
-    if (parts[0] === "norm") return getValueAtPath(baselineNorm, parts.slice(1));
-    return undefined;
-  }
+    },
+    [baselineInputs, baselineNorm]
+  );
   // ...existing code...
-
-  function markDirty(path, value) {
-    if (!path) return;
-    if (inputsLocked && path.startsWith("inputs.")) return;
-    const baselineValue = getBaselineValue(path);
-    const same = valuesEqual(value, baselineValue);
-    setDirtyPaths((prev) => {
-      const next = new Set(prev);
-      if (same) next.delete(path);
-      else next.add(path);
-      return areSetsEqual(prev, next) ? prev : next;
-    });
-  }
 
   function clearDirtyPrefix(prefix) {
     setDirtyPaths((prev) => {
@@ -2306,6 +1113,21 @@ export default function SchoolPage() {
 
   const inputsDirty = hasDirtyPrefix("inputs.") || hasDirtyPrefix("norm.");
   const inputsLocked = selectedScenario?.status === "submitted" || selectedScenario?.status === "approved";
+  const markDirty = useCallback(
+    (path, value) => {
+      if (!path) return;
+      if (inputsLocked && path.startsWith("inputs.")) return;
+      const baselineValue = getBaselineValue(path);
+      const same = valuesEqual(value, baselineValue);
+      setDirtyPaths((prev) => {
+        const next = new Set(prev);
+        if (same) next.delete(path);
+        else next.add(path);
+        return areSetsEqual(prev, next) ? prev : next;
+      });
+    },
+    [inputsLocked, getBaselineValue]
+  );
   const handleIkSalaryComputed = React.useCallback(
     (salaryByYear) => {
       if (inputsLocked) return;
@@ -2360,34 +1182,8 @@ export default function SchoolPage() {
     },
     [applyTuitionStudentCounts]
   );
-  const deleteConfirmScenario =
-    deleteConfirmScenarioId != null
-      ? scenarios.find((s) => String(s.id) === String(deleteConfirmScenarioId))
-      : null;
-  const deleteConfirmDirty =
-    deleteConfirmScenarioId != null &&
-    String(deleteConfirmScenarioId) === String(selectedScenarioId) &&
-    inputsDirty;
-  const deleteConfirmLabel = deleteConfirmScenario?.name ? `"${deleteConfirmScenario.name}"` : "Senaryo";
-  const deleteConfirmMessage = deleteConfirmDirty
-    ? `${deleteConfirmLabel} silinsin mi? Kaydedilmemis degisiklikler kaybolacak.`
-    : `${deleteConfirmLabel} silinsin mi?`;
   const showInputsHeader = INPUT_HEADER_TABS.has(tab);
-  const exportDisabled = inputsSaving || calculating || exportingPdf || !report || scenarioOpsBusy;
-  const toolbarLocked =
-    selectedRowScenario?.status === "submitted" || selectedRowScenario?.status === "approved";
-  const canEditToolbar = Boolean(selectedRowScenario) && !toolbarLocked;
-  const canDeleteToolbar = Boolean(selectedRowScenario) && !toolbarLocked;
-  const canSubmitToolbar =
-    Boolean(selectedRowScenario) &&
-    (selectedRowScenario.status === "draft" || selectedRowScenario.status === "revision_requested");
-  const canCopyToolbar = Boolean(selectedRowScenario) && inputs;
-  const toolbarIsCopying =
-    selectedRowScenario && String(copyingScenarioId) === String(selectedRowScenario.id);
-  const toolbarIsSubmitting =
-    selectedRowScenario && String(submittingScenarioId) === String(selectedRowScenario.id);
-  const toolbarIsDeleting =
-    selectedRowScenario && String(deletingScenarioId) === String(selectedRowScenario.id);
+  const exportDisabled = inputsSaving || calculating || exportingPdf || !report;
   const formatRelative = (ms) => {
     if (!ms) return "";
     const diff = Math.max(0, (nowTick || Date.now()) - ms);
