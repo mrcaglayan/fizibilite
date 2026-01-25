@@ -2,7 +2,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
-import { FaCheck } from "react-icons/fa";
+// Import additional icons for better visual cues on the action buttons.
+// FaCheck is used for indicating selected rows. FaCheckCircle will represent
+// approval actions and FaTrash will represent deletion actions on the toolbar.
+import { FaCheck, FaCheckCircle, FaTrash } from "react-icons/fa";
 import { api } from "../api";
 import {
   getDefaultKademeConfig,
@@ -12,9 +15,9 @@ import {
 } from "../utils/kademe";
 import { PROGRAM_TYPES, normalizeProgramType } from "../utils/programType";
 import {
-  readLastVisitedPath,
   readSelectedScenarioId,
   writeSelectedScenarioId,
+  readGlobalLastRouteSegment,
 } from "../utils/schoolNavStorage";
 
 const COPY_SELECT_TABS = [
@@ -646,7 +649,7 @@ function getScenarioStatusMeta(status) {
 export default function SelectPage() {
   const navigate = useNavigate();
   const outlet = useOutletContext();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [schools, setSchools] = useState([]);
   const [scenarios, setScenarios] = useState([]);
@@ -726,11 +729,30 @@ export default function SelectPage() {
     const paramId = Number(raw || 0);
     if (!raw || !Number.isFinite(paramId)) return;
     if (!schools.length) return;
-    if (String(selectedSchoolId) === String(paramId)) return;
-    if (schools.some((s) => String(s.id) === String(paramId))) {
-      setSelectedSchoolId(paramId);
-    }
-  }, [searchParams, schools, selectedSchoolId]);
+    if (!schools.some((s) => String(s.id) === String(paramId))) return;
+    setSelectedSchoolId((prev) => (String(prev) === String(paramId) ? prev : paramId));
+  }, [searchParams, schools]);
+
+  const handleSelectSchool = useCallback(
+    (schoolId) => {
+      const isDifferent = String(selectedSchoolId) !== String(schoolId);
+      if (isDifferent) {
+        setSelectedScenarioIdLocal(null);
+        setSelectedScenario(null);
+        setInputs(null);
+        setReport(null);
+      }
+      setSelectedSchoolId(schoolId);
+      if (isDifferent) {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("schoolId", String(schoolId));
+          return next;
+        });
+      }
+    },
+    [selectedSchoolId, setSearchParams]
+  );
 
   useEffect(() => {
     if (!selectedSchoolId) {
@@ -881,10 +903,10 @@ export default function SelectPage() {
 
   const scenarioOpsBusy = Boolean(
     copyingScenarioId ||
-      submittingScenarioId ||
-      deletingScenarioId ||
-      scenarioWizardSaving ||
-      scenarioWizardLoading
+    submittingScenarioId ||
+    deletingScenarioId ||
+    scenarioWizardSaving ||
+    scenarioWizardLoading
   );
   const busyRowId = copyingScenarioId ?? submittingScenarioId ?? deletingScenarioId ?? null;
   const selectedRowScenario = useMemo(
@@ -1256,14 +1278,14 @@ export default function SelectPage() {
       setSelectedScenario((prev) =>
         prev && prev.id === scenarioWizardScenario.id
           ? {
-              ...prev,
-              name,
-              academic_year: draftAcademicYear,
-              program_type: scenarioProgramType,
-              ...(scenarioWizardScenario?.input_currency === "LOCAL"
-                ? { local_currency_code: normalizedLocalCode, fx_usd_to_local: fxValue }
-                : {}),
-            }
+            ...prev,
+            name,
+            academic_year: draftAcademicYear,
+            program_type: scenarioProgramType,
+            ...(scenarioWizardScenario?.input_currency === "LOCAL"
+              ? { local_currency_code: normalizedLocalCode, fx_usd_to_local: fxValue }
+              : {}),
+          }
           : prev
       );
       setInputs((prev) => {
@@ -1709,19 +1731,21 @@ export default function SelectPage() {
     : "Senaryo";
   const deleteConfirmMessage =
     deleteConfirmScenarioId != null &&
-    String(deleteConfirmScenarioId) === String(selectedScenarioIdLocal) &&
-    scenarios.length <= 1
+      String(deleteConfirmScenarioId) === String(selectedScenarioIdLocal) &&
+      scenarios.length <= 1
       ? `${deleteConfirmLabel} son senaryo. Silerseniz senaryo secimi temizlenir.`
       : `${deleteConfirmLabel} silinecek. Devam edilsin mi?`;
 
   const handleApply = () => {
     if (!selectedSchoolId || !selectedScenarioIdLocal) return;
+    // Persist the selected scenario. Regardless of which scenario the user
+    // chooses, navigate to the globally last viewed sidebar page. This ensures
+    // that when switching schools or scenarios the user lands on the same
+    // section (e.g. Gelirler). If no global route has been recorded, default
+    // to the "temel-bilgiler" page.
     writeSelectedScenarioId(selectedSchoolId, selectedScenarioIdLocal);
-    const last = readLastVisitedPath(selectedSchoolId, selectedScenarioIdLocal);
-    const target = last
-      ? `/schools/${selectedSchoolId}/${last}`
-      : `/schools/${selectedSchoolId}/temel-bilgiler`;
-    navigate(target, { replace: true });
+    const seg = readGlobalLastRouteSegment() || "temel-bilgiler";
+    navigate(`/schools/${selectedSchoolId}/${seg}`, { replace: true });
   };
 
   return (
@@ -2312,13 +2336,21 @@ export default function SelectPage() {
         </div>
       ) : null}
 
-      <div className="row" style={{ gap: 12, alignItems: "stretch", marginTop: 12, flexWrap: "wrap" }}>
-        <div className="card" style={{ flex: "1 1 320px", minWidth: 280 }}>
+      <div
+        className="row select-page-tables"
+        style={{ gap: 12, alignItems: "stretch", marginTop: 12, flexWrap: "wrap" }}
+      >
+        <div className="card select-table-card" style={{ flex: "1 1 320px", minWidth: 280 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Okullar</div>
           {loadingSchools ? (
             <div className="small">Yukleniyor...</div>
           ) : (
-            <table className="table">
+            <div className="select-table-body">
+              <table className="table select-school-table">
+                <colgroup>
+                  <col />
+                  <col style={{ width: 96 }} />
+                </colgroup>
               <thead>
                 <tr>
                   <th>Okul</th>
@@ -2334,34 +2366,61 @@ export default function SelectPage() {
                   schools.map((s) => {
                     const isSelected = String(selectedSchoolId) === String(s.id);
                     return (
-                      <tr key={s.id} className={isSelected ? "scenario-row is-selected" : "scenario-row"}>
-                        <td><b>{s.name}</b></td>
-                        <td>
-                          <button
-                            type="button"
-                            className={"btn scenario-action-btn " + (isSelected ? "primary" : "")}
-                            onClick={() => setSelectedSchoolId(s.id)}
-                            disabled={isSelected}
-                          >
-                            <FaCheck />
-                            <span>{isSelected ? "Secildi" : "Sec"}</span>
-                          </button>
+                      <tr
+                        key={s.id}
+                        className={isSelected ? "scenario-row is-selected" : "scenario-row"}
+                        // Provide a pointer cursor for the whole row to indicate interactivity. Clicking the row or any
+                        // cell will select the school.
+                        style={{ cursor: "pointer" }}
+                        onClick={() => {
+                          handleSelectSchool(s.id);
+                        }}
+                      >
+                        <td
+                          // Attach click handlers to the cells to ensure the event always fires even if the row-level
+                          // handler is somehow not triggered due to event propagation quirks.
+                          onClick={(e) => {
+                            // Prevent this click from bubbling twice. Reset scenario-related state if the school changes.
+                            e.stopPropagation();
+                            handleSelectSchool(s.id);
+                          }}
+                          style={{ cursor: "pointer" }}
+                        >
+                          <b>{s.name}</b>
+                        </td>
+                        <td
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSelectSchool(s.id);
+                          }}
+                          style={{ cursor: "pointer" }}
+                        >
+                          {/* Replace the button with a simple indicator. When the row is selected it shows a check icon and
+                              "Secildi" (selected); otherwise it shows "Seç" to indicate it can be selected. */}
+                          {isSelected ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                              <FaCheck />
+                              <span>Secildi</span>
+                            </span>
+                          ) : (
+                            <span className="small muted">Seç</span>
+                          )}
                         </td>
                       </tr>
                     );
                   })
                 )}
               </tbody>
-            </table>
+              </table>
+            </div>
           )}
         </div>
 
-        <div className="card" style={{ flex: "2 1 420px", minWidth: 320 }}>
+        <div className="card select-table-card" style={{ flex: "2 1 420px", minWidth: 320 }}>
+          {/* Header for the scenarios list. The "Yeni Senaryo" button has been moved into the scenario toolbar
+              below so it appears alongside the other scenario actions. */}
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
             <div style={{ fontWeight: 700 }}>Senaryolar</div>
-            <button className="btn primary" onClick={openScenarioWizardCreate} disabled={!selectedSchoolId || scenarioOpsBusy}>
-              Yeni Senaryo
-            </button>
           </div>
 
           {!selectedSchoolId ? (
@@ -2369,6 +2428,19 @@ export default function SelectPage() {
           ) : (
             <>
               <div className="scenario-toolbar" style={{ marginTop: 10 }}>
+                {/* Yeni Senaryo button moved here to be the first action in the toolbar. It remains disabled when
+                    no school is selected or an operation is in progress. */}
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={openScenarioWizardCreate}
+                  disabled={!selectedSchoolId || scenarioOpsBusy}
+                  title="Yeni Senaryo"
+                >
+                  <span className="btn-inner">
+                    <span>Yeni Senaryo</span>
+                  </span>
+                </button>
                 <button
                   type="button"
                   className="btn"
@@ -2406,7 +2478,8 @@ export default function SelectPage() {
                   title="Onaya Gonder"
                 >
                   <span className="btn-inner">
-                    {toolbarIsSubmitting ? <InlineSpinner /> : null}
+                    {/* Show a spinner while submitting; otherwise show an approval icon. */}
+                    {toolbarIsSubmitting ? <InlineSpinner /> : <FaCheckCircle style={{ marginRight: 4 }} />}
                     <span>Onaya Gonder</span>
                   </span>
                 </button>
@@ -2421,18 +2494,14 @@ export default function SelectPage() {
                   title="Sil"
                 >
                   <span className="btn-inner">
-                    {toolbarIsDeleting ? <InlineSpinner /> : null}
+                    {/* Show a spinner while deleting; otherwise show a trash icon. */}
+                    {toolbarIsDeleting ? <InlineSpinner /> : <FaTrash style={{ marginRight: 4 }} />}
                     <span>Sil</span>
                   </span>
                 </button>
               </div>
-              {!selectedRowScenario ? (
-                <div className="small muted" style={{ marginTop: 6, textAlign: "right" }}>
-                  Bir senaryo secin.
-                </div>
-              ) : null}
-
-              <table className="table scenario-table" style={{ marginTop: 10 }}>
+              <div className="select-table-body select-table-body-gap">
+                <table className="table scenario-table">
                 <thead>
                   <tr>
                     <th aria-sort={getSortAria("name")}>
@@ -2517,9 +2586,18 @@ export default function SelectPage() {
                         <tr
                           key={s.id}
                           className={isSelected ? "scenario-row is-selected" : "scenario-row"}
+                          // Apply opacity and pointer-event rules as before. Also set cursor to pointer when
+                          // selection is possible. When another row is busy or this row is disabled/selected, the
+                          // cursor remains default and clicking does nothing.
                           style={{
                             opacity: isOtherRowDisabled ? 0.5 : 1,
                             pointerEvents: isOtherRowDisabled ? "none" : "auto",
+                            cursor:
+                              isSelected || disableThisRowActions || isOtherRowDisabled ? "default" : "pointer",
+                          }}
+                          onClick={() => {
+                            if (isSelected || disableThisRowActions || isOtherRowDisabled) return;
+                            setSelectedScenarioIdLocal(s.id);
                           }}
                         >
                           <td>
@@ -2537,16 +2615,16 @@ export default function SelectPage() {
                           <td className="small">{new Date(s.created_at).toLocaleString()}</td>
                           <td>
                             <div className="scenario-row-actions">
-                              <button
-                                type="button"
-                                className={"btn scenario-action-btn " + (isSelected ? "primary" : "")}
-                                onClick={() => setSelectedScenarioIdLocal(s.id)}
-                                disabled={isSelected || disableThisRowActions || isOtherRowDisabled}
-                                title={isSelected ? "Secili" : "Sec"}
-                              >
-                                <FaCheck />
-                                <span>{isSelected ? "Secildi" : "Sec"}</span>
-                              </button>
+                              {/* Instead of a selectable button, show a simple indicator. When the row is
+                                  selected, display a check icon and "Secildi"; otherwise show "Seç". */}
+                              {isSelected ? (
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                  <FaCheck />
+                                  <span>Secildi</span>
+                                </span>
+                              ) : (
+                                <span>Seç</span>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -2554,7 +2632,8 @@ export default function SelectPage() {
                     })
                   )}
                 </tbody>
-              </table>
+                </table>
+              </div>
             </>
           )}
         </div>

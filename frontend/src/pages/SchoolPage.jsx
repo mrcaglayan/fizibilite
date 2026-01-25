@@ -13,6 +13,7 @@ import {
   readSelectedScenarioId,
   writeLastVisitedPath,
   writeSelectedScenarioId,
+  writeGlobalLastRouteSegment,
 } from "../utils/schoolNavStorage";
 import { getProgramType, mapBaseKademeToVariant, normalizeProgramType } from "../utils/programType";
 
@@ -147,17 +148,32 @@ export default function SchoolPage() {
   );
 
   useEffect(() => {
-    if (!selectedScenarioId) return;
+    // Persist the current route segment for the given school and scenario. When
+    // no scenario is selected (`selectedScenarioId` is null) the helper will
+    // store the path under a "none" scenario key. This ensures that we
+    // remember the last page even before a scenario is chosen.
     if (!ROUTE_TO_TAB[activeRouteSegment]) return;
     writeLastVisitedPath(schoolId, selectedScenarioId, activeRouteSegment);
   }, [activeRouteSegment, schoolId, selectedScenarioId]);
 
+  // Persist the current route segment globally so that when switching between
+  // schools or scenarios the user returns to the same sidebar page. This is
+  // independent of school or scenario context.
   useEffect(() => {
-    if (!selectedScenarioId) return;
+    if (!ROUTE_TO_TAB[activeRouteSegment]) return;
+    writeGlobalLastRouteSegment(activeRouteSegment);
+  }, [activeRouteSegment]);
+
+  useEffect(() => {
+    // When the user loads the base school path (e.g. `/schools/4`), redirect to
+    // the last visited route for the current school and scenario. If no
+    // scenario is selected we still look up the "none" scenario key. If
+    // nothing is recorded, default to the basics tab.
     const base = `/schools/${schoolId}`;
     if (location.pathname !== base && location.pathname !== `${base}/`) return;
     const last = readLastVisitedPath(schoolId, selectedScenarioId);
-    const target = last ? `${base}/${last}` : `${base}/${TAB_TO_ROUTE.basics}`;
+    const targetSegment = last || TAB_TO_ROUTE.basics;
+    const target = `${base}/${targetSegment}`;
     navigate(target, { replace: true });
   }, [location.pathname, navigate, schoolId, selectedScenarioId]);
 
@@ -1128,6 +1144,73 @@ export default function SchoolPage() {
     },
     [inputsLocked, getBaselineValue]
   );
+
+  // --------------------------------------------------------------
+  // Warn the user when navigating away with unsaved changes.
+  //
+  // React Router does not automatically prompt the user when leaving
+  // a page with unsaved changes. To ensure users do not lose their
+  // work, hook into the native `beforeunload` event. When there are
+  // dirty inputs (i.e. the user has modified fields that have not
+  // yet been saved), we register a `beforeunload` handler that
+  // prevents the default navigation and sets the `returnValue` on
+  // the event. Browsers display a generic confirmation dialog to
+  // confirm whether the user really wants to leave the page.
+  //
+  // Without this handler the browser will navigate away silently
+  // resulting in lost changes. By registering the handler only
+  // when there are unsaved changes and cleaning it up when there
+  // are none, we avoid unnecessary prompts.
+  useEffect(() => {
+    // Handler for the `beforeunload` event. This fires when the
+    // user attempts to close or navigate away from the page (e.g.
+    // by closing the tab, refreshing or navigating to another URL).
+    const handleBeforeUnload = (event) => {
+      // If there are unsaved changes, prevent the unload and set
+      // `returnValue` to an empty string. The exact message is
+      // ignored by most modern browsers, but setting this triggers
+      // the confirmation dialog.
+      if (inputsDirty) {
+        event.preventDefault();
+        // Chrome requires returnValue to be set.
+        event.returnValue = "";
+      }
+    };
+
+    // Register the event listener when there are unsaved changes.
+    if (inputsDirty) {
+      window.addEventListener("beforeunload", handleBeforeUnload);
+    }
+
+    // Cleanup: always remove the listener to avoid multiple handlers
+    // and to ensure we do not prompt when there are no dirty inputs.
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [inputsDirty]);
+
+  // --------------------------------------------------------------
+  // Expose a global flag for unsaved changes.
+  //
+  // When navigating between different sections of the application (e.g. via
+  // sidebar links) we need to know if there are unsaved changes in the
+  // current School page. We write a boolean flag on the `window` object
+  // whenever the `inputsDirty` state changes so that other components such
+  // as the sidebar navigation can read this value and display a prompt if
+  // necessary. When the component unmounts, we clear the flag.
+  useEffect(() => {
+    try {
+      window.__fsUnsavedChanges = inputsDirty;
+    } catch (_) {
+      // In non-browser environments `window` may not exist.
+    }
+    return () => {
+      try {
+        // Clear the flag on unmount or when navigating away from this page.
+        window.__fsUnsavedChanges = false;
+      } catch (_) {}
+    };
+  }, [inputsDirty]);
   const handleIkSalaryComputed = React.useCallback(
     (salaryByYear) => {
       if (inputsLocked) return;
@@ -1364,9 +1447,7 @@ export default function SchoolPage() {
   }
 
   function renderTopbarMetaAndActions() {
-    const scenarioText = selectedScenario
-      ? `${selectedScenario.name}${selectedScenario.academic_year ? ` • ${selectedScenario.academic_year}` : ""}`
-      : "Senaryo seçilmedi";
+
 
     const hasReport = Boolean(report);
     const calculateLabel = inputsDirty ? "Kaydet & Hesapla" : hasReport ? "Yeniden Hesapla" : "Hesapla";
@@ -1377,7 +1458,6 @@ export default function SchoolPage() {
       <div className="school-page school-page--portal school-topbar-inline">
         {/* pills (status/year/last saved/last calc) */}
         <div className="school-topbar-sub">
-          <span className={"school-pill " + (selectedScenario ? "" : "is-muted")}>{scenarioText}</span>
 
           {selectedScenario ? (
             <span className={`school-pill ${getScenarioStatusMeta(selectedScenario.status).className}`}>

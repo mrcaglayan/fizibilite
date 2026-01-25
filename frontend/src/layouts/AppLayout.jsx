@@ -2,9 +2,15 @@ import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ADMIN_TABS } from "../data/adminTabs";
-import { readSelectedScenarioId } from "../utils/schoolNavStorage";
+import {
+  readSelectedScenarioId,
+  readLastVisitedPath,
+  writeLastActiveSchoolId,
+  readLastActiveSchoolId,
+} from "../utils/schoolNavStorage";
 import {
   FaChevronRight,
+  FaChevronDown,
   FaUser,
   FaSignOutAlt,
   FaInfoCircle,
@@ -15,6 +21,8 @@ import {
   FaFunnelDollar,
   FaRegFileAlt,
   FaFileInvoiceDollar,
+  FaSchool,
+  FaTachometerAlt,
 } from "react-icons/fa";
 
 
@@ -52,6 +60,13 @@ function defaultTitle(pathname) {
 export default function AppLayout() {
   const auth = useAuth();
   const location = useLocation();
+  // Extract schoolId from either the URL path (`/schools/:id/...`) or the
+  // query string (`?schoolId=...`) so that when we are on the /select
+  // page we still have access to the last visited school. Without this,
+  // navigating to /select would clear the `schoolId` and cause the sidebar
+  // to lose its active state.
+  const params = new URLSearchParams(location.search);
+  const querySchoolId = params.get("schoolId");
   const navigate = useNavigate();
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageState("app.sidebarCollapsed", false);
   const [headerMeta, setHeaderMeta] = React.useState(null);
@@ -60,7 +75,15 @@ export default function AppLayout() {
     setHeaderPortalEl(el);
   }, []);
   const schoolMatch = location.pathname.match(/^\/schools\/([^/]+)/);
-  const schoolId = schoolMatch ? schoolMatch[1] : null;
+  let schoolId = schoolMatch ? schoolMatch[1] : querySchoolId || null;
+  // When navigating away from a school page (e.g. to /profile), there is no
+  // schoolId in the path or query string. Fallback to the last active
+  // schoolId stored in localStorage so that we can retain context and keep
+  // sidebar items enabled.
+  if (!schoolId) {
+    const lastActive = readLastActiveSchoolId();
+    if (lastActive) schoolId = lastActive;
+  }
   const selectedScenarioId = schoolId ? readSelectedScenarioId(schoolId) : null;
   const showSchoolsMenu = auth.user ? auth.user.role !== "admin" : false;
   const selectPath = schoolId ? `/select?schoolId=${schoolId}` : "/select";
@@ -75,10 +98,36 @@ export default function AppLayout() {
     [setHeaderMeta, clearHeaderMeta, headerPortalEl]
   );
 
+  // When navigating away from a school page with unsaved changes we show a
+  // custom modal instead of relying on the browser's built-in confirm. This
+  // state holds the target path to navigate to once the user confirms.
+  const [confirmNav, setConfirmNav] = React.useState(null);
+
+  // Persist the last active school ID in localStorage so that when navigating
+  // to non-school pages (like /profile) we can still determine the most
+  // recently viewed school. This hook runs whenever `schoolId` changes.
+  React.useEffect(() => {
+    if (schoolId) {
+      writeLastActiveSchoolId(schoolId);
+    }
+  }, [schoolId]);
+
   const renderRouteLink = ({ to, label, icon }) => (
     <NavLink
       className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
       to={to}
+      onClick={(e) => {
+        // When unsaved changes are present, open a modal instead of navigating
+        try {
+          if (window.__fsUnsavedChanges) {
+            e.preventDefault();
+            setConfirmNav({ path: to });
+            return;
+          }
+        } catch (_) {
+          // ignore if window is not defined (e.g. SSR)
+        }
+      }}
     >
       {/* Wrap icons in a span to consistently apply sizing and color styles. */}
       {icon ? <span className="app-nav-icon">{icon}</span> : null}
@@ -139,6 +188,17 @@ export default function AppLayout() {
 
   const schoolBase = schoolId ? `/schools/${schoolId}` : null;
   const isScenarioReady = Boolean(selectedScenarioId);
+  // While on the /select page the side navigation should still indicate which
+  // route was last visited for the active school/scenario. We read this value
+  // from localStorage via readLastVisitedPath. When `selectedScenarioId` is
+  // null there is nothing to highlight.
+  // Always compute the last visited route for the current school. When
+  // `selectedScenarioId` is null we treat it as "none" internally. This
+  // allows us to remember a last visited page even when no scenario has been
+  // selected yet.
+  const lastVisitedRoute = schoolId
+    ? readLastVisitedPath(schoolId, selectedScenarioId)
+    : null;
   const userNavItems = [
     {
       id: "temel-bilgiler",
@@ -213,11 +273,48 @@ export default function AppLayout() {
         </div>
 
         <ul className="app-nav-links">
+          {/* Top-level dashboard link to the schools list. Use the `end` prop on NavLink
+             so it only appears active when the path is exactly "/schools", not when
+             viewing nested school routes. */}
+          <li key="dashboard">
+            <NavLink
+              to="/schools"
+              end
+              className={({ isActive }) =>
+                "app-nav-link" + (isActive ? " is-active" : "")
+              }
+            >
+              <span className="app-nav-icon">
+                <FaTachometerAlt aria-hidden="true" />
+              </span>
+              <span className="app-label">Dashboard</span>
+            </NavLink>
+          </li>
           {renderAdminNavItems()}
           {showSchoolsMenu
             ? userNavItems.map((item) => {
-              const isBlocked = !isScenarioReady || !item.path;
-              const isActive = item.path ? location.pathname.startsWith(item.path) : false;
+              // A nav item is blocked only if there is no scenario selected
+              // (meaning the user hasn't chosen one yet) and we are not on
+              // the select page. When on `/select`, we allow navigation back
+              // to the last visited pages even if no scenario is ready.
+              const isBlocked = !((isScenarioReady) || location.pathname.startsWith("/select")) || !item.path;
+              // Determine whether this nav item should appear active. Normally
+              // an item is active if the current path begins with its path. When
+              // the user is on the `/select` page, we instead consider the last
+              // visited route (stored via writeLastVisitedPath) to determine
+              // which nav item should remain highlighted. The `item.id`
+              // corresponds to the route segment (e.g. "temel-bilgiler").
+              let isActive = false;
+              if (item.path) {
+                isActive = location.pathname.startsWith(item.path);
+              }
+              // If we are not on a school page (e.g. /select, /profile), use the
+              // last visited route to determine which nav item should appear
+              // active. This ensures the sidebar keeps its highlight when
+              // navigating away from school contexts.
+              if (!isActive && !location.pathname.startsWith("/schools") && lastVisitedRoute) {
+                isActive = item.id === lastVisitedRoute;
+              }
               return (
                 <li key={item.id}>
                   {renderButtonItem({
@@ -228,6 +325,13 @@ export default function AppLayout() {
                         navigate(selectPath);
                         return;
                       }
+                      // If there are unsaved changes on the current school page, open the confirm modal
+                      try {
+                        if (window.__fsUnsavedChanges) {
+                          setConfirmNav({ path: item.path });
+                          return;
+                        }
+                      } catch (_) {}
                       navigate(item.path);
                     },
                     active: isActive,
@@ -255,16 +359,19 @@ export default function AppLayout() {
         <div className="app-topbar">
           <div className={`app-topbar-row${headerMeta?.centered ? " app-topbar-row--centered" : ""}`}>
             <div className="app-topbar-left">
-              {showSchoolsMenu ? (
-                <>
-                  <button type="button" className="nav-btn" onClick={() => navigate(selectPath)}>
-                    Okul Degistir
-                  </button>
-                  <button type="button" className="nav-btn" onClick={() => navigate(selectPath)}>
-                    Senaryo Degistir
-                  </button>
-                </>
-              ) : null}
+            {showSchoolsMenu ? (
+              <button
+                type="button"
+                className="nav-btn"
+                onClick={() => navigate(selectPath)}
+                title="Okul / Senaryo Değiştir"
+              >
+                {/* Use a school icon followed by the combined label and a chevron, similar to the example design. */}
+                <FaSchool aria-hidden="true" />
+                <span style={{ whiteSpace: "nowrap" }}>Okul / Senaryo Değiştir</span>
+                <FaChevronDown aria-hidden="true" />
+              </button>
+            ) : null}
             </div>
 
             {showDefaultHeader ? (
@@ -283,7 +390,29 @@ export default function AppLayout() {
         <div className="app-content">
           <Outlet context={outletContext} />
         </div>
-      </section>
-    </div>
+        </section>
+        {confirmNav ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <div className="modal">
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Unsaved Changes</div>
+              <div className="small" style={{ marginBottom: 12 }}>
+                You have unsaved changes. If you leave this page, unsaved changes may be lost.
+              </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <button className="btn" onClick={() => setConfirmNav(null)}>Stay</button>
+                  <button
+                    className="btn primary"
+                    onClick={() => {
+                      if (confirmNav?.path) navigate(confirmNav.path);
+                      setConfirmNav(null);
+                    }}
+                  >
+                    Leave
+                  </button>
+                </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
   );
 }

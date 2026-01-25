@@ -7,8 +7,29 @@ import { useAuth } from "../auth/AuthContext";
 export default function LoginPage() {
   const auth = useAuth();
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  // When the user has opted into "remember me" we persist their
+  // email and password in localStorage. Initialise these values
+  // from storage so the form can be pre‑filled on subsequent visits.
+  const [email, setEmail] = useState(() => {
+    try {
+      if (localStorage.getItem("remember_me") === "1") {
+        return localStorage.getItem("remember_email") || "";
+      }
+    } catch (err) {
+      // ignore storage errors (e.g. disabled)
+    }
+    return "";
+  });
+  const [password, setPassword] = useState(() => {
+    try {
+      if (localStorage.getItem("remember_me") === "1") {
+        return localStorage.getItem("remember_password") || "";
+      }
+    } catch (err) {
+      // ignore storage errors
+    }
+    return "";
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(() => {
     const pref = localStorage.getItem("remember_me");
@@ -18,6 +39,25 @@ export default function LoginPage() {
   });
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Persist or clear the stored credentials whenever the user toggles
+  // the "remember me" option or edits their email/password.  When
+  // rememberMe is true we write the latest values into localStorage;
+  // otherwise we remove them.  This runs on every change so that
+  // updates are reflected immediately.
+  useEffect(() => {
+    try {
+      if (rememberMe) {
+        localStorage.setItem("remember_email", email);
+        localStorage.setItem("remember_password", password);
+      } else {
+        localStorage.removeItem("remember_email");
+        localStorage.removeItem("remember_password");
+      }
+    } catch (err) {
+      // ignore storage exceptions
+    }
+  }, [rememberMe, email, password]);
 
   useEffect(() => {
     document.title = "Sign in · Feasibility Studio";
