@@ -2481,7 +2481,9 @@ hr {
   width: 250px;
   padding: 10px 14px;
   background: var(--sb-bg);
-  border-right: 1px solid var(--sb-border);
+  /* Remove the right border so that hover/active backgrounds show fully rounded
+     corners on both sides, matching the example sidebar. */
+  border-right: none;
   box-shadow: var(--sb-shadow);
   z-index: 200;
   transition: var(--sb-tran);
@@ -2631,10 +2633,13 @@ hr {
 .app-nav-item, .app-nav-link, .app-group-btn {
   width:100%;
   height:50px;
-  padding: 0 12px;
+  /* Remove horizontal padding so that hover/active backgrounds span the full
+     width of the sidebar, matching the example design. */
+  padding: 0;
   display:flex;
   align-items:center;
-  gap: 10px;
+  /* Remove default gap to reduce distance between icon and label */
+  gap: 0;
   color: var(--sb-text);
   text-decoration:none;
   background:transparent;
@@ -2659,7 +2664,9 @@ hr {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-right: 6px;
+  /* Remove additional margin on the right. The icon will occupy its own fixed width,
+     similar to the example, without adding extra space before the label. */
+  margin-right: 0;
   /* Match the icon sizing and spacing from the example sidebar. */
   min-width: 60px;
   height: 100%;
@@ -2679,6 +2686,10 @@ hr {
 .app-group-btn:hover {
   background: var(--sb-primary);
   color: #fff;
+  /* Ensure border radius is preserved on hover, matching the example. Without
+     explicitly setting the radius here, some browsers may not apply the
+     default border-radius consistently to the right edge. */
+  border-radius: 6px;
 }
 
 /* Ensure nav icons change color when their parent link/button is hovered or active. Without this,
@@ -2695,6 +2706,8 @@ hr {
   background: var(--sb-primary);
   color: #fff;
   box-shadow: 0 6px 16px rgba(37, 99, 235, 0.25);
+  /* Ensure the active item retains rounded corners on both sides. */
+  border-radius: 6px;
 }
 .app-nav-item:disabled {
   color: var(--sb-muted);
