@@ -251,6 +251,7 @@ export default function AppLayout() {
 
   const schoolBase = schoolId ? `/schools/${schoolId}` : null;
   const isScenarioReady = Boolean(selectedScenarioId);
+  const permissionsLoading = Boolean(auth.token) && (!auth.user || !Array.isArray(auth.user.permissions));
   // While on the /select page the side navigation should still indicate which
   // route was last visited for the active school/scenario. We read this value
   // from localStorage via readLastVisitedPath. When `selectedScenarioId` is
@@ -333,9 +334,11 @@ export default function AppLayout() {
   if (!schoolId) {
     // When there is no school context (e.g. /schools list), show all items
     permittedNavItems = userNavItems;
+  } else if (permissionsLoading) {
+    // Permissions still loading; avoid flashing unauthorized items.
+    permittedNavItems = [];
   } else if (!auth.user || !Array.isArray(auth.user.permissions)) {
-    // If the user object is missing or has no permissions list yet, show all items
-    permittedNavItems = userNavItems;
+    permittedNavItems = [];
   } else {
     const countryId = auth.user.country_id;
     permittedNavItems = userNavItems.filter((item) => {
@@ -417,7 +420,13 @@ export default function AppLayout() {
           </li>
           {renderAdminNavItems()}
           {showSchoolsMenu
-            ? permittedNavItems.map((item) => {
+            ? (permissionsLoading
+              ? userNavItems.map((item) => (
+                <li key={`placeholder-${item.id}`} className="app-nav-placeholder" aria-hidden="true">
+                  <span className="app-nav-placeholder-line" />
+                </li>
+              ))
+              : permittedNavItems.map((item) => {
               // A nav item is blocked only if there is no scenario selected
               // (meaning the user hasn't chosen one yet) and we are not on
               // the select page. When on `/select`, we allow navigation back
@@ -466,7 +475,7 @@ export default function AppLayout() {
                   })}
                 </li>
               );
-            })
+            }))
             : null}
           {/* Insert Manage Permissions link right above the Profile option if applicable */}
           {canManagePermissions ? (

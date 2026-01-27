@@ -2296,9 +2296,8 @@ export default function SchoolPage() {
                       <div
                         className={`module-fill ${statusClass}`}
                         style={{ width: `${Math.min(100, Math.max(0, Math.round(m.pct)))}%` }}
-                      >
-                        <span className="module-percent">{Math.round(m.pct)}%</span>
-                      </div>
+                      />
+                      <span className="module-percent">{Math.round(m.pct)}%</span>
                     </div>
                   </SegmentTag>
                 );
