@@ -9,6 +9,7 @@ import { can } from "../utils/permissions";
 import { getGradeOptions, normalizeKademeConfig, summarizeGradesByKademe } from "../utils/kademe";
 import { computeScenarioProgress } from "../utils/scenarioProgress";
 import { useScenarioUiState, useScenarioUiString } from "../hooks/useScenarioUIState";
+import { FaCalculator, FaCheckCircle, FaFileExport, FaPaperPlane, FaSave } from "react-icons/fa";
 import {
   readLastVisitedPath,
   readSelectedScenarioId,
@@ -2095,11 +2096,13 @@ export default function SchoolPage() {
     const primaryTooltipReasons = [];
     let primaryDisabled = true;
     let primaryLabel = "";
+    let primaryIcon = null;
     let primaryOnClick = null;
     // We evaluate actions in priority: Admin > Manager > Principal.
     if (canApproveScenario) {
       // Admin final approval
       primaryLabel = "Onayla";
+      primaryIcon = <FaCheckCircle aria-hidden="true" />;
       primaryDisabled = false;
       // Admin page rarely allows editing; still guard against concurrent save/calc
       if (inputsSaving) {
@@ -2125,6 +2128,7 @@ export default function SchoolPage() {
     } else if (canForwardScenario) {
       // Accountant/manager forward to admin
       primaryLabel = "Merkeze ilet";
+      primaryIcon = <FaPaperPlane aria-hidden="true" />;
       primaryDisabled = false;
       // disallow if modules incomplete or there are pending changes or locks
       if (!allModulesDone) {
@@ -2176,6 +2180,7 @@ export default function SchoolPage() {
     } else if (canSubmitScenarioBase) {
       // Principal/HR submit to manager (module-level). Show button even if disabled.
       primaryLabel = "Gönder";
+      primaryIcon = <FaPaperPlane aria-hidden="true" />;
       primaryDisabled = false;
       // Validate prerequisites for module submission.  If any check fails we still show
       // the button but keep it disabled with an explanatory tooltip.
@@ -2315,7 +2320,8 @@ export default function SchoolPage() {
                   disabled={primaryDisabled}
                   title={primaryTooltip}
                 >
-                  {primaryLabel}
+                  {primaryIcon}
+                  <span>{primaryLabel}</span>
                 </button>
               </Tooltip>
             ) : null}
@@ -2332,7 +2338,8 @@ export default function SchoolPage() {
                     : "Kaydedilecek değişiklik yok"
               }
             >
-              {inputsSaving ? "Kaydediliyor..." : inputsDirty ? "Kaydet" : "Kaydedildi"}
+              <FaSave aria-hidden="true" />
+              <span>{inputsSaving ? "Kaydediliyor..." : inputsDirty ? "Kaydet" : "Kaydedildi"}</span>
             </button>
 
             {hasAllModuleWritePermissions ? (
@@ -2353,7 +2360,8 @@ export default function SchoolPage() {
                 disabled={inputsSaving || calculating}
                 title={calculateLabel}
               >
-                {calculating ? "Hesaplanıyor..." : calculateLabel}
+                <FaCalculator aria-hidden="true" />
+                <span>{calculating ? "Hesaplanıyor..." : calculateLabel}</span>
               </button>
             ) : null}
 
@@ -2372,7 +2380,8 @@ export default function SchoolPage() {
                   aria-busy={exportingPdf ? "true" : undefined}
                 >
                   {exportingPdf ? <span className="pdf-export-spinner" aria-hidden="true" /> : null}
-                  {exportLabel}
+                  {!exportingPdf ? <FaFileExport aria-hidden="true" /> : null}
+                  <span>{exportLabel}</span>
                 </button>
 
                 {exportOpen ? (

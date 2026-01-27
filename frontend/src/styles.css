@@ -422,6 +422,16 @@ input[type="number"]::-webkit-inner-spin-button {
 .select-school-table {
   table-layout: fixed;
 }
+.select-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+.select-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
 /* Shared data-table skin */
 .table-scroll {
@@ -2179,12 +2189,17 @@ hr {
 }
 .scenario-toolbar {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  align-items: center;
 }
 .scenario-toolbar .btn {
-  min-width: 150px;
+  min-width: 120px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 12px;
 }
 .btn-inner {
   display: inline-flex;
@@ -2460,6 +2475,9 @@ hr {
   font-weight: 800;
   font-size: 13px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
   transition:
     transform 120ms ease,

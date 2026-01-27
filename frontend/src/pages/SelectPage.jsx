@@ -3,11 +3,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
 // Import additional icons for better visual cues on the action buttons.
-// FaCheck is used for indicating selected rows. FaCheckCircle will represent
-// approval actions and FaTrash will represent deletion actions on the toolbar.
-import { FaCheck, FaCheckCircle, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+// FaCheckCircle represents approval actions and FaTrash represents deletion actions.
+import { FaCheckCircle, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
+import ProgressBar from "../components/ui/ProgressBar";
 import {
   getDefaultKademeConfig,
   getKademeDefinitions,
@@ -15,6 +15,7 @@ import {
   normalizeKademeConfig,
 } from "../utils/kademe";
 import { PROGRAM_TYPES, normalizeProgramType } from "../utils/programType";
+import { computeScenarioProgress } from "../utils/scenarioProgress";
 import {
   readSelectedScenarioId,
   writeSelectedScenarioId,
@@ -718,23 +719,23 @@ function getScenarioStatusMeta(scenarioOrStatus) {
   const sentAt = obj.sent_at;
   switch (status) {
     case 'revision_requested':
-      return { label: 'Revize istendi', cls: 'is-revision' };
+      return { label: 'Revize istendi', cls: 'is-revision', help: 'Revize istendi: senaryoda düzeltme gerekiyor.' };
     case 'sent_for_approval':
-      return { label: 'Merkeze iletildi', cls: 'is-submitted' };
+      return { label: 'Merkeze iletildi', cls: 'is-submitted', help: 'Merkeze iletildi: admin onayı bekleniyor.' };
     case 'submitted':
       // Legacy status; treat similarly to sent_for_approval
-      return { label: 'Merkeze iletildi', cls: 'is-submitted' };
+      return { label: 'Merkeze iletildi', cls: 'is-submitted', help: 'Merkeze iletildi: admin onayı bekleniyor.' };
     case 'approved':
       if (sentAt) {
-        return { label: 'Onaylandı', cls: 'is-approved' };
+        return { label: 'Onaylandı', cls: 'is-approved', help: 'Onaylandı: admin tarafından onaylandı.' };
       }
-      return { label: 'Kontrol edildi', cls: 'is-approved' };
+      return { label: 'Kontrol edildi', cls: 'is-approved', help: 'Kontrol edildi: yönetici tarafından kontrol edildi.' };
     case 'in_review':
-      return { label: 'İncelemede', cls: 'is-submitted' };
+      return { label: 'İncelemede', cls: 'is-submitted', help: 'İncelemede: yönetici incelemesinde.' };
     case 'draft':
-      return { label: 'Taslak', cls: 'is-draft' };
+      return { label: 'Taslak', cls: 'is-draft', help: 'Taslak: senaryo üzerinde çalışılıyor.' };
     default:
-      return { label: status || '-', cls: 'is-unknown' };
+      return { label: status || '-', cls: 'is-unknown', help: '' };
   }
 }
 
@@ -754,6 +755,11 @@ export default function SelectPage() {
   const [err, setErr] = useState("");
   const [loadingSchools, setLoadingSchools] = useState(false);
   const [loadingScenarios, setLoadingScenarios] = useState(false);
+  const [progressConfig, setProgressConfig] = useState(null);
+  const [schoolProgress, setSchoolProgress] = useState({});
+  const [schoolProgressLoading, setSchoolProgressLoading] = useState(false);
+  const [scenarioProgressMap, setScenarioProgressMap] = useState({});
+  const [scenarioProgressLoading, setScenarioProgressLoading] = useState(false);
 
   const [newScenarioName, setNewScenarioName] = useState("");
   const [newScenarioPeriod, setNewScenarioPeriod] = useState("split");
@@ -818,6 +824,97 @@ export default function SelectPage() {
   }, [loadSchools]);
 
   useEffect(() => {
+    let active = true;
+    async function loadProgressConfig() {
+      try {
+        const data = await api.getProgressRequirements();
+        if (!active) return;
+        setProgressConfig(data?.config || data || null);
+      } catch (_) {
+        if (!active) return;
+        setProgressConfig(null);
+      }
+    }
+    loadProgressConfig();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const computeSchoolProgressForSchool = useCallback(
+    async (schoolId) => {
+      const scenarios = await api.listScenarios(schoolId);
+      const list = Array.isArray(scenarios) ? scenarios : [];
+      const active = list.filter((s) => s.status !== "approved");
+      if (!list.length) {
+        return { state: "empty", label: "Senaryo yok" };
+      }
+      if (!active.length) {
+        return { state: "approved", label: "Tüm senaryolar onaylı" };
+      }
+
+      const latest = active
+        .slice()
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+
+      const [inputsData, normData] = await Promise.all([
+        api.getScenarioInputs(schoolId, latest.id),
+        api.getNormConfig(schoolId).catch(() => null),
+      ]);
+
+      const progress = computeScenarioProgress({
+        inputs: inputsData?.inputs,
+        norm: normData,
+        config: progressConfig,
+        scenario: latest,
+      });
+      const tooltipLines = progress.missingDetailsLines.length
+        ? ["Eksik:", ...progress.missingDetailsLines]
+        : ["Tüm tablolar tamamlandı"];
+      return { state: "active", pct: progress.pct, tooltipLines };
+    },
+    [progressConfig]
+  );
+
+  const loadSchoolProgress = useCallback(
+    async (rows) => {
+      if (!Array.isArray(rows) || !rows.length) {
+        setSchoolProgress({});
+        return;
+      }
+      setSchoolProgressLoading(true);
+      try {
+        const progressRows = await Promise.all(
+          rows.map(async (s) => {
+            try {
+              return await computeSchoolProgressForSchool(s.id);
+            } catch (_) {
+              return { state: "error", label: "İlerleme hesaplanamadı" };
+            }
+          })
+        );
+        const map = {};
+        rows.forEach((s, idx) => {
+          map[s.id] = progressRows[idx];
+        });
+        setSchoolProgress(map);
+      } finally {
+        setSchoolProgressLoading(false);
+      }
+    },
+    [computeSchoolProgressForSchool]
+  );
+
+  useEffect(() => {
+    if (!schools.length) {
+      setSchoolProgress({});
+      setSchoolProgressLoading(false);
+      return;
+    }
+    loadSchoolProgress(schools);
+  }, [schools, progressConfig, loadSchoolProgress]);
+
+  useEffect(() => {
     const raw = searchParams.get("schoolId");
     const paramId = Number(raw || 0);
     if (!raw || !Number.isFinite(paramId)) return;
@@ -846,6 +943,28 @@ export default function SelectPage() {
     },
     [selectedSchoolId, setSearchParams]
   );
+
+  const clearSchoolSelection = useCallback(() => {
+    setSelectedSchoolId(null);
+    setSelectedScenarioIdLocal(null);
+    setSelectedScenario(null);
+    setInputs(null);
+    setReport(null);
+    setScenarios([]);
+    setScenarioProgressMap({});
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("schoolId");
+      return next;
+    });
+  }, [setSearchParams]);
+
+  const clearScenarioSelection = useCallback(() => {
+    setSelectedScenarioIdLocal(null);
+    setSelectedScenario(null);
+    setInputs(null);
+    setReport(null);
+  }, []);
 
   useEffect(() => {
     if (!selectedSchoolId) {
@@ -892,6 +1011,57 @@ export default function SelectPage() {
       active = false;
     };
   }, [selectedSchoolId]);
+
+  useEffect(() => {
+    if (!selectedSchoolId) {
+      setScenarioProgressMap({});
+      setScenarioProgressLoading(false);
+      return;
+    }
+    if (!scenarios.length) {
+      setScenarioProgressMap({});
+      setScenarioProgressLoading(false);
+      return;
+    }
+    let active = true;
+    setScenarioProgressLoading(true);
+    async function loadScenarioProgress() {
+      try {
+        const normData = await api.getNormConfig(selectedSchoolId).catch(() => null);
+        const results = await Promise.all(
+          scenarios.map(async (scenario) => {
+            try {
+              const inputsData = await api.getScenarioInputs(selectedSchoolId, scenario.id);
+              const progress = computeScenarioProgress({
+                inputs: inputsData?.inputs,
+                norm: normData,
+                config: progressConfig,
+                scenario,
+              });
+              const tooltipLines = progress.missingDetailsLines.length
+                ? ["Eksik:", ...progress.missingDetailsLines]
+                : ["Tüm tablolar tamamlandı"];
+              return { id: scenario.id, pct: progress.pct, tooltipLines };
+            } catch (_) {
+              return { id: scenario.id, error: true };
+            }
+          })
+        );
+        if (!active) return;
+        const map = {};
+        results.forEach((row) => {
+          map[row.id] = row;
+        });
+        setScenarioProgressMap(map);
+      } finally {
+        if (active) setScenarioProgressLoading(false);
+      }
+    }
+    loadScenarioProgress();
+    return () => {
+      active = false;
+    };
+  }, [selectedSchoolId, scenarios, progressConfig]);
 
   useEffect(() => {
     if (!selectedSchoolId || !selectedScenarioIdLocal) {
@@ -2494,62 +2664,77 @@ export default function SelectPage() {
             <div className="select-table-body">
               <table className="table select-school-table">
                 <colgroup>
+                  <col style={{ width: 32 }} />
                   <col />
-                  <col style={{ width: 96 }} />
+                  <col style={{ width: 180 }} />
                 </colgroup>
               <thead>
                 <tr>
-                  <th>Okul</th>
                   <th></th>
+                  <th>Okul</th>
+                  <th>İlerleme</th>
                 </tr>
               </thead>
               <tbody>
                 {schools.length === 0 ? (
                   <tr>
-                    <td colSpan="2" className="small">Okul bulunamadi.</td>
+                    <td colSpan="3" className="small">Okul bulunamadi.</td>
                   </tr>
                 ) : (
                   schools.map((s) => {
                     const isSelected = String(selectedSchoolId) === String(s.id);
+                    const progress = schoolProgress[s.id];
                     return (
                       <tr
                         key={s.id}
                         className={isSelected ? "scenario-row is-selected" : "scenario-row"}
                         // Provide a pointer cursor for the whole row to indicate interactivity. Clicking the row or any
                         // cell will select the school.
-                        style={{ cursor: "pointer" }}
+                        style={{ cursor: isSelected ? "default" : "pointer" }}
                         onClick={() => {
+                          if (isSelected) return;
                           handleSelectSchool(s.id);
                         }}
                       >
                         <td
-                          // Attach click handlers to the cells to ensure the event always fires even if the row-level
-                          // handler is somehow not triggered due to event propagation quirks.
                           onClick={(e) => {
-                            // Prevent this click from bubbling twice. Reset scenario-related state if the school changes.
                             e.stopPropagation();
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            className="select-checkbox"
+                            checked={isSelected}
+                            aria-label={`${s.name} okulunu seç`}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              if (isSelected) {
+                                clearSchoolSelection();
+                                return;
+                              }
+                              handleSelectSchool(s.id);
+                            }}
+                          />
+                        </td>
+                        <td
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isSelected) return;
                             handleSelectSchool(s.id);
                           }}
                           style={{ cursor: "pointer" }}
                         >
                           <b>{s.name}</b>
                         </td>
-                        <td
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSelectSchool(s.id);
-                          }}
-                          style={{ cursor: "pointer" }}
-                        >
-                          {/* Replace the button with a simple indicator. When the row is selected it shows a check icon and
-                              "Secildi" (selected); otherwise it shows "Seç" to indicate it can be selected. */}
-                          {isSelected ? (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                              <FaCheck />
-                              <span>Secildi</span>
-                            </span>
+                        <td style={{ minWidth: 180 }}>
+                          {progress ? (
+                            progress.state === "active" ? (
+                              <ProgressBar value={progress.pct} tooltipLines={progress.tooltipLines} />
+                            ) : (
+                              <div className="small">{progress.label || "-"}</div>
+                            )
                           ) : (
-                            <span className="small muted">Seç</span>
+                            <div className="small">{schoolProgressLoading ? "Hesaplanıyor..." : "-"}</div>
                           )}
                         </td>
                       </tr>
@@ -2660,6 +2845,7 @@ export default function SelectPage() {
                 <table className="table scenario-table">
                 <thead>
                   <tr>
+                    <th></th>
                     <th aria-sort={getSortAria("name")}>
                       <button
                         type="button"
@@ -2704,6 +2890,7 @@ export default function SelectPage() {
                         {sortIcon("status")}
                       </button>
                     </th>
+                    <th>İlerleme</th>
                     <th aria-sort={getSortAria("date")}>
                       <button
                         type="button"
@@ -2715,17 +2902,16 @@ export default function SelectPage() {
                         {sortIcon("date")}
                       </button>
                     </th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {loadingScenarios ? (
                     <tr>
-                      <td colSpan="6" className="small">Yukleniyor...</td>
+                      <td colSpan="7" className="small">Yukleniyor...</td>
                     </tr>
-                  ) : scenarios.length === 0 ? (
+                  ) : sortedScenarios.length === 0 ? (
                     <tr>
-                      <td colSpan="6" className="small">Henuz senaryo yok.</td>
+                      <td colSpan="7" className="small">Gosterilecek senaryo yok.</td>
                     </tr>
                   ) : (
                     sortedScenarios.map((s) => {
@@ -2757,6 +2943,24 @@ export default function SelectPage() {
                           }}
                         >
                           <td>
+                            <input
+                              type="checkbox"
+                              className="select-checkbox"
+                              checked={isSelected}
+                              disabled={disableThisRowActions || isOtherRowDisabled}
+                              aria-label={`${s.name} senaryosunu seç`}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                if (disableThisRowActions || isOtherRowDisabled) return;
+                                if (isSelected) {
+                                  clearScenarioSelection();
+                                  return;
+                                }
+                                setSelectedScenarioIdLocal(s.id);
+                              }}
+                            />
+                          </td>
+                          <td>
                             <b className="scenario-name" title={s.name}>
                               {s.name}
                             </b>
@@ -2764,25 +2968,23 @@ export default function SelectPage() {
                           <td>{s.academic_year}</td>
                           <td>{currencyLabel}</td>
                           <td>
-                            <span className={`status-badge ${statusMeta.cls}`}>
+                            <span className={`status-badge ${statusMeta.cls}`} title={statusMeta.help}>
                               {statusMeta.label}
                             </span>
                           </td>
-                          <td className="small">{new Date(s.created_at).toLocaleString()}</td>
-                          <td>
-                            <div className="scenario-row-actions">
-                              {/* Instead of a selectable button, show a simple indicator. When the row is
-                                  selected, display a check icon and "Secildi"; otherwise show "Seç". */}
-                              {isSelected ? (
-                                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                                  <FaCheck />
-                                  <span>Secildi</span>
-                                </span>
-                              ) : (
-                                <span>Seç</span>
-                              )}
-                            </div>
+                          <td style={{ minWidth: 160 }}>
+                            {scenarioProgressMap[s.id] && !scenarioProgressMap[s.id].error ? (
+                              <ProgressBar
+                                value={scenarioProgressMap[s.id].pct}
+                                tooltipLines={scenarioProgressMap[s.id].tooltipLines}
+                              />
+                            ) : (
+                              <span className="small">
+                                {scenarioProgressLoading ? "Hesaplanıyor..." : "-"}
+                              </span>
+                            )}
                           </td>
+                          <td className="small">{new Date(s.created_at).toLocaleString()}</td>
                         </tr>
                       );
                     })
