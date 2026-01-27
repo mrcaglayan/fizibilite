@@ -12,11 +12,15 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false;
     async function loadMe() {
+      // If no auth token exists, ensure the user is reset
       if (!token) {
         setUser(null);
         return;
       }
-      if (user) return;
+      // Only avoid calling /auth/me when we already have permissions loaded.
+      // After login the user object may exist but lack the `permissions`
+      // property; in that case we still need to fetch it from the backend.
+      if (user && Array.isArray(user.permissions)) return;
       try {
         const me = await api.getMe();
         if (!cancelled) setUser(me);

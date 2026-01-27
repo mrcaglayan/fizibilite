@@ -5,8 +5,9 @@ import { ToastContainer, toast } from "react-toastify";
 // Import additional icons for better visual cues on the action buttons.
 // FaCheck is used for indicating selected rows. FaCheckCircle will represent
 // approval actions and FaTrash will represent deletion actions on the toolbar.
-import { FaCheck, FaCheckCircle, FaTrash } from "react-icons/fa";
+import { FaCheck, FaCheckCircle, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { api } from "../api";
+import { useAuth } from "../auth/AuthContext";
 import {
   getDefaultKademeConfig,
   getKademeDefinitions,
@@ -18,7 +19,9 @@ import {
   readSelectedScenarioId,
   writeSelectedScenarioId,
   readGlobalLastRouteSegment,
+  writeLastActiveSchoolId,
 } from "../utils/schoolNavStorage";
+import { can } from "../utils/permissions";
 
 const COPY_SELECT_TABS = [
   {
@@ -66,6 +69,84 @@ const COPY_SELECT_TABS = [
     ],
   },
 ];
+
+// Mapping from copy selection section IDs to permission resources.  When a
+// scenario is copied, we must specify which permission resources are
+// modified so the backend can authorize writes.  Each entry maps a
+// selection key to an array of resource strings.  Page‑level resources
+// (e.g. 'page.temel_bilgiler') grant write access to the entire module,
+// while section‑level resources (e.g. 'section.temel_bilgiler.inflation')
+// grant write access only to that portion.  Adjust this mapping if new
+// copy sections are introduced.
+const COPY_SECTION_RESOURCES = {
+  // Temel Bilgiler: core data (kademeler & program type) require page‑level permission
+  'temel.core': ['page.temel_bilgiler'],
+  // Temel Bilgiler: pricing (inflation, fee increases, fee calculation)
+  'temel.pricing': ['section.temel_bilgiler.inflation'],
+  // Temel Bilgiler: school info and administrators
+  'temel.schoolInfo': ['page.temel_bilgiler'],
+  // Temel Bilgiler: IK mevcut + burs/indirim counts
+  'temel.discountsMeta': ['section.temel_bilgiler.ik_mevcut', 'section.temel_bilgiler.burs_ogr'],
+  // Temel Bilgiler: competitors
+  'temel.competitors': ['section.temel_bilgiler.rakip'],
+  // Temel Bilgiler: performance and evaluation
+  'temel.performance': ['section.temel_bilgiler.performans'],
+  // Kapasite: all capacity values
+  'kapasite.all': ['section.kapasite.caps'],
+  // Norm: planned semesters (y2,y3) rely on the norm page
+  'norm.planned': ['page.norm'],
+  // Norm: current semester values (gradesCurrent) rely on the norm page
+  'norm.current': ['page.norm'],
+  // Norm: lesson distribution (Y1) maps to the ders_dagilimi section
+  'norm.lessonY1': ['section.norm.ders_dagilimi'],
+  // HR (IK): all HR data.  Use page‑level resource since there is only one section defined.
+  'hr.ik': ['page.ik'],
+  // Gelirler: income.  Use page‑level resource (covers all income categories)
+  // For the Gelirler module, use the unit_fee section instead of the page
+  // resource.  This allows users who only have section‑level write access
+  // (e.g. unit_fee) to copy incomes without requiring page.gelirler
+  // permission.  See SchoolPage.pathToResources for section mapping logic.
+  'income.gelirler': ['section.gelirler.unit_fee'],
+  // Giderler: expenses.  The isletme section covers operating expenses
+  'expenses.giderler': ['section.giderler.isletme'],
+  // Discounts: burs/indirim values (year‑level discounts)
+  'expenses.discounts': ['section.discounts.discounts'],
+};
+
+/**
+ * Build a list of modified permission resources based on the user's copy
+ * selection.  For each selected section key whose value is truthy in
+ * `selection`, this function looks up the corresponding resource(s) in
+ * COPY_SECTION_RESOURCES and collects them into a unique list.  Unknown
+ * section keys are ignored.
+ *
+ * @param {Object} selection Mapping of section keys to boolean (selected)
+ * @returns {string[]} List of unique permission resource keys
+ */
+function buildModifiedResourcesFromCopySelection(selection) {
+  const out = new Set();
+  if (!selection || typeof selection !== 'object') return [];
+  Object.entries(selection).forEach(([key, value]) => {
+    if (!value) return;
+    const resources = COPY_SECTION_RESOURCES[key];
+    if (Array.isArray(resources)) {
+      resources.forEach((r) => out.add(r));
+    }
+  });
+  return Array.from(out);
+}
+
+function isScenarioLocked(scenario) {
+  const status = String(scenario?.status || "draft");
+  const submittedAt = scenario?.submitted_at != null;
+  const sentAt = scenario?.sent_at != null;
+  return (
+    status === "sent_for_approval" ||
+    status === "submitted" ||
+    (status === "approved" && sentAt) ||
+    (status === "in_review" && submittedAt)
+  );
+}
 
 const DEFAULT_START_YEAR = "2026";
 const DEFAULT_END_YEAR = "2027";
@@ -631,18 +712,29 @@ function normalizeGradesInputs(src) {
   return next;
 }
 
-function getScenarioStatusMeta(status) {
+function getScenarioStatusMeta(scenarioOrStatus) {
+  const obj = scenarioOrStatus && typeof scenarioOrStatus === 'object' ? scenarioOrStatus : { status: scenarioOrStatus };
+  const status = obj.status;
+  const sentAt = obj.sent_at;
   switch (status) {
-    case "draft":
-      return { label: "Taslak", cls: "is-draft" };
-    case "submitted":
-      return { label: "Gonderildi", cls: "is-submitted" };
-    case "revision_requested":
-      return { label: "Revizyon Istendi", cls: "is-revision" };
-    case "approved":
-      return { label: "Onaylandi", cls: "is-approved" };
+    case 'revision_requested':
+      return { label: 'Revize istendi', cls: 'is-revision' };
+    case 'sent_for_approval':
+      return { label: 'Merkeze iletildi', cls: 'is-submitted' };
+    case 'submitted':
+      // Legacy status; treat similarly to sent_for_approval
+      return { label: 'Merkeze iletildi', cls: 'is-submitted' };
+    case 'approved':
+      if (sentAt) {
+        return { label: 'Onaylandı', cls: 'is-approved' };
+      }
+      return { label: 'Kontrol edildi', cls: 'is-approved' };
+    case 'in_review':
+      return { label: 'İncelemede', cls: 'is-submitted' };
+    case 'draft':
+      return { label: 'Taslak', cls: 'is-draft' };
     default:
-      return { label: status || "-", cls: "is-unknown" };
+      return { label: status || '-', cls: 'is-unknown' };
   }
 }
 
@@ -650,6 +742,7 @@ export default function SelectPage() {
   const navigate = useNavigate();
   const outlet = useOutletContext();
   const [searchParams, setSearchParams] = useSearchParams();
+  const auth = useAuth();
 
   const [schools, setSchools] = useState([]);
   const [scenarios, setScenarios] = useState([]);
@@ -657,7 +750,7 @@ export default function SelectPage() {
   const [selectedScenarioIdLocal, setSelectedScenarioIdLocal] = useState(null);
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [inputs, setInputs] = useState(null);
-  const [report, setReport] = useState(null);
+  const [, setReport] = useState(null);
   const [err, setErr] = useState("");
   const [loadingSchools, setLoadingSchools] = useState(false);
   const [loadingScenarios, setLoadingScenarios] = useState(false);
@@ -932,8 +1025,12 @@ export default function SelectPage() {
 
     const getStatusLabel = (status) => {
       switch (status) {
-        case "submitted":
-          return "Gonderildi";
+        case 'in_review':
+          return 'İncelemede';
+        case 'sent_for_approval':
+          return 'Onaya Gonderildi';
+        case 'submitted':
+          return 'Gonderildi';
         case "revision_requested":
           return "Revizyon Istendi";
         case "approved":
@@ -996,8 +1093,18 @@ export default function SelectPage() {
     return scenarioSort.dir === "asc" ? "ascending" : "descending";
   };
   const sortIcon = (key) => {
-    if (scenarioSort.key !== key) return <span className="sort-icon is-idle">?</span>;
-    return <span className="sort-icon">{scenarioSort.dir === "asc" ? "?" : "?"}</span>;
+    if (scenarioSort.key !== key) {
+      return (
+        <span className="sort-icon is-idle">
+          <FaSort aria-hidden="true" />
+        </span>
+      );
+    }
+    return (
+      <span className="sort-icon">
+        {scenarioSort.dir === "asc" ? <FaSortUp aria-hidden="true" /> : <FaSortDown aria-hidden="true" />}
+      </span>
+    );
   };
 
   const copySectionIds = useMemo(() => getAllCopySectionIds(), []);
@@ -1016,14 +1123,31 @@ export default function SelectPage() {
   const prevRealFxValue = Number(inputs?.temelBilgiler?.performans?.prevYearRealizedFxUsdToLocal || 0);
   const prevRealFxMissing = isLocalScenario && !(Number.isFinite(prevRealFxValue) && prevRealFxValue > 0);
 
-  const toolbarLocked =
-    selectedRowScenario?.status === "submitted" || selectedRowScenario?.status === "approved";
-  const canEditToolbar = Boolean(selectedRowScenario) && !toolbarLocked;
-  const canDeleteToolbar = Boolean(selectedRowScenario) && !toolbarLocked;
+  const permissionScope = useMemo(
+    () => ({
+      countryId: auth.user?.country_id ?? null,
+      schoolId: selectedSchoolId != null ? Number(selectedSchoolId) : null,
+    }),
+    [auth.user?.country_id, selectedSchoolId]
+  );
+  const canCreateScenario = can(auth.user, "scenario.create", "write", permissionScope);
+  const canEditScenarioPlan = can(auth.user, "scenario.plan_edit", "write", permissionScope);
+  const canCopyScenario = can(auth.user, "scenario.copy", "write", permissionScope);
+  const canSubmitScenario = can(auth.user, "scenario.submit", "write", permissionScope);
+  const canDeleteScenario = can(auth.user, "scenario.delete", "write", permissionScope);
+
+  // Lock editing when the scenario has been forwarded to admins (sent_for_approval)
+  // or when it has been admin‑approved.  Manager‑approved scenarios (status
+  // 'approved' with sent_at null) remain editable until they are sent
+  // onward via the manager workflow.
+  const toolbarLocked = Boolean(selectedRowScenario) && isScenarioLocked(selectedRowScenario);
+  const canEditToolbar = Boolean(selectedRowScenario) && !toolbarLocked && canEditScenarioPlan;
+  const canDeleteToolbar = Boolean(selectedRowScenario) && !toolbarLocked && canDeleteScenario;
   const canSubmitToolbar =
     Boolean(selectedRowScenario) &&
-    (selectedRowScenario.status === "draft" || selectedRowScenario.status === "revision_requested");
-  const canCopyToolbar = Boolean(selectedRowScenario) && inputs;
+    (selectedRowScenario.status === "draft" || selectedRowScenario.status === "revision_requested") &&
+    canSubmitScenario;
+  const canCopyToolbar = Boolean(selectedRowScenario) && inputs && canCopyScenario;
   const toolbarIsCopying =
     selectedRowScenario && String(copyingScenarioId) === String(selectedRowScenario.id);
   const toolbarIsSubmitting =
@@ -1101,6 +1225,7 @@ export default function SelectPage() {
   }
 
   function openScenarioWizardCreate() {
+    if (!canCreateScenario) return;
     if (!selectedSchoolId) {
       setErr("Once okul secin.");
       return;
@@ -1113,10 +1238,11 @@ export default function SelectPage() {
   }
 
   async function openScenarioWizardEdit(scenarioId) {
+    if (!canEditScenarioPlan) return;
     if (!selectedSchoolId) return;
     setErr("");
     const targetScenario = scenarios.find((s) => String(s.id) === String(scenarioId));
-    if (targetScenario && (targetScenario.status === "submitted" || targetScenario.status === "approved")) {
+    if (targetScenario && isScenarioLocked(targetScenario)) {
       setErr("Senaryo onayda veya onaylandi, duzenlenemez.");
       return;
     }
@@ -1369,6 +1495,7 @@ export default function SelectPage() {
   };
 
   function openCopyScenarioModal() {
+    if (!canCopyScenario) return;
     if (!selectedScenarioIdLocal || !selectedScenario || !inputs) return;
     if (copyingScenarioId) return;
     setErr("");
@@ -1441,6 +1568,7 @@ export default function SelectPage() {
   }
 
   async function copySelectedScenario(copyOptions = {}) {
+    if (!canCopyScenario) return;
     if (!selectedScenarioIdLocal || !selectedScenario || !inputs) return;
     if (copyingScenarioId) return;
     if (!selectedScenario.academic_year) {
@@ -1554,7 +1682,13 @@ export default function SelectPage() {
         clonedInputs.temelBilgiler.performans.prevYearRealizedFxUsdToLocal = Number(copyFxParsed);
       }
 
-      await api.saveScenarioInputs(selectedSchoolId, created.id, clonedInputs);
+      // Determine which permission resources are modified based on the user's selection.  The
+      // backend requires a list of modifiedResources for non‑admin users to enforce
+      // granular write permissions.  Without this list, principals and managers
+      // would be blocked from copying scenarios.  See COPY_SECTION_RESOURCES
+      // mapping above for how selection keys map to permission resources.
+      const modifiedResources = buildModifiedResourcesFromCopySelection(selection);
+      await api.saveScenarioInputs(selectedSchoolId, created.id, clonedInputs, modifiedResources);
 
       await refreshScenarios();
       setSelectedScenarioIdLocal(created.id);
@@ -1567,6 +1701,7 @@ export default function SelectPage() {
   }
 
   function openDeleteScenarioModal(scenarioId) {
+    if (!canDeleteScenario) return;
     if (!scenarioId || scenarioOpsBusy) return;
     setDeleteConfirmScenarioId(scenarioId);
   }
@@ -1579,11 +1714,12 @@ export default function SelectPage() {
   }
 
   async function deleteScenario(scenarioId) {
+    if (!canDeleteScenario) return;
     if (!selectedSchoolId || !scenarioId) return;
     if (scenarioOpsBusy) return;
     const target = scenarios.find((s) => String(s.id) === String(scenarioId));
     if (!target) return;
-    if (target.status === "submitted" || target.status === "approved") {
+    if (isScenarioLocked(target)) {
       setErr("Senaryo onayda veya onaylandi, silinemez.");
       return;
     }
@@ -1697,7 +1833,13 @@ export default function SelectPage() {
   }
 
   async function submitScenarioForApproval(scenarioId) {
+    if (!canSubmitScenario) return;
     if (!selectedSchoolId || !scenarioId || scenarioId !== selectedScenarioIdLocal) return;
+    const status = String(selectedScenario?.status || "draft");
+    if (!["draft", "revision_requested"].includes(status)) {
+      setErr("Senaryo onayda veya onaylandi, gonderilemez.");
+      return;
+    }
     if (!ensurePrevRealFxForLocal("Onaya gonderme")) return;
     if (!ensurePlanningStudentsForY2Y3("Onaya gonderme")) return;
     if (submittingScenarioId) return;
@@ -1705,10 +1847,8 @@ export default function SelectPage() {
     setErr("");
     setSubmittingScenarioId(scenarioId);
     try {
-      const shouldCalculate = !report;
-      if (shouldCalculate) {
-        await calculate({ keepTab: true });
-      }
+      const calcOk = await calculate({ keepTab: true });
+      if (!calcOk) return;
       const data = await api.submitScenario(selectedSchoolId, scenarioId);
       toast.success("Senaryo onaya gonderildi.");
       if (data?.scenario) {
@@ -1743,7 +1883,13 @@ export default function SelectPage() {
     // that when switching schools or scenarios the user lands on the same
     // section (e.g. Gelirler). If no global route has been recorded, default
     // to the "temel-bilgiler" page.
+    // Persist the selected scenario for the chosen school.  Also write
+    // the last active school ID so that the sidebar can immediately
+    // render navigation items without requiring a page refresh.  Without
+    // this call, users have reported that the nav menu only appears
+    // after refreshing the page.  See issue reported by testers.
     writeSelectedScenarioId(selectedSchoolId, selectedScenarioIdLocal);
+    writeLastActiveSchoolId(selectedSchoolId);
     const seg = readGlobalLastRouteSegment() || "temel-bilgiler";
     navigate(`/schools/${selectedSchoolId}/${seg}`, { replace: true });
   };
@@ -2430,75 +2576,85 @@ export default function SelectPage() {
               <div className="scenario-toolbar" style={{ marginTop: 10 }}>
                 {/* Yeni Senaryo button moved here to be the first action in the toolbar. It remains disabled when
                     no school is selected or an operation is in progress. */}
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={openScenarioWizardCreate}
-                  disabled={!selectedSchoolId || scenarioOpsBusy}
-                  title="Yeni Senaryo"
-                >
-                  <span className="btn-inner">
-                    <span>Yeni Senaryo</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    if (!selectedRowScenario) return;
-                    openScenarioWizardEdit(selectedRowScenario.id);
-                  }}
-                  disabled={!canEditToolbar || scenarioOpsBusy}
-                  title="Planlamayi Duzenle"
-                >
-                  <span className="btn-inner">
-                    <span>Planlamayi Duzenle</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={openCopyScenarioModal}
-                  disabled={!canCopyToolbar || calculating || scenarioOpsBusy}
-                  title="Kopyala"
-                >
-                  <span className="btn-inner">
-                    {toolbarIsCopying ? <InlineSpinner /> : null}
-                    <span>Kopyala</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="btn primary"
-                  onClick={() => {
-                    if (!selectedRowScenario) return;
-                    submitScenarioForApproval(selectedRowScenario.id);
-                  }}
-                  disabled={!canSubmitToolbar || calculating || scenarioOpsBusy}
-                  title="Onaya Gonder"
-                >
-                  <span className="btn-inner">
-                    {/* Show a spinner while submitting; otherwise show an approval icon. */}
-                    {toolbarIsSubmitting ? <InlineSpinner /> : <FaCheckCircle style={{ marginRight: 4 }} />}
-                    <span>Onaya Gonder</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="btn danger"
-                  onClick={() => {
-                    if (!selectedRowScenario) return;
-                    openDeleteScenarioModal(selectedRowScenario.id);
-                  }}
-                  disabled={!canDeleteToolbar || calculating || scenarioOpsBusy}
-                  title="Sil"
-                >
-                  <span className="btn-inner">
-                    {/* Show a spinner while deleting; otherwise show a trash icon. */}
-                    {toolbarIsDeleting ? <InlineSpinner /> : <FaTrash style={{ marginRight: 4 }} />}
-                    <span>Sil</span>
-                  </span>
-                </button>
+                {canCreateScenario ? (
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={openScenarioWizardCreate}
+                    disabled={!selectedSchoolId || scenarioOpsBusy}
+                    title="Yeni Senaryo"
+                  >
+                    <span className="btn-inner">
+                      <span>Yeni Senaryo</span>
+                    </span>
+                  </button>
+                ) : null}
+                {canEditScenarioPlan ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      if (!selectedRowScenario) return;
+                      openScenarioWizardEdit(selectedRowScenario.id);
+                    }}
+                    disabled={!canEditToolbar || scenarioOpsBusy}
+                    title="Planlamayi Duzenle"
+                  >
+                    <span className="btn-inner">
+                      <span>Planlamayi Duzenle</span>
+                    </span>
+                  </button>
+                ) : null}
+                {canCopyScenario ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={openCopyScenarioModal}
+                    disabled={!canCopyToolbar || calculating || scenarioOpsBusy}
+                    title="Kopyala"
+                  >
+                    <span className="btn-inner">
+                      {toolbarIsCopying ? <InlineSpinner /> : null}
+                      <span>Kopyala</span>
+                    </span>
+                  </button>
+                ) : null}
+                {canSubmitScenario ? (
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={() => {
+                      if (!selectedRowScenario) return;
+                      submitScenarioForApproval(selectedRowScenario.id);
+                    }}
+                    disabled={!canSubmitToolbar || calculating || scenarioOpsBusy}
+                    title="Onaya Gonder"
+                  >
+                    <span className="btn-inner">
+                      {/* Show a spinner while submitting; otherwise show an approval icon. */}
+                      {toolbarIsSubmitting ? <InlineSpinner /> : <FaCheckCircle style={{ marginRight: 4 }} />}
+                      <span>Onaya Gonder</span>
+                    </span>
+                  </button>
+                ) : null}
+                {canDeleteScenario ? (
+                  <button
+                    type="button"
+                    className="btn danger"
+                    onClick={() => {
+                      if (!selectedRowScenario) return;
+                      openDeleteScenarioModal(selectedRowScenario.id);
+                    }}
+                    disabled={!canDeleteToolbar || calculating || scenarioOpsBusy}
+                    title="Sil"
+                  >
+                    <span className="btn-inner">
+                      {/* Show a spinner while deleting; otherwise show a trash icon. */}
+                      {toolbarIsDeleting ? <InlineSpinner /> : <FaTrash style={{ marginRight: 4 }} />}
+                      <span>Sil</span>
+                    </span>
+                  </button>
+                ) : null}
               </div>
               <div className="select-table-body select-table-body-gap">
                 <table className="table scenario-table">
@@ -2573,7 +2729,7 @@ export default function SelectPage() {
                     </tr>
                   ) : (
                     sortedScenarios.map((s) => {
-                      const statusMeta = getScenarioStatusMeta(s.status);
+                      const statusMeta = getScenarioStatusMeta(s);
                       const isSelected = String(selectedScenarioIdLocal) === String(s.id);
                       const isThisRowBusy = String(s.id) === String(busyRowId);
                       const isOtherRowDisabled = scenarioOpsBusy && busyRowId && !isThisRowBusy;

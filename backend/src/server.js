@@ -10,6 +10,7 @@ const compression = require("compression");
 
 const authRoutes = require("./routes/auth");
 const adminRoutes = require("./routes/admin");
+const managerRoutes = require("./routes/manager");
 const schoolsRoutes = require("./routes/schools");
 const normRoutes = require("./routes/norm");
 const scenariosRoutes = require("./routes/scenarios");
@@ -30,6 +31,9 @@ app.get("/api/health", (req, res) => res.json({ ok: true, name: "feasibility-bac
 
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
+// Manager routes allow non-admin users with the manage_permissions permission to manage
+// roles and permissions within their assigned country.  They are mounted under /api/manager.
+app.use("/api/manager", managerRoutes);
 app.use("/api/schools", schoolsRoutes);
 
 // norm routes include /schools/:id/norm-config

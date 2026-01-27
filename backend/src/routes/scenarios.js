@@ -2,9 +2,18 @@
 
 const express = require("express");
 const { getPool } = require("../db");
-const { requireAuth, requireAssignedCountry } = require("../middleware/auth");
+const {
+  requireAuth,
+  requireAssignedCountry,
+  requireSchoolContextAccess,
+  requireSchoolPermission,
+  requireAnySchoolRead,
+  requireRole,
+  requirePermission,
+} = require('../middleware/auth');
 const { calculateSchoolFeasibility } = require("../engine/feasibilityEngine");
 const { computeScenarioProgress } = require("../utils/scenarioProgress");
+const { computeScenarioWorkflowStatus, REQUIRED_WORK_IDS } = require("../utils/scenarioWorkflow");
 const { getProgressConfig } = require("../utils/progressConfig");
 const { normalizeProgramType } = require("../utils/programType");
 const { getPrevScenario } = require("../utils/report/getPrevScenario");
@@ -24,6 +33,7 @@ const { buildGelirlerAoa } = require("../utils/excel/gelirlerAoa");
 const { buildGiderlerAoa } = require("../utils/excel/giderlerAoa");
 const { buildNormAoa } = require("../utils/excel/normAoa");
 const { buildMaliTablolarAoa } = require("../utils/excel/maliTablolarAoa");
+const { getUserPermissions, hasPermission } = require("../utils/permissionService");
 const fs = require("fs");
 const path = require("path");
 const ExcelJS = require("exceljs");
@@ -35,6 +45,12 @@ const { promisify } = require("util");
 const router = express.Router();
 router.use(requireAuth);
 router.use(requireAssignedCountry);
+
+// Ensure principal users are assigned to the school for all school‑specific scenario routes.
+// This middleware runs for any route beginning with /schools/:schoolId and will
+// verify that the school exists in the user's country and that principals are
+// assigned to the school. Admins bypass the check.
+router.use('/schools/:schoolId', requireSchoolContextAccess('schoolId'));
 
 const execFileAsync = promisify(execFile);
 
@@ -370,10 +386,30 @@ async function assertSchoolInUserCountry(pool, schoolId, countryId) {
 
 async function assertScenarioInSchool(pool, scenarioId, schoolId) {
   const [[s]] = await pool.query(
-    "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id AND school_id=:school_id",
+    `SELECT id, name, academic_year, status,
+            submitted_at, submitted_by,
+            reviewed_at, reviewed_by,
+            review_note,
+            sent_at, sent_by,
+            checked_at, checked_by,
+            input_currency, local_currency_code, fx_usd_to_local, program_type
+     FROM school_scenarios
+     WHERE id=:id AND school_id=:school_id`,
     { id: scenarioId, school_id: schoolId }
   );
   return s || null;
+}
+
+function isScenarioLocked(scenario) {
+  const status = String(scenario?.status || "draft");
+  const submittedAt = scenario?.submitted_at != null;
+  const sentAt = scenario?.sent_at != null;
+  return (
+    status === "sent_for_approval" ||
+    status === "submitted" ||
+    (status === "approved" && sentAt) ||
+    (status === "in_review" && submittedAt)
+  );
 }
 
 /**
@@ -389,13 +425,29 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
     const limitValue = Number(req.query?.limit);
     const offsetValue = Number(req.query?.offset);
     const fieldsParam = String(req.query?.fields || "all").toLowerCase();
-    const briefColumns = ["id", "name", "academic_year", "status", "created_at", "submitted_at"];
+    // Include checked_at and checked_by in both brief and default column sets so
+    // clients can distinguish between manager-level approval and admin-level
+    // approval.  The brief set is used when a compact payload is requested.
+    const briefColumns = [
+      "id",
+      "name",
+      "academic_year",
+      "status",
+      "created_at",
+      "submitted_at",
+      "sent_at",
+      "checked_at",
+      "checked_by",
+    ];
     const defaultColumns = [
       "id",
       "name",
       "academic_year",
       "status",
       "submitted_at",
+      "sent_at",
+      "checked_at",
+      "checked_by",
       "reviewed_at",
       "review_note",
       "created_by",
@@ -450,7 +502,10 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
  * POST /schools/:schoolId/scenarios
  * Body: { name, academicYear }
  */
-router.post("/schools/:schoolId/scenarios", async (req, res) => {
+router.post(
+  "/schools/:schoolId/scenarios",
+  requirePermission("scenario.create", "write", { schoolIdParam: "schoolId" }),
+  async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
     const {
@@ -801,13 +856,17 @@ router.post("/schools/:schoolId/scenarios", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
-});
+  }
+);
 
 /**
  * PATCH /schools/:schoolId/scenarios/:scenarioId
  * Body: { name?, academicYear?, kademeConfig? }
  */
-router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
+router.patch(
+  "/schools/:schoolId/scenarios/:scenarioId",
+  requirePermission("scenario.plan_edit", "write", { schoolIdParam: "schoolId" }),
+  async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
     const scenarioId = Number(req.params.scenarioId);
@@ -862,7 +921,12 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
       };
     }
 
-    if (scenario.status === "submitted" || scenario.status === "approved") {
+    // Prevent modifications once a scenario has been sent for final approval
+    // or has been approved by an admin.  Manager‑approved scenarios (status
+    // 'approved' but sent_at is NULL) remain editable until they are sent
+    // onward via the send‑for‑approval endpoint.
+    const isLocked = isScenarioLocked(scenario);
+    if (isLocked) {
       return res.status(409).json({ error: "Scenario locked. Awaiting admin review." });
     }
 
@@ -977,12 +1041,16 @@ router.patch("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
     if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
-});
+  }
+);
 
 /**
  * DELETE /schools/:schoolId/scenarios/:scenarioId
  */
-router.delete("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
+router.delete(
+  "/schools/:schoolId/scenarios/:scenarioId",
+  requirePermission("scenario.delete", "write", { schoolIdParam: "schoolId" }),
+  async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
     const scenarioId = Number(req.params.scenarioId);
@@ -994,8 +1062,8 @@ router.delete("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
     const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
-    const status = scenario.status || "draft";
-    if (status === "submitted" || status === "approved") {
+    const locked = isScenarioLocked(scenario);
+    if (locked) {
       return res.status(409).json({ error: "Scenario locked. Awaiting admin review." });
     }
 
@@ -1008,12 +1076,20 @@ router.delete("/schools/:schoolId/scenarios/:scenarioId", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
-});
+  }
+);
 
 /**
  * GET /schools/:schoolId/scenarios/:scenarioId/inputs
  */
-router.get("/schools/:schoolId/scenarios/:scenarioId/inputs", async (req, res) => {
+router.get(
+  "/schools/:schoolId/scenarios/:scenarioId/inputs",
+  // Require that the user has at least one read or write permission within this
+  // school.  Using requireAnySchoolRead avoids forcing a dependency on the
+  // page.dashboard permission and allows users with module-specific access
+  // to fetch scenario inputs.
+  requireAnySchoolRead('schoolId'),
+  async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
     const scenarioId = Number(req.params.scenarioId);
@@ -1041,36 +1117,268 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/inputs", async (req, res) =
 
 /**
  * PUT /schools/:schoolId/scenarios/:scenarioId/inputs
- * Body: { inputs }
+ *
+ * Body: { inputs, modifiedPaths }
+ *
+ * This route saves the provided scenario inputs. For non‑admin users it enforces
+ * two constraints:
+ *   1. The user must be allowed to access the school (see requireSchoolContextAccess).
+ *   2. The user must have appropriate write permissions for each modified input
+ *      path.  The client is required to send an array of modifiedPaths when
+ *      updating a scenario.  Each path is mapped to one or more resource keys
+ *      (page‑level and/or section‑level); the user must have write permission
+ *      for at least one of those resources within the scope of their country
+ *      and school.  Admins bypass these checks.
  */
-router.put("/schools/:schoolId/scenarios/:scenarioId/inputs", async (req, res) => {
-  try {
-    const schoolId = Number(req.params.schoolId);
-    const scenarioId = Number(req.params.scenarioId);
-    const { inputs } = req.body || {};
-    if (!inputs || typeof inputs !== "object")
-      return res.status(400).json({ error: "inputs object is required" });
+router.put(
+  "/schools/:schoolId/scenarios/:scenarioId/inputs",
+  requireSchoolContextAccess("schoolId"),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      // The request body may contain either `modifiedResources` (preferred) or
+      // `modifiedPaths` (legacy).  When modifiedResources are provided the
+      // backend will validate permissions directly on those resource keys.
+      const { inputs, modifiedResources, modifiedPaths } = req.body || {};
+      if (!inputs || typeof inputs !== "object") {
+        return res.status(400).json({ error: "inputs object is required" });
+      }
+      // For non-admins, ensure a list of modified resources or paths is provided
+      const isAdmin = String(req.user.role) === 'admin';
+      // Determine which list of modifications to use.  modifiedResources takes
+      // precedence.  If both are empty, non-admins are not allowed to save.
+      const resourcesList = Array.isArray(modifiedResources) && modifiedResources.length > 0 ? modifiedResources : null;
+      const pathsList = !resourcesList && Array.isArray(modifiedPaths) && modifiedPaths.length > 0 ? modifiedPaths : null;
+      if (!isAdmin) {
+        if (!resourcesList && !pathsList) {
+          return res.status(400).json({ error: "modifiedResources (or legacy modifiedPaths) array is required for non-admin users" });
+        }
+      }
 
-    const pool = getPool();
-    const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
-    if (!school) return res.status(404).json({ error: "School not found" });
+      const pool = getPool();
+      // Validate that the school exists in user's country
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+      const scenarioLocked = isScenarioLocked(scenario);
+      if (scenarioLocked) {
+        return res.status(409).json({ error: 'Scenario locked. Awaiting admin review.' });
+      }
 
-    const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
-    if (!scenario) return res.status(404).json({ error: "Scenario not found" });
-    if (scenario.status === "submitted" || scenario.status === "approved") {
-      return res.status(409).json({ error: "Scenario locked. Awaiting admin review." });
+      // Permission enforcement for non‑admin users
+      if (!isAdmin) {
+        // Load permissions if not already on request
+        if (!req._permissions) {
+          req._permissions = await getUserPermissions(pool, req.user.id);
+        }
+        const countryId = req.user.country_id;
+        const schoolIdScoped = schoolId;
+        // If modifiedResources are provided, validate them directly
+        if (resourcesList) {
+          for (const rawResource of resourcesList) {
+            const resKey = String(rawResource || '').trim();
+            if (!resKey) continue;
+            // Support wildcard suffix '.*' by stripping it for checking
+            let baseKey = resKey;
+            if (resKey.endsWith('.*')) {
+              baseKey = resKey.slice(0, -2);
+            }
+            // Build candidate resource keys: the baseKey and its page-level key if it is a section
+            const candidates = [];
+            candidates.push(baseKey);
+            if (baseKey.startsWith('section.')) {
+              const parts = baseKey.split('.');
+              if (parts.length >= 3) {
+                const page = parts[1];
+                candidates.push(`page.${page}`);
+              }
+            }
+            let authorized = false;
+            for (const candidate of candidates) {
+              if (
+                hasPermission(req._permissions, {
+                  resource: candidate,
+                  action: 'write',
+                  countryId,
+                  schoolId: schoolIdScoped,
+                })
+              ) {
+                authorized = true;
+                break;
+              }
+            }
+            if (!authorized) {
+              return res.status(403).json({ error: `Missing write permission for resource: ${resKey}` });
+            }
+          }
+        } else if (pathsList) {
+          // Fallback: infer permissions from modifiedPaths for backward compatibility
+          const toSnakeCase = (str) => {
+            return String(str || '')
+              .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+              .replace(/\./g, '.')
+              .toLowerCase();
+          };
+          for (const rawPath of pathsList) {
+            const path = String(rawPath || '').trim();
+            if (!path) continue;
+            const tokens = path.split('.');
+            let pageKey = null;
+            let sectionKey = null;
+            if (tokens.length >= 2) {
+              if (tokens[0] === 'inputs') {
+                pageKey = toSnakeCase(tokens[1]);
+                if (tokens.length >= 3) {
+                  sectionKey = toSnakeCase(tokens[2]);
+                }
+              } else {
+                pageKey = toSnakeCase(tokens[0]);
+                sectionKey = tokens[1] ? toSnakeCase(tokens[1]) : null;
+              }
+            }
+            if (pageKey) {
+              const pageAliases = {
+                grades_years: 'grades_plan',
+                grades_current: 'grades_plan',
+                grades: 'grades_plan',
+              };
+              if (Object.prototype.hasOwnProperty.call(pageAliases, pageKey)) {
+                pageKey = pageAliases[pageKey];
+              }
+              if (pageKey === 'grades_plan') {
+                sectionKey = 'plan';
+              } else if (pageKey === 'kapasite') {
+                sectionKey = 'caps';
+              }
+            }
+            const candidates = [];
+            if (pageKey) candidates.push(`page.${pageKey}`);
+            if (pageKey && sectionKey) candidates.push(`section.${pageKey}.${sectionKey}`);
+            let authorized = false;
+            for (const resource of candidates) {
+              if (
+                hasPermission(req._permissions, {
+                  resource,
+                  action: 'write',
+                  countryId,
+                  schoolId: schoolIdScoped,
+                })
+              ) {
+                authorized = true;
+                break;
+              }
+            }
+            if (!authorized) {
+              return res.status(403).json({ error: `Missing write permission for modified path: ${path}` });
+            }
+          }
+        }
+      }
+
+      // Save inputs
+      await pool.query(
+        'UPDATE scenario_inputs SET inputs_json=:json, updated_by=:u WHERE scenario_id=:id',
+        { json: JSON.stringify(inputs), u: req.user.id, id: scenarioId }
+      );
+
+      // Automatically revert work items to in_progress when principals or HR
+      // modify their inputs.  Only consider non-admin users and when a list
+      // of modified resources or paths is provided.
+      if (!isAdmin) {
+        const workEntries = [];
+        // Helper to record a revert entry for a given resource key
+        const addEntry = (resKey) => {
+          if (!resKey) return;
+          // Normalize: strip wildcard
+          const base = resKey.endsWith('.*') ? resKey.slice(0, -2) : resKey;
+          if (!base.startsWith('section.')) return;
+          const parts = base.split('.');
+          if (parts.length < 3) return;
+          const workId = `${parts[1]}.${parts.slice(2).join('.')}`;
+          workEntries.push({ resource: base, workId });
+        };
+        if (resourcesList) {
+          for (const rawRes of resourcesList) {
+            const rk = String(rawRes || '').trim();
+            if (!rk) continue;
+            addEntry(rk);
+          }
+        } else if (pathsList) {
+          // Derive resources from modified paths (legacy support)
+          const toSnakeCase = (str) => {
+            return String(str || '')
+              .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+              .replace(/\./g, '.')
+              .toLowerCase();
+          };
+          for (const rawPath of pathsList) {
+            const pth = String(rawPath || '').trim();
+            if (!pth) continue;
+            const tokens = pth.split('.');
+            let pageKey = null;
+            let sectionKey = null;
+            if (tokens.length >= 2) {
+              if (tokens[0] === 'inputs') {
+                pageKey = toSnakeCase(tokens[1]);
+                if (tokens.length >= 3) {
+                  sectionKey = toSnakeCase(tokens[2]);
+                }
+              } else {
+                pageKey = toSnakeCase(tokens[0]);
+                sectionKey = tokens[1] ? toSnakeCase(tokens[1]) : null;
+              }
+            }
+            if (pageKey && sectionKey) {
+              addEntry(`section.${pageKey}.${sectionKey}`);
+            }
+          }
+        }
+        if (workEntries.length > 0) {
+          // Perform the updates in a loop.  We cannot batch because of
+          // ON DUPLICATE KEY constraints referencing variables.
+          for (const { resource: resKey, workId: wid } of workEntries) {
+            await pool.query(
+              `INSERT INTO scenario_work_items
+                (scenario_id, work_id, resource, state, updated_by, updated_at, submitted_at, reviewed_at, manager_comment)
+               VALUES
+                (:sid, :wid, :res, 'in_progress', :uid, CURRENT_TIMESTAMP, NULL, NULL, NULL)
+               ON DUPLICATE KEY UPDATE
+                resource=VALUES(resource),
+                state='in_progress',
+                updated_by=VALUES(updated_by),
+                updated_at=CURRENT_TIMESTAMP,
+                -- Do not reset submitted_at; leave it so managers know when the prior submission occurred
+                manager_comment=NULL`,
+              {
+                sid: scenarioId,
+                wid: wid,
+                res: resKey.endsWith('.*') ? resKey.slice(0, -2) : resKey,
+                uid: req.user.id,
+              }
+            );
+          }
+
+          // After reverting one or more work items to in_progress, recompute
+          // the overall scenario workflow status.  This ensures that the
+          // scenario status transitions back to 'in_review' if needed.  Any
+          // errors during status computation are ignored so that input
+          // saving still succeeds.
+          try {
+            await computeScenarioWorkflowStatus(pool, scenarioId);
+          } catch (_) {
+            // ignore errors
+          }
+        }
+      }
+
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
     }
-
-    await pool.query(
-      "UPDATE scenario_inputs SET inputs_json=:json, updated_by=:u WHERE scenario_id=:id",
-      { json: JSON.stringify(inputs), u: req.user.id, id: scenarioId }
-    );
-
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
-});
+);
 
 /**
  * POST /schools/:schoolId/scenarios/:scenarioId/calculate
@@ -1119,9 +1427,12 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/calculate", async (req, re
 
 /**
  * POST /schools/:schoolId/scenarios/:scenarioId/submit
- * Submits a scenario for admin review
+ * This legacy endpoint submits a scenario to the manager.  It now
+ * functions identically to the new /send-to-manager route and sets
+ * the scenario status to 'in_review'.  The name and action are
+ * retained for backward compatibility.
  */
-router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) => {
+async function submitScenarioToManager(req, res) {
   try {
     const schoolId = Number(req.params.schoolId);
     const scenarioId = Number(req.params.scenarioId);
@@ -1133,9 +1444,10 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
     const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
-    const status = scenario.status || "draft";
-    if (!["draft", "revision_requested"].includes(status)) {
-      return res.status(409).json({ error: "Scenario already submitted." });
+    const status = scenario.status || 'draft';
+    // Only draft or revision_requested scenarios may be sent to the manager
+    if (!['draft', 'revision_requested'].includes(status)) {
+      return res.status(409).json({ error: 'Scenario already submitted.' });
     }
 
     const [[inputsRow]] = await pool.query(
@@ -1182,12 +1494,18 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
 
     await pool.query(
       `UPDATE school_scenarios
-       SET status='submitted',
+       SET status='in_review',
            submitted_at=CURRENT_TIMESTAMP,
            submitted_by=:u,
            reviewed_at=NULL,
            reviewed_by=NULL,
            review_note=NULL,
+           -- Clear sent_at/sent_by to indicate this is a new submission
+           sent_at=NULL,
+           sent_by=NULL,
+           -- Clear checked_at/checked_by when resubmitting to start a new review cycle
+           checked_at=NULL,
+           checked_by=NULL,
            progress_pct=:progress_pct,
            progress_json=:progress_json,
            progress_calculated_at=CURRENT_TIMESTAMP
@@ -1207,16 +1525,432 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/submit", async (req, res) 
     );
 
     const [[updated]] = await pool.query(
-      "SELECT id, name, academic_year, status, submitted_at, reviewed_at, review_note, input_currency, local_currency_code, fx_usd_to_local, program_type FROM school_scenarios WHERE id=:id",
+      `SELECT id, name, academic_year, status, submitted_at, submitted_by,
+              reviewed_at, reviewed_by, review_note,
+              sent_at, sent_by,
+              checked_at, checked_by,
+              input_currency, local_currency_code, fx_usd_to_local, program_type
+       FROM school_scenarios WHERE id=:id`,
       { id: scenarioId }
     );
 
     return res.json({ scenario: updated || null });
   } catch (e) {
-    if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
-    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    if (e?.status) return res.status(e.status).json({ error: e.message || 'Invalid inputs' });
+    return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
   }
-});
+}
+
+// Legacy submit endpoint – forwards to submitScenarioToManager
+router.post(
+  '/schools/:schoolId/scenarios/:scenarioId/submit',
+  requirePermission("scenario.submit", "write", { schoolIdParam: "schoolId" }),
+  submitScenarioToManager
+);
+
+// New route name for sending a scenario to the manager
+router.post(
+  '/schools/:schoolId/scenarios/:scenarioId/send-to-manager',
+  requirePermission("scenario.submit", "write", { schoolIdParam: "schoolId" }),
+  submitScenarioToManager
+);
+
+/**
+ * GET /schools/:schoolId/scenarios/:scenarioId/work-items
+ *
+ * Returns a list of work items for the given scenario.  Each work item
+ * represents a page or section that can be individually submitted for
+ * manager review.  The caller must have access to the school context.
+ */
+router.get(
+  '/schools/:schoolId/scenarios/:scenarioId/work-items',
+  requireSchoolContextAccess('schoolId'),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+      const [rows] = await pool.query(
+        `SELECT work_id, resource, state, updated_by, updated_at, submitted_at, reviewed_at, manager_comment
+         FROM scenario_work_items
+         WHERE scenario_id=:sid
+         ORDER BY work_id ASC`,
+        { sid: scenarioId }
+      );
+      return res.json({ workItems: rows });
+    } catch (e) {
+      return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
+ * POST /schools/:schoolId/scenarios/:scenarioId/work-items/:workId/submit
+ *
+ * Marks a specific work item (module) as submitted by principals or HR.
+ * The caller must have write permission on the corresponding section
+ * resource.  If the work item does not exist it will be created.  The
+ * state will be set to 'submitted', submitted_at will be set, and
+ * reviewed_at/manager_comment will be cleared.  The scenario itself is
+ * not transitioned; that occurs when the manager sends the scenario for
+ * approval.
+ */
+router.post(
+  '/schools/:schoolId/scenarios/:scenarioId/work-items/:workId/submit',
+  requireSchoolContextAccess('schoolId'),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      const workIdRaw = String(req.params.workId || '').trim();
+      if (!workIdRaw) {
+        return res.status(400).json({ error: 'Invalid workId' });
+      }
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+      // Disallow submission once scenario is locked for admin review
+      const locked = isScenarioLocked(scenario);
+      if (locked) {
+        return res.status(409).json({ error: 'Scenario locked. Awaiting admin review.' });
+      }
+      // Determine the resource string and workId.  Allow clients to specify
+      // resource in the body; fall back to section.<workId>.
+      let resource = null;
+      if (req.body && typeof req.body.resource === 'string' && req.body.resource.trim()) {
+        resource = String(req.body.resource).trim();
+      } else {
+        resource = `section.${workIdRaw}`;
+      }
+      // Normalize the resource by removing a trailing wildcard
+      let baseResource = resource.endsWith('.*') ? resource.slice(0, -2) : resource;
+      // Extract workId from baseResource if possible
+      let workId = workIdRaw;
+      if (baseResource.startsWith('section.')) {
+        const parts = baseResource.split('.');
+        // parts[0] = 'section', parts[1] = page, parts[2] = section
+        if (parts.length >= 3) {
+          workId = `${parts[1]}.${parts.slice(2).join('.')}`;
+        } else if (parts.length === 2) {
+          workId = parts[1];
+        }
+      }
+      // Permission check: user must have write permission on either the
+      // specific section resource or its page-level parent.  Admins
+      // bypass the check via hasPermission logic.
+      const isAdmin = String(req.user.role) === 'admin';
+      if (!isAdmin) {
+        // Load permissions if not already present
+        if (!req._permissions) {
+          req._permissions = await getUserPermissions(pool, req.user.id);
+        }
+        const countryId = req.user.country_id;
+        const schoolIdScoped = schoolId;
+        const candidates = [];
+        candidates.push(baseResource);
+        if (baseResource.startsWith('section.')) {
+          const parts = baseResource.split('.');
+          if (parts.length >= 2) {
+            const page = parts[1];
+            candidates.push(`page.${page}`);
+          }
+        }
+        let ok = false;
+        for (const cand of candidates) {
+          if (
+            hasPermission(req._permissions, {
+              resource: cand,
+              action: 'write',
+              countryId,
+              schoolId: schoolIdScoped,
+            })
+          ) {
+            ok = true;
+            break;
+          }
+        }
+        if (!ok) {
+          return res.status(403).json({ error: `Missing write permission for resource: ${baseResource}` });
+        }
+      }
+      // Upsert the work item
+      await pool.query(
+        `INSERT INTO scenario_work_items
+          (scenario_id, work_id, resource, state, updated_by, updated_at, submitted_at, reviewed_at, manager_comment)
+         VALUES
+          (:sid, :work_id, :resource, 'submitted', :uid, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL)
+         ON DUPLICATE KEY UPDATE
+          resource=VALUES(resource),
+          state='submitted',
+          updated_by=VALUES(updated_by),
+          updated_at=CURRENT_TIMESTAMP,
+          submitted_at=CURRENT_TIMESTAMP,
+          reviewed_at=NULL,
+          manager_comment=NULL`,
+        {
+          sid: scenarioId,
+          work_id: workId,
+          resource: baseResource,
+          uid: req.user.id,
+        }
+      );
+      const [[updated]] = await pool.query(
+        `SELECT work_id, resource, state, updated_by, updated_at, submitted_at, reviewed_at, manager_comment
+         FROM scenario_work_items
+         WHERE scenario_id=:sid AND work_id=:wid`,
+        { sid: scenarioId, wid: workId }
+      );
+
+      // Recompute the scenario workflow status based on required work items.  The helper
+      // updates the scenario record when necessary.  Errors are ignored here so that
+      // submission can still proceed even if the status update fails.
+      try {
+        await computeScenarioWorkflowStatus(pool, scenarioId);
+      } catch (_) {
+        // ignore
+      }
+      return res.json({ workItem: updated || null });
+    } catch (e) {
+      return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
+ * POST /schools/:schoolId/scenarios/:scenarioId/work-items/:workId/review
+ *
+ * Managers or accountants use this endpoint to approve or request
+ * revisions on individual work items.  Passing action='approve' sets
+ * the work item state to 'approved'; action='revise' sets it to
+ * 'needs_revision' and updates the scenario status to 'revision_requested'.
+ * When approving an item, if all work items for the scenario are
+ * approved, the scenario status is set to 'approved' to indicate the
+ * manager has finished their review.  The optional comment is stored
+ * on the work item for audit purposes.
+ */
+router.post(
+  '/schools/:schoolId/scenarios/:scenarioId/work-items/:workId/review',
+  requireSchoolContextAccess('schoolId'),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      const workId = String(req.params.workId || '').trim();
+      const { action, comment } = req.body || {};
+      const act = String(action || '').trim().toLowerCase();
+      if (!['approve', 'revise'].includes(act)) {
+        return res.status(400).json({ error: 'Invalid action' });
+      }
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+      // Reviewer access check: allow managers, accountants, admins, or users with
+      // page.manage_permissions read/write permission.  Admin users bypass checks.
+      try {
+        const role = String(req.user?.role || '');
+        let canReview = false;
+        if (['admin', 'manager', 'accountant'].includes(role)) {
+          canReview = true;
+        } else {
+          // Non-standard roles: load permissions and check for manage_permissions
+          if (!req._permissions) {
+            req._permissions = await getUserPermissions(pool, req.user.id);
+          }
+          const perms = Array.isArray(req._permissions) ? req._permissions : [];
+          for (const perm of perms) {
+            if (
+              String(perm.resource) === 'page.manage_permissions' &&
+              (String(perm.action) === 'read' || String(perm.action) === 'write')
+            ) {
+              // Scope checks: manager permission may be scoped to a country or school.
+              const countryId = req.user?.country_id ?? null;
+              const permCountry = perm.scope_country_id != null ? Number(perm.scope_country_id) : null;
+              if (permCountry != null && countryId != null && Number(permCountry) !== Number(countryId)) {
+                continue;
+              }
+              // Only consider global or same-country permission
+              canReview = true;
+              break;
+            }
+          }
+        }
+        if (!canReview) {
+          return res.status(403).json({ error: 'Review access denied' });
+        }
+      } catch (permErr) {
+        return res.status(500).json({ error: 'Server error', details: String(permErr?.message || permErr) });
+      }
+
+      // Disallow reviewing once scenario is forwarded to admins
+      const locked =
+        scenario.status === 'sent_for_approval' ||
+        (scenario.status === 'approved' && scenario.sent_at != null);
+      if (locked) {
+        return res.status(409).json({ error: 'Scenario locked. Awaiting admin review.' });
+      }
+      // Ensure work item exists
+      const [[row]] = await pool.query(
+        `SELECT work_id, resource, state FROM scenario_work_items WHERE scenario_id=:sid AND work_id=:wid`,
+        { sid: scenarioId, wid: workId }
+      );
+      if (!row) {
+        return res.status(404).json({ error: 'Work item not found' });
+      }
+      // Determine next state.  Approve sets the state to 'approved'; revise sets it to 'needs_revision'.
+      let nextState = row.state;
+      if (act === 'approve') {
+        nextState = 'approved';
+      } else {
+        nextState = 'needs_revision';
+      }
+      // Update the work item
+      await pool.query(
+        `UPDATE scenario_work_items
+         SET state=:state,
+             updated_by=:uid,
+             updated_at=CURRENT_TIMESTAMP,
+             reviewed_at=CURRENT_TIMESTAMP,
+             manager_comment=:comment
+         WHERE scenario_id=:sid AND work_id=:wid`,
+        {
+          state: nextState,
+          uid: req.user.id,
+          comment: comment && String(comment).trim() ? String(comment).trim() : null,
+          sid: scenarioId,
+          wid: workId,
+        }
+      );
+      // Recompute the scenario workflow status.  This helper examines only
+      // required work items and updates the scenario status accordingly.
+      try {
+        await computeScenarioWorkflowStatus(pool, scenarioId);
+      } catch (_) {
+        // ignore compute errors
+      }
+
+      // After recomputing the workflow status, check if the scenario has
+      // transitioned to a manager-approved state.  A scenario is considered
+      // manager-approved ("Kontrol edildi") when its status is 'approved',
+      // it has not yet been forwarded to administrators (sent_at is NULL),
+      // and it has not already been marked as checked.  If these conditions
+      // are met, record the current timestamp and reviewer as the check.
+      try {
+        const [[sc2]] = await pool.query(
+          `SELECT status, sent_at, checked_at FROM school_scenarios WHERE id=:sid`,
+          { sid: scenarioId }
+        );
+        if (sc2 && sc2.status === 'approved' && sc2.sent_at == null && sc2.checked_at == null) {
+          await pool.query(
+            `UPDATE school_scenarios
+               SET checked_at=CURRENT_TIMESTAMP,
+                   checked_by=:uid
+             WHERE id=:sid`,
+            { uid: req.user.id, sid: scenarioId }
+          );
+        }
+      } catch (_) {
+        // ignore errors while setting checked_at/checked_by
+      }
+      const [[updatedItem]] = await pool.query(
+        `SELECT work_id, resource, state, updated_by, updated_at, submitted_at, reviewed_at, manager_comment
+         FROM scenario_work_items WHERE scenario_id=:sid AND work_id=:wid`,
+        { sid: scenarioId, wid: workId }
+      );
+      // Also return the updated scenario status
+      const [[updatedScenario]] = await pool.query(
+        `SELECT id, status, sent_at, sent_by, checked_at, checked_by, reviewed_at, reviewed_by, submitted_at, submitted_by
+         FROM school_scenarios WHERE id=:sid`,
+        { sid: scenarioId }
+      );
+      return res.json({ workItem: updatedItem || null, scenario: updatedScenario || null });
+    } catch (e) {
+      return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
+ * POST /schools/:schoolId/scenarios/:scenarioId/send-for-approval
+ *
+ * Managers use this endpoint to forward a manager‑approved scenario to
+ * administrators for final approval.  The scenario must currently be
+ * marked as 'approved' with all work items approved.  The call
+ * transitions the status to 'sent_for_approval', records the sent
+ * timestamp and actor, and locks further editing until an admin
+ * reviews the scenario.  If the scenario is not manager‑approved or
+ * if any work items remain unapproved, a 409 error is returned.
+ */
+router.post(
+  '/schools/:schoolId/scenarios/:scenarioId/send-for-approval',
+  requireSchoolContextAccess('schoolId'),
+  requireRole(['manager', 'accountant']),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: 'School not found' });
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: 'Scenario not found' });
+      // Scenario must be manager‑approved and not yet sent
+      if (scenario.sent_at != null) {
+        return res.status(409).json({ error: 'Scenario is not ready to send for approval' });
+      }
+      // Recompute the scenario workflow status prior to sending.  This ensures
+      // the scenario.status field reflects the latest required work item states.
+      try {
+        await computeScenarioWorkflowStatus(pool, scenarioId);
+      } catch (_) {
+        // ignore
+      }
+      // Reload scenario after recompute
+      const [[reloaded]] = await pool.query(
+        `SELECT id, status, sent_at FROM school_scenarios WHERE id=:sid`,
+        { sid: scenarioId }
+      );
+      if (!reloaded || reloaded.status !== 'approved') {
+        return res.status(409).json({ error: 'Not all required work items are approved' });
+      }
+      // Update scenario.  Use COALESCE to ensure checked_at/checked_by are set
+      // if they were not already recorded.  This preserves existing
+      // checked_at timestamps when resending scenarios that were
+      // previously approved but not forwarded.
+      await pool.query(
+        `UPDATE school_scenarios
+           SET status='sent_for_approval',
+               sent_at=CURRENT_TIMESTAMP,
+               sent_by=:uid,
+               checked_at=COALESCE(checked_at, CURRENT_TIMESTAMP),
+               checked_by=COALESCE(checked_by, :uid)
+         WHERE id=:sid`,
+        { uid: req.user.id, sid: scenarioId }
+      );
+      // Log a review event
+      await pool.query(
+        `INSERT INTO scenario_review_events (scenario_id, action, note, actor_user_id)
+         VALUES (:sid, 'submit', NULL, :uid)`,
+        { sid: scenarioId, uid: req.user.id }
+      );
+      const [[updated]] = await pool.query(
+        `SELECT id, status, sent_at, sent_by, checked_at, checked_by, reviewed_at, reviewed_by, submitted_at, submitted_by
+         FROM school_scenarios WHERE id=:sid`,
+        { sid: scenarioId }
+      );
+      return res.json({ scenario: updated || null });
+    } catch (e) {
+      return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
+    }
+  }
+);
 
 /**
  * GET /schools/:schoolId/scenarios/:scenarioId/report

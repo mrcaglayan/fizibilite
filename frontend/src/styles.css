@@ -10,10 +10,16 @@
     Arial,
     sans-serif;
 }
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  height: 100%;
+}
 body {
   margin: 0;
   background: #f6f7fb;
   color: #111;
+  min-height: 100%;
 }
 a {
   color: #2563eb;
@@ -30,6 +36,7 @@ a {
   margin: 0 auto;
   padding-left: 50px;
   padding-right: 50px;
+  padding-bottom: 96px;
 }
 .card {
   max-width: 100%;
@@ -299,6 +306,92 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 .table td {
   vertical-align: middle;
+}
+.perm-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.perm-mark.is-yes {
+  background: #ecfdf3;
+  border-color: #bbf7d0;
+  color: #16a34a;
+}
+.perm-mark.is-no {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #ef4444;
+}
+.perm-mark-icon {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.perm-toggle {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.perm-toggle .perm-mark {
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.perm-toggle:hover .perm-mark {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 12px rgba(15, 23, 42, 0.12);
+}
+.permissions-table th,
+.permissions-table td {
+  padding: 4px 6px;
+  line-height: 1.1;
+  font-size: 12px;
+}
+.permissions-table .perm-mark {
+  width: 22px;
+  height: 22px;
+}
+.permissions-table .perm-mark-icon {
+  width: 12px;
+  height: 12px;
+}
+.permissions-table .input.sm {
+  height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.permissions-table {
+  table-layout: fixed;
+}
+.permissions-table th:first-child,
+.permissions-table td:first-child {
+  width: 55%;
+}
+.permissions-table th:nth-child(2),
+.permissions-table td:nth-child(2),
+.permissions-table th:nth-child(3),
+.permissions-table td:nth-child(3) {
+  width: 80px;
+}
+.permissions-table th:nth-child(4),
+.permissions-table td:nth-child(4) {
+  width: 200px;
+}
+.permissions-table td:nth-child(4) .input.sm {
+  width: 100%;
+}
+.permissions-table th:nth-child(2),
+.permissions-table th:nth-child(3),
+.permissions-table td:nth-child(2),
+.permissions-table td:nth-child(3) {
+  text-align: center;
 }
 
 /* Select page fixed table panels */
@@ -1597,6 +1690,9 @@ hr {
   background: rgba(15, 23, 42, 0.04);
   color: #334155;
 }
+.school-page .school-pill.is-placeholder {
+  visibility: hidden;
+}
 .school-page .school-pill.is-muted {
   color: #64748b;
   background: rgba(148, 163, 184, 0.12);
@@ -1684,6 +1780,320 @@ hr {
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* Sticky footer (actions + status pills) */
+.school-page .school-sticky-footer {
+  position: fixed;
+  bottom: 0;
+  left: 250px;
+  right: 0;
+  z-index: 140;
+  padding: 0;
+  pointer-events: none;
+}
+.app-shell.is-collapsed .school-page .school-sticky-footer {
+  left: 88px;
+}
+.school-page .school-sticky-footer-inner {
+  min-height: 64px;
+  height: 64px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 0;
+  padding: 10px 50px;
+  box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(10px);
+  font-family: "Poppins", "Manrope", "Segoe UI", sans-serif;
+  pointer-events: auto;
+}
+
+/* Footer progress bar and modules */
+.school-page .school-footer-progress {
+  display: flex;
+  gap: 6px;
+  height: 10px;
+  width: 100%;
+  margin-bottom: 4px;
+}
+.school-page .school-footer-progress-seg {
+  flex: 1 1 0;
+  background: var(--neutral-200, #f3f4f6);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.school-page .school-footer-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent-500, #2563eb);
+}
+
+.school-page .school-footer-left {
+  /* Keep the status/metadata section sized to its content and prevent it from stretching. */
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: center;
+  grid-column: 1;
+  justify-self: start;
+  max-width: clamp(240px, 30vw, 360px);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+  height: 100%;
+  padding-bottom: 14px;
+}
+.school-page .school-footer-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  flex-wrap: nowrap;
+  min-height: 24px;
+}
+
+/* Module progress bar in sticky footer */
+.school-page .module-progress {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* Occupy available width and allow the bar to be wider than the previous 240px cap. */
+  width: 100%;
+  /* Allow the progress bar to grow wider so that modules remain legible. */
+  max-width: 480px;
+  margin: 0 8px;
+}
+
+/* When the progress bar is wrapped in .progress-wrapper (sticky footer),
+   expand it to use the available width and remove the right margin limit. */
+.school-page .progress-wrapper .module-progress {
+  margin-right: 0;
+  max-width: none;
+  width: 100%;
+}
+
+/* Container for the module progress bar, allowing it to grow while keeping a reasonable
+   minimum and maximum width. This ensures the progress bar sits in the middle of the
+   footer and uses the available horizontal space. */
+.school-page .progress-wrapper {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 200px;
+  max-width: 420px;
+  margin-right: 8px;
+}
+
+/* Container for the action buttons within the sticky footer.  Keeps buttons together
+   and prevents them from stretching. */
+.school-page .button-wrapper {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+.school-page .module-seg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Allow each module segment to shrink when space is constrained but
+     still maintain readability. */
+  min-width: 32px;
+  flex: 1 1 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.school-page .module-seg.is-clickable {
+  cursor: pointer;
+}
+.school-page .module-seg.is-clickable .module-bar {
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.12);
+}
+.school-page .module-seg.is-clickable:hover .module-bar {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.45);
+}
+.school-page .module-seg.is-clickable:focus-visible {
+  outline: 2px solid rgba(16, 185, 129, 0.55);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.school-page .module-title {
+  font-size: 13px;
+  color: var(--neutral-700);
+  line-height: 1;
+  margin-bottom: 2px;
+  text-align: center;
+  white-space: nowrap;
+  width: 100%;
+}
+.school-page .module-bar {
+  position: relative;
+  width: 100%;
+  height: 14px;
+  background: var(--neutral-200);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.school-page .module-fill {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--neutral-50);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  padding-left: 1px;
+  padding-right: 1px;
+  white-space: nowrap;
+  transition: width 0.3s ease;
+  background: #9ca3af;
+}
+.school-page .module-fill.is-draft {
+  background: #9ca3af;
+}
+.school-page .module-fill.is-review {
+  background: #f59e0b;
+}
+.school-page .module-fill.is-forwarded {
+  background: #0ea5a4;
+}
+.school-page .module-fill.is-revision {
+  background: #dc2626;
+}
+.school-page .module-fill.is-approved {
+  background: #2563eb;
+}
+.school-page .module-fill.is-final {
+  background: #16a34a;
+}
+.school-page .module-fill.is-done {
+  background: var(--success-600, #15803d);
+}
+.school-page .module-percent {
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.school-page .school-footer-scenario {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 560px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.school-page .school-footer-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: absolute;
+  left: 0;
+  bottom: 0;
+}
+.school-page .school-footer-meta.is-placeholder {
+  visibility: hidden;
+}
+.school-page .school-footer-actions {
+  /* Allow the footer actions area to flex and accommodate a wider progress bar.
+     We override the default max-width to let the actions area consume more space. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  max-width: none;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+
+/* Split the footer actions into a middle progress bar and right button area.
+   The middle section expands to use available space, while the right section
+   remains sized to its contents. */
+.school-page .school-footer-middle {
+  grid-column: 2;
+  justify-self: center;
+  display: flex;
+  justify-content: center;
+  /* Provide reasonable minimum and maximum widths so the bar can grow but not overwhelm other elements */
+  width: clamp(220px, 40vw, 480px);
+  min-width: 200px;
+  max-width: 480px;
+}
+.school-page .school-footer-right {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.school-page .school-sticky-footer .action-menu-panel {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* Sticky footer for permissions pages */
+.permissions-page .permissions-page-content {
+  padding-bottom: 96px;
+}
+.permissions-page .permissions-sticky-footer {
+  position: fixed;
+  bottom: 0;
+  left: 250px;
+  right: 0;
+  z-index: 140;
+  padding: 0;
+  pointer-events: none;
+}
+.app-shell.is-collapsed .permissions-page .permissions-sticky-footer {
+  left: 88px;
+}
+.permissions-page .permissions-sticky-footer-inner {
+  height: 64px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 0;
+  padding: 10px 50px;
+  box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(10px);
+  font-family: "Poppins", "Manrope", "Segoe UI", sans-serif;
+  pointer-events: auto;
+}
+.permissions-page .permissions-footer-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+.permissions-page .permissions-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 
 /* Action menu (export dropdown) */
 .action-menu {
@@ -2370,6 +2780,23 @@ hr {
   }
   .school-page .school-topbar-title {
     max-width: 100%;
+  }
+  .school-page .school-sticky-footer {
+    left: 0;
+    padding: 0;
+  }
+  .school-page .school-sticky-footer-inner {
+    padding: 8px 16px;
+  }
+  .school-page .school-footer-actions {
+    max-width: 100%;
+  }
+  .permissions-page .permissions-sticky-footer {
+    left: 0;
+    padding: 0;
+  }
+  .permissions-page .permissions-sticky-footer-inner {
+    padding: 8px 16px;
   }
 }
 /* --- IK: role header daha kompakt (uzun label'lar yer kaplamasın) --- */

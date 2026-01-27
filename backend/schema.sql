@@ -79,12 +79,30 @@ CREATE TABLE `school_scenarios` (
   `local_currency_code` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `fx_usd_to_local` decimal(18,6) DEFAULT NULL,
   `program_type` enum('local','international') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'local',
-  `status` enum('draft','submitted','revision_requested','approved') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
+  -- Status codes for the scenario workflow.  New values have been added to
+  -- support a manager review step and a final approval gate.  The
+  -- 'submitted' value is retained for backward compatibility but is
+  -- superseded by 'in_review' and 'sent_for_approval'.
+  `status` enum('draft','in_review','revision_requested','approved','sent_for_approval','submitted') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `submitted_at` timestamp NULL DEFAULT NULL,
   `submitted_by` bigint DEFAULT NULL,
   `reviewed_at` timestamp NULL DEFAULT NULL,
   `reviewed_by` bigint DEFAULT NULL,
   `review_note` text COLLATE utf8mb4_unicode_ci,
+  -- When a scenario is forwarded by a manager for final approval, the
+  -- sent_at and sent_by columns capture the time and actor.  A NULL
+  -- sent_at indicates that a manager-approved scenario is still open
+  -- for edits; when non‑NULL the scenario is locked pending final
+  -- admin review.
+  `sent_at` timestamp NULL DEFAULT NULL,
+  `sent_by` bigint DEFAULT NULL,
+  -- When a manager approves a scenario ("Kontrol edildi"), these
+  -- columns capture the time at which the check occurred and the
+  -- identifier of the user who performed the check.  A NULL value
+  -- indicates the scenario has not yet been checked this review
+  -- cycle.
+  `checked_at` timestamp NULL DEFAULT NULL,
+  `checked_by` bigint DEFAULT NULL,
   `created_by` bigint NOT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `progress_pct` decimal(5,2) DEFAULT NULL,
@@ -93,12 +111,18 @@ CREATE TABLE `school_scenarios` (
   PRIMARY KEY (`id`),
   KEY `created_by` (`created_by`),
   KEY `idx_scenarios_school` (`school_id`),
+  KEY `idx_scenarios_school_created_at` (`school_id`,`created_at`,`id`),
+  KEY `idx_scenarios_status_submitted_created` (`status`,`submitted_at`,`created_at`,`id`),
   KEY `fk_scenarios_submitted_by` (`submitted_by`),
   KEY `fk_scenarios_reviewed_by` (`reviewed_by`),
+  KEY `fk_school_scenarios_sent_by` (`sent_by`),
+  KEY `fk_school_scenarios_checked_by` (`checked_by`),
   UNIQUE KEY `uniq_scenarios_school_year` (`school_id`,`academic_year`),
   KEY `idx_scenarios_status_year` (`status`,`academic_year`),
   CONSTRAINT `fk_scenarios_reviewed_by` FOREIGN KEY (`reviewed_by`) REFERENCES `users` (`id`),
   CONSTRAINT `fk_scenarios_submitted_by` FOREIGN KEY (`submitted_by`) REFERENCES `users` (`id`),
+  CONSTRAINT `fk_school_scenarios_sent_by` FOREIGN KEY (`sent_by`) REFERENCES `users` (`id`),
+  CONSTRAINT `fk_school_scenarios_checked_by` FOREIGN KEY (`checked_by`) REFERENCES `users` (`id`),
   CONSTRAINT `school_scenarios_ibfk_1` FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
   CONSTRAINT `school_scenarios_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -192,3 +216,79 @@ CREATE TABLE `scenario_review_events` (
   CONSTRAINT `scenario_review_events_ibfk_1` FOREIGN KEY (`scenario_id`) REFERENCES `school_scenarios` (`id`) ON DELETE CASCADE,
   CONSTRAINT `scenario_review_events_ibfk_2` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=20 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Table: scenario_work_items
+-- Tracks per‑module progress within a scenario.  Each row is keyed by
+-- scenario_id and a stable work_id (e.g. gelirler.unit_fee).  States
+-- reflect whether the module is untouched, being edited, submitted by
+-- principals/HR, needs revision, or approved by a manager.
+CREATE TABLE `scenario_work_items` (
+  `scenario_id` bigint NOT NULL,
+  `work_id` varchar(200) NOT NULL,
+  `resource` varchar(200) NOT NULL,
+  `state` enum('not_started','in_progress','submitted','needs_revision','approved') NOT NULL DEFAULT 'not_started',
+  `updated_by` bigint DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `submitted_at` timestamp NULL DEFAULT NULL,
+  `reviewed_at` timestamp NULL DEFAULT NULL,
+  `manager_comment` text COLLATE utf8mb4_unicode_ci,
+  PRIMARY KEY (`scenario_id`,`work_id`),
+  KEY `idx_scenario_work_items_state` (`state`),
+  KEY `fk_scenario_work_items_updated_by` (`updated_by`),
+  CONSTRAINT `fk_scenario_work_items_scenario` FOREIGN KEY (`scenario_id`) REFERENCES `school_scenarios` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_scenario_work_items_updated_by` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Additional tables for managing user roles and permissions
+--
+-- These tables support assigning specific roles to users at a school level and
+-- granting fine‑grained permissions.  See migrations for incremental updates.
+
+-- Table: school_user_roles
+-- Associates users with roles within a specific school.  Each combination
+-- of school, user, and role is unique.  When a school or user is removed
+-- the corresponding assignments are cascaded or set to null accordingly.
+CREATE TABLE `school_user_roles` (
+  `school_id` bigint NOT NULL,
+  `user_id` bigint NOT NULL,
+  `role` varchar(50) NOT NULL,
+  `assigned_by` bigint DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`school_id`,`user_id`,`role`),
+  KEY `idx_sur_user` (`user_id`),
+  KEY `idx_sur_role` (`role`),
+  CONSTRAINT `fk_sur_school` FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_sur_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_sur_assigned_by` FOREIGN KEY (`assigned_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Table: permissions
+-- Defines atomic permissions that can be granted to users.  Each permission
+-- is scoped to a resource and an action.  A unique constraint ensures
+-- there are no duplicate resource/action combinations.
+CREATE TABLE `permissions` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `resource` varchar(190) NOT NULL,
+  `action` varchar(50) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_perm` (`resource`,`action`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `user_permissions` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `user_id` bigint NOT NULL,
+  `permission_id` bigint NOT NULL,
+  `scope_country_id` bigint DEFAULT NULL,
+  `scope_school_id` bigint DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_user_perm_scope` (`user_id`,`permission_id`,`scope_country_id`,`scope_school_id`),
+  KEY `idx_up_perm` (`permission_id`),
+  KEY `idx_up_country` (`scope_country_id`),
+  KEY `idx_up_school` (`scope_school_id`),
+  CONSTRAINT `fk_up_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_up_perm` FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_up_country` FOREIGN KEY (`scope_country_id`) REFERENCES `countries` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_up_school` FOREIGN KEY (`scope_school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

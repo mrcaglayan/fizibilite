@@ -1,10 +1,11 @@
 // frontend/src/pages/SchoolPage.jsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { Link, Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
 import { api } from "../api";
+import Tooltip from "../components/ui/Tooltip";
+import { can } from "../utils/permissions";
 import { getGradeOptions, normalizeKademeConfig, summarizeGradesByKademe } from "../utils/kademe";
 import { computeScenarioProgress } from "../utils/scenarioProgress";
 import { useScenarioUiState, useScenarioUiString } from "../hooks/useScenarioUIState";
@@ -16,6 +17,140 @@ import {
   writeGlobalLastRouteSegment,
 } from "../utils/schoolNavStorage";
 import { getProgramType, mapBaseKademeToVariant, normalizeProgramType } from "../utils/programType";
+
+// Helper: Convert dirty input paths to permission resource keys for modifiedResources.
+// It strips a leading 'inputs.' prefix (if present), converts camelCase
+// tokens to snake_case, and returns page-level and section-level resources.
+// Example: 'inputs.gelirler.unitFee' → ['page.gelirler','section.gelirler.unit_fee'].
+/**
+ * Convert a dirty input path into a list of permission resources.  The
+ * function returns at most two resources: a page‑level resource (always)
+ * and, when a known mapping exists, a section‑level resource.  It
+ * normalizes camelCase tokens to snake_case and applies custom
+ * section mappings to ensure that generated section keys align with the
+ * backend permissions catalog.  Unknown sections fall back to page‑level
+ * only.
+ *
+ * For example:
+ *   'inputs.gelirler.tuition.rows.0.amount' → ['page.gelirler','section.gelirler.unit_fee']
+ *   'inputs.temelBilgiler.performans.degerlendirme' → ['page.temel_bilgiler','section.temel_bilgiler.performans']
+ *   'inputs.ik.years.y1' → ['page.ik','section.ik.local_staff']
+ *
+ * The SECTION_KEY_MAPPING constant below defines mappings from second‑level
+ * keys to canonical section names per page.  A wildcard '*' entry may be
+ * used to map any key to a default section.  A mapping value of null
+ * indicates that no section‑level resource should be generated for that key.
+ *
+ * @param {string} path Dirty input path (e.g. 'inputs.gelirler.tuition.rows.0.amount')
+ * @returns {string[]} List of permission resource keys
+ */
+function pathToResources(path) {
+  const result = [];
+  if (!path) return result;
+  const tokens = String(path).split('.');
+  // Strip a leading 'inputs.' prefix to isolate the module and section keys.
+  if (tokens.length > 0 && tokens[0] === 'inputs') {
+    tokens.shift();
+  }
+  if (tokens.length === 0) return result;
+  // Normalize the module (page) token from camelCase to snake_case.
+  const pageRaw = tokens[0];
+  let page = pageRaw.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+  const PAGE_ALIASES = {
+    grades_years: "grades_plan",
+    grades_current: "grades_plan",
+    grades: "grades_plan",
+  };
+  if (Object.prototype.hasOwnProperty.call(PAGE_ALIASES, page)) {
+    page = PAGE_ALIASES[page];
+  }
+  if (!page) return result;
+  // If a section token exists, map it to a canonical section resource key.  If
+  // mapping yields a non-null value, return only the section-level resource.
+  // Otherwise, fall back to the page-level resource.  This avoids sending
+  // both the page and section resources for the same change, which would
+  // incorrectly require the user to have write access on both resources.
+  if (tokens.length >= 2) {
+    const sectionRaw = tokens[1];
+    const sectionSnake = sectionRaw.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+    const SECTION_KEY_MAPPING = {
+      temel_bilgiler: {
+        inflation: 'inflation',
+        ucret_artis_oranlari: 'inflation',
+        okul_ucretleri_hesaplama: 'inflation',
+        ik_mevcut: 'ik_mevcut',
+        burs_indirim_ogrenci_sayilari: 'burs_ogr',
+        burs_ogr: 'burs_ogr',
+        rakip_analizi: 'rakip',
+        rakip: 'rakip',
+        performans: 'performans',
+        degerlendirme: 'performans',
+        okul_egitim_bilgileri: 'okul_egitim',
+        yetkililer: null,
+        kademeler: null,
+        program_type: null,
+      },
+      gelirler: {
+        '*': 'unit_fee',
+      },
+      giderler: {
+        '*': 'isletme',
+      },
+      ik: {
+        '*': 'local_staff',
+      },
+      discounts: {
+        '*': 'discounts',
+      },
+      norm: {
+        '*': 'ders_dagilimi',
+      },
+      grades_plan: {
+        '*': 'plan',
+      },
+      kapasite: {
+        '*': 'caps',
+      },
+    };
+    const pageMap = SECTION_KEY_MAPPING[page];
+    let mapped = null;
+    if (pageMap) {
+      if (Object.prototype.hasOwnProperty.call(pageMap, sectionSnake)) {
+        mapped = pageMap[sectionSnake];
+      } else if (Object.prototype.hasOwnProperty.call(pageMap, '*')) {
+        mapped = pageMap['*'];
+      } else {
+        // If no explicit mapping exists, use the normalized section name directly.
+        mapped = sectionSnake;
+      }
+    } else {
+      // For pages with no mapping defined, use the normalized section name.
+      mapped = sectionSnake;
+    }
+    if (mapped) {
+      // When a section-level mapping exists (mapped !== null), return only
+      // the section-level resource.  Do not include the page-level resource
+      // because a section write implicitly requires only section permission.
+      result.push(`section.${page}.${mapped}`);
+      return result;
+    }
+  }
+  // Fall back to the page-level resource if no section mapping applies.
+  result.push(`page.${page}`);
+  return result;
+}
+
+function isScenarioLocked(scenario) {
+  const status = String(scenario?.status || "draft");
+  const submittedAt = scenario?.submitted_at != null;
+  const sentAt = scenario?.sent_at != null;
+  return (
+    status === "sent_for_approval" ||
+    status === "submitted" ||
+    (status === "approved" && sentAt) ||
+    (status === "in_review" && submittedAt)
+  );
+}
 
 
 
@@ -31,6 +166,14 @@ const TAB_TO_ROUTE = {
   report: "rapor",
 };
 const ROUTE_TO_TAB = Object.fromEntries(Object.entries(TAB_TO_ROUTE).map(([key, value]) => [value, key]));
+const TAB_TO_WORK_ID = {
+  basics: "temel_bilgiler",
+  kapasite: "kapasite",
+  norm: "norm.ders_dagilimi",
+  hr: "ik.local_staff",
+  income: "gelirler.unit_fee",
+  expenses: "giderler.isletme",
+};
 
 function parseAcademicYear(academicYear) {
   const s = String(academicYear || "").trim();
@@ -70,6 +213,54 @@ function mergeMissingLines(a, b) {
   return out.slice(0, 15);
 }
 
+function findArrayItemIndex(arr, part) {
+  if (!Array.isArray(arr)) return -1;
+  const byKey = arr.findIndex(
+    (item) => item && typeof item === "object" && "key" in item && String(item.key) === part
+  );
+  if (byKey !== -1) return byKey;
+  const byName = arr.findIndex(
+    (item) => item && typeof item === "object" && "name" in item && String(item.name) === part
+  );
+  if (byName !== -1) return byName;
+  const byGrade = arr.findIndex(
+    (item) => item && typeof item === "object" && "grade" in item && String(item.grade) === part
+  );
+  if (byGrade !== -1) return byGrade;
+  const idx = Number(part);
+  if (Number.isInteger(idx) && String(idx) === part && idx >= 0 && idx < arr.length) return idx;
+  return -1;
+}
+
+function setValueAtPath(obj, parts, value) {
+  if (!obj || !Array.isArray(parts) || !parts.length) return false;
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (cur == null) return false;
+    if (Array.isArray(cur)) {
+      const idx = findArrayItemIndex(cur, part);
+      if (idx < 0) return false;
+      if (cur[idx] == null || typeof cur[idx] !== "object") cur[idx] = {};
+      cur = cur[idx];
+      continue;
+    }
+    if (typeof cur !== "object") return false;
+    if (cur[part] == null || typeof cur[part] !== "object") cur[part] = {};
+    cur = cur[part];
+  }
+  const last = parts[parts.length - 1];
+  if (Array.isArray(cur)) {
+    const idx = findArrayItemIndex(cur, last);
+    if (idx < 0) return false;
+    cur[idx] = value;
+    return true;
+  }
+  if (cur == null || typeof cur !== "object") return false;
+  cur[last] = value;
+  return true;
+}
+
 export default function SchoolPage() {
   const { id } = useParams();
   const location = useLocation();
@@ -88,25 +279,143 @@ export default function SchoolPage() {
     document.title = school?.name ? `${school.name} · ${base}` : `School · ${base}`;
   }, [school?.name]);
 
-  // selected scenario meta + previous year report
+  // Selected scenario meta and related state must be defined before
+  // they are referenced in refreshWorkItems and submitWorkItem.
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [prevReport, setPrevReport] = useState(null);
   const [prevScenarioMeta, setPrevScenarioMeta] = useState(null);
-
-  // norm
-  const [norm, setNorm] = useState(null);
-  const [progressConfig, setProgressConfig] = useState(null);
+  // Work items list for the currently selected scenario.  Each entry
+  // represents a module (e.g. gelirler.unit_fee) and tracks its
+  // workflow state.  When the selected scenario changes the list is
+  // reloaded from the server.  Principals and HR users can submit
+  // modules for review via submitWorkItem, which will refresh this list.
+  const [workItems, setWorkItems] = useState([]);
+  const [workItemsLoaded, setWorkItemsLoaded] = useState(false);
+  const [scenarioMetaLoaded, setScenarioMetaLoaded] = useState(false);
 
   // scenarios
   const [scenarios, setScenarios] = useState([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState(() => readSelectedScenarioId(schoolId));
   const [pendingTabAfterSelect, setPendingTabAfterSelect] = useState(null);
+
+
+  // Refresh the work items for the current scenario.  This helper
+  // fetches the work item list from the backend and updates state.
+  // It is memoized on schoolId and selectedScenario.id to avoid
+  // unnecessary re-renders.  When no scenario is selected, it
+  // clears the list.
+  const refreshWorkItems = useCallback(async () => {
+    const sid = selectedScenario?.id;
+    if (!sid || !schoolId) {
+      setWorkItems([]);
+      setWorkItemsLoaded(false);
+      return;
+    }
+    try {
+      const data = await api.listWorkItems(schoolId, sid);
+      setWorkItems(Array.isArray(data?.workItems) ? data.workItems : []);
+      setWorkItemsLoaded(true);
+    } catch (_) {
+      // ignore errors, keep existing list
+      setWorkItemsLoaded(true);
+    }
+  }, [schoolId, selectedScenario?.id]);
+
+  // Refresh scenario metadata (status/sent_at/checked_at) without touching inputs/report.
+  const refreshScenarioMeta = useCallback(async () => {
+    if (!schoolId) return;
+    setScenarioMetaLoaded(false);
+    try {
+      const data = await api.listScenarios(schoolId);
+      const list = Array.isArray(data) ? data : Array.isArray(data?.scenarios) ? data.scenarios : [];
+      setScenarios(list);
+      const scenarioId = selectedScenarioId ?? selectedScenario?.id;
+      if (scenarioId != null) {
+        const nextScenario = list.find((item) => String(item?.id) === String(scenarioId));
+        if (nextScenario) {
+          setSelectedScenario((prev) => (prev ? { ...prev, ...nextScenario } : nextScenario));
+        }
+      }
+      setScenarioMetaLoaded(true);
+    } catch (_) {
+      // ignore errors, keep existing meta
+      setScenarioMetaLoaded(false);
+    }
+  }, [schoolId, selectedScenarioId, selectedScenario?.id]);
+
+  // Submit a work item for review.  Accepts a workId string.  On
+  // success the work items are refreshed and a toast is shown.
+  const submitWorkItem = useCallback(
+    async (workId) => {
+      const sid = selectedScenario?.id;
+      if (!sid || !schoolId || !workId) return;
+      try {
+        await api.submitWorkItem(schoolId, sid, workId);
+        await refreshWorkItems();
+        await refreshScenarioMeta();
+        toast.success("Modül gönderildi.");
+      } catch (e) {
+        toast.error(e.message || "Gönderme başarısız");
+      }
+    },
+    [schoolId, selectedScenario?.id, refreshWorkItems, refreshScenarioMeta]
+  );
+
+
+  // Fetch work items whenever the selected scenario changes.  If there
+  // is no scenario selected the list is cleared.  The refreshWorkItems
+  // dependency ensures that any changes to schoolId or scenario id are
+  // respected.
+  useEffect(() => {
+    if (!selectedScenario?.id) {
+      setWorkItems([]);
+      setWorkItemsLoaded(false);
+      setScenarioMetaLoaded(false);
+      return;
+    }
+    setWorkItemsLoaded(false);
+    setScenarioMetaLoaded(false);
+    refreshWorkItems();
+  }, [selectedScenario?.id, refreshWorkItems]);
+
+  // removed duplicate declarations for selectedScenario, prevReport,
+  // prevScenarioMeta, and workItems. These are now defined earlier
+  // before they are used in callbacks.
+
+  // norm
+  const [norm, setNorm] = useState(null);
+  const [progressConfig, setProgressConfig] = useState(null);
+
   // inputs
   const [inputs, setInputs] = useState(null);
   const [inputsSaving, setInputsSaving] = useState(false);
   const [dirtyPaths, setDirtyPaths] = useState(() => new Set());
   const [baselineInputs, setBaselineInputs] = useState(null);
   const [baselineNorm, setBaselineNorm] = useState(null);
+  const clearDirtyPrefix = useCallback((prefix) => {
+    setDirtyPaths((prev) => {
+      if (!prev.size) return prev;
+      let changed = false;
+      const next = new Set();
+      for (const path of prev) {
+        if (path.startsWith(prefix)) {
+          changed = true;
+          continue;
+        }
+        next.add(path);
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+  const hasDirtyPrefix = useCallback(
+    (prefix) => {
+      for (const path of dirtyPaths) {
+        if (path === prefix || path.startsWith(prefix)) return true;
+      }
+      return false;
+    },
+    [dirtyPaths]
+  );
   // report
   const [report, setReport] = useState(null);
   const [calculating, setCalculating] = useState(false);
@@ -138,6 +447,13 @@ export default function SchoolPage() {
     return location.pathname.slice(base.length).split("/")[0] || "";
   }, [location.pathname, schoolId]);
   const tab = ROUTE_TO_TAB[activeRouteSegment] || "";
+  const activeWorkId = TAB_TO_WORK_ID[tab] || null;
+  const activeWorkItem = useMemo(() => {
+    if (!activeWorkId || !Array.isArray(workItems)) return null;
+    return workItems.find((item) => String(item?.work_id) === String(activeWorkId)) || null;
+  }, [activeWorkId, workItems]);
+  const activeWorkState = activeWorkItem?.state ? String(activeWorkItem.state) : "not_started";
+  const moduleLocked = ["submitted", "approved"].includes(activeWorkState);
   const setTab = React.useCallback(
     (nextTab) => {
       const segment = TAB_TO_ROUTE[nextTab];
@@ -225,6 +541,26 @@ export default function SchoolPage() {
   const prevRealFxMissing = isLocalScenario && !(Number.isFinite(prevRealFxValue) && prevRealFxValue > 0);
 
   const programType = useMemo(() => getProgramType(inputs, selectedScenario), [inputs, selectedScenario]);
+  const permissionScope = useMemo(() => {
+    const countryId = school?.country_id ?? me?.country_id ?? null;
+    return { schoolId, countryId };
+  }, [schoolId, school?.country_id, me?.country_id]);
+  const canReadNorm = useMemo(() => {
+    try {
+      return can(me, "page.norm", "read", permissionScope);
+    } catch {
+      return false;
+    }
+  }, [me, permissionScope]);
+  const canWriteGiderler = useMemo(() => {
+    try {
+      if (can(me, "section.giderler.isletme", "write", permissionScope)) return true;
+      return can(me, "page.giderler", "write", permissionScope);
+    } catch {
+      return false;
+    }
+  }, [me, permissionScope]);
+  const ignoreNormProgress = !norm && !canReadNorm;
 
   const scenarioProgress = useMemo(
     () => computeScenarioProgress({ inputs, norm, config: progressConfig, scenario: selectedScenario }),
@@ -236,12 +572,14 @@ export default function SchoolPage() {
   );
   const normAvgPct = useMemo(() => {
     const a = pctValue(progMap.gradesPlan);
-    const b = pctValue(progMap.norm);
+    const b = ignoreNormProgress ? a : pctValue(progMap.norm);
     return Math.round((a + b) / 2);
-  }, [progMap]);
+  }, [progMap, ignoreNormProgress]);
   const expensesAvgPct = useMemo(() => {
     const a = pctValue(progMap.giderler);
-    const b = pctValue(progMap.indirimler);
+    // Use the new discounts key instead of the legacy indirimler key.  If the
+    // discounts tab is missing, default to 0 for the percentage value.
+    const b = pctValue(progMap.discounts);
     return Math.round((a + b) / 2);
   }, [progMap]);
   const normMissingLines = useMemo(
@@ -249,7 +587,7 @@ export default function SchoolPage() {
     [progMap]
   );
   const expensesMissingLines = useMemo(
-    () => mergeMissingLines(progMap.giderler?.missingLines, progMap.indirimler?.missingLines),
+    () => mergeMissingLines(progMap.giderler?.missingLines, progMap.discounts?.missingLines),
     [progMap]
   );
   useEffect(() => {
@@ -268,7 +606,7 @@ export default function SchoolPage() {
   }, [outlet, selectedScenario, school?.name]);
 
   // A) Helper: HR(IK) -> Expenses(Isletme) 5 salary rows auto patch (uses 1.Yil / y1)
-  const applyIkSalariesToGiderler = (inInputs) => {
+  const applyIkSalariesToGiderler = useCallback((inInputs) => {
     const src = inInputs || {};
     const ik = src.ik || {};
     const yearIK = ik?.years?.y1 ? ik.years.y1 : ik; // legacy support
@@ -336,9 +674,9 @@ export default function SchoolPage() {
     next.giderler.isletme.items = next.giderler.isletme.items || {};
     for (const k of keys) next.giderler.isletme.items[k] = Number(patch[k] || 0);
     return next;
-  };
+  }, []);
 
-  const normalizeCapacityInputs = (src) => {
+  const normalizeCapacityInputs = useCallback((src) => {
     const safeNum = (v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
@@ -381,7 +719,7 @@ export default function SchoolPage() {
     };
     if ("schoolCapacity" in next) delete next.schoolCapacity;
     return next;
-  };
+  }, []);
 
 
   const normalizeTemelBilgilerInputs = (src) => {
@@ -471,7 +809,7 @@ export default function SchoolPage() {
     return next;
   };
 
-  const normalizeGradesInputs = (src) => {
+  const normalizeGradesInputs = useCallback((src) => {
     const s = src || {};
     const defaultGrades = getGradeOptions().map((g) => ({ grade: g, branchCount: 0, studentsPerBranch: 0 }));
     const baseGrades = Array.isArray(s.grades) ? s.grades : defaultGrades;
@@ -529,7 +867,7 @@ export default function SchoolPage() {
     };
     next.grades = structuredClone(next.gradesYears.y1);
     return next;
-  };
+  }, []);
 
   const applyTuitionStudentCounts = useCallback((src) => {
     const s = src && typeof src === "object" ? src : {};
@@ -596,10 +934,29 @@ export default function SchoolPage() {
         // ignore (e.g., token missing)
       }
 
-      const n = await api.getNormConfig(schoolId);
-      setNorm(n);
-      setBaselineNorm(n ? structuredClone(n) : null);
-      clearDirtyPrefix("norm.");
+      // Attempt to load the norm configuration.  If the user lacks
+      // permission to read the norm page, the backend will return a
+      // 403 error with a message like "Missing read permission for
+      // page.norm".  In that case, silently ignore the error and
+      // continue loading the remainder of the school data.  Users
+      // without norm access should still be able to view and edit
+      // other modules (e.g. expenses) without the page failing to
+      // load.  See issue reported by users: salaries pulled from
+      // norm should not require page.norm read permission just to
+      // open the school page.
+      try {
+        const n = await api.getNormConfig(schoolId);
+        setNorm(n);
+        setBaselineNorm(n ? structuredClone(n) : null);
+        clearDirtyPrefix("norm.");
+      } catch (err) {
+        // If fetching the norm configuration fails due to missing
+        // permissions, simply set norm to null.  Do not update the
+        // global error state or interrupt the boot process.
+        setNorm(null);
+        setBaselineNorm(null);
+        clearDirtyPrefix("norm.");
+      }
 
       setBootLoadingLabel("Senaryolar kontrol ediliyor...");
       const sc = await api.listScenarios(schoolId);
@@ -678,7 +1035,13 @@ export default function SchoolPage() {
       }
     }
     loadScenario();
-  }, [schoolId, selectedScenarioId]);
+  }, [
+    schoolId,
+    selectedScenarioId,
+    clearDirtyPrefix,
+    normalizeCapacityInputs,
+    normalizeGradesInputs,
+  ]);
 
   useEffect(() => {
     if (!selectedScenarioId) {
@@ -743,7 +1106,10 @@ export default function SchoolPage() {
     loadPrev();
   }, [schoolId, selectedScenario?.academic_year, scenarios]);
 
-  async function saveNormConfig() {
+  const scenarioLocked = isScenarioLocked(selectedScenario);
+  const inputsLocked = scenarioLocked || moduleLocked;
+
+  const saveNormConfig = useCallback(async () => {
     if (!norm) return;
     const payload = norm?.years
       ? { years: norm.years }
@@ -756,13 +1122,13 @@ export default function SchoolPage() {
     setNorm(n);
     setBaselineNorm(n ? structuredClone(n) : null);
     clearDirtyPrefix("norm.");
-  }
+  }, [norm, schoolId, clearDirtyPrefix]);
 
   // B) Save inputs with HR->Expenses salary patch applied + Capacity normalization
-  async function saveInputs() {
+  const saveInputs = useCallback(async () => {
     if (!selectedScenarioId || !inputs) return false;
     if (inputsLocked) {
-      setErr("Scenario locked. Awaiting admin review.");
+      setErr(scenarioLocked ? "Senaryo kilitli. Inceleme bekleniyor." : "Modul kilitli. Inceleme bekleniyor.");
       return false;
     }
     const shouldSaveInputs = hasDirtyPrefix("inputs.");
@@ -779,7 +1145,27 @@ export default function SchoolPage() {
 
         if (patched !== inputs) setInputs(patched);
 
-        await api.saveScenarioInputs(schoolId, selectedScenarioId, patched);
+        // Build the list of modified permission resources from the dirty input paths.  Only
+        // consider dirty paths that affect scenario inputs (prefixed with "inputs.").  Dirty
+        // paths under the "norm." prefix are handled separately when saving the norm config.
+        const modifiedResourcesSet = new Set();
+        const inputDirty = [];
+        for (const p of dirtyPaths) {
+          const pathStr = String(p || '');
+          if (!pathStr.startsWith('inputs.')) continue;
+          inputDirty.push(pathStr);
+          for (const r of pathToResources(pathStr)) {
+            modifiedResourcesSet.add(r);
+          }
+        }
+        const modifiedResources = Array.from(modifiedResourcesSet);
+        await api.saveScenarioInputs(
+          schoolId,
+          selectedScenarioId,
+          patched,
+          modifiedResources,
+          inputDirty
+        );
         setBaselineInputs(patched && typeof patched === "object" ? structuredClone(patched) : patched);
         clearDirtyPrefix("inputs.");
       }
@@ -801,7 +1187,21 @@ export default function SchoolPage() {
     } finally {
       setInputsSaving(false);
     }
-  }
+  }, [
+    applyIkSalariesToGiderler,
+    applyTuitionStudentCounts,
+    normalizeCapacityInputs,
+    normalizeGradesInputs,
+    selectedScenarioId,
+    inputs,
+    inputsLocked,
+    scenarioLocked,
+    hasDirtyPrefix,
+    dirtyPaths,
+    schoolId,
+    clearDirtyPrefix,
+    saveNormConfig,
+  ]);
 
 
   // --- Guard: prevent calculating / submitting if Y2 & Y3 planned student totals are missing ---
@@ -884,21 +1284,37 @@ export default function SchoolPage() {
 
 
   async function calculate(options = {}) {
-    if (!selectedScenarioId) return;
-    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
-    if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return;
+    if (!selectedScenarioId) return false;
+    if (!ensurePrevRealFxForLocal("Hesaplama")) return false;
+    if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return false;
     setCalculating(true);
     setErr("");
+    let ok = false;
     try {
       const data = await api.calculateScenario(schoolId, selectedScenarioId);
       setReport(data.results);
       if (!options.keepTab) setTab("report");
       setLastCalculatedAt(Date.now());
+      if (typeof window !== "undefined") {
+        // Debug hook: inspect KPI calc payload/results in devtools
+        console.log("[kpi] calculate ok", {
+          scenarioId: selectedScenarioId,
+          hasResults: Boolean(data?.results),
+        });
+      }
+      ok = true;
     } catch (e) {
       setErr(e.message || "Calculation failed");
+      if (typeof window !== "undefined") {
+        console.log("[kpi] calculate failed", {
+          scenarioId: selectedScenarioId,
+          error: e?.message || e,
+        });
+      }
     } finally {
       setCalculating(false);
     }
+    return ok;
   }
 
   async function handleExport() {
@@ -1104,35 +1520,50 @@ export default function SchoolPage() {
   );
   // ...existing code...
 
-  function clearDirtyPrefix(prefix) {
-    setDirtyPaths((prev) => {
-      if (!prev.size) return prev;
-      let changed = false;
-      const next = new Set();
-      for (const path of prev) {
-        if (path.startsWith(prefix)) {
-          changed = true;
-          continue;
-        }
-        next.add(path);
-      }
-      return changed ? next : prev;
-    });
-  }
-
-  function hasDirtyPrefix(prefix) {
-    for (const path of dirtyPaths) {
-      if (path === prefix || path.startsWith(prefix)) return true;
-    }
-    return false;
-  }
-
   const inputsDirty = hasDirtyPrefix("inputs.") || hasDirtyPrefix("norm.");
-  const inputsLocked = selectedScenario?.status === "submitted" || selectedScenario?.status === "approved";
+  const submitActiveWorkItem = useCallback(async () => {
+    if (!activeWorkId) return;
+    if (inputsDirty) {
+      const ok = await saveInputs();
+      if (!ok) return;
+    }
+    await submitWorkItem(activeWorkId);
+  }, [activeWorkId, inputsDirty, saveInputs, submitWorkItem]);
+  const role = String(me?.role || "");
+  const isAccountant = role === "accountant";
+  const suppressUnsavedWarning =
+    activeWorkId && activeWorkState === "submitted" && role && !isAccountant;
+  const warnUnsavedChanges = inputsDirty && !suppressUnsavedWarning;
+  const moduleLockReason =
+    activeWorkState === "submitted"
+      ? "Modul incelemede"
+      : activeWorkState === "approved"
+        ? "Modul onaylandi"
+        : "Modul kilitli";
+  const inputsLockedReason = scenarioLocked
+    ? "Senaryo kilitli"
+    : moduleLocked
+      ? moduleLockReason
+      : "";
+  const canSubmitWorkItem =
+    activeWorkId &&
+    !scenarioLocked &&
+    ["not_started", "in_progress", "needs_revision"].includes(activeWorkState);
   const markDirty = useCallback(
     (path, value) => {
       if (!path) return;
-      if (inputsLocked && path.startsWith("inputs.")) return;
+      if (inputsLocked && (path.startsWith("inputs.") || path.startsWith("norm."))) return;
+      if (path.startsWith("inputs.")) {
+        setInputs((prev) => {
+          if (!prev) return prev;
+          const parts = path.split(".");
+          const current = getValueAtPath(prev, parts.slice(1));
+          if (valuesEqual(current, value)) return prev;
+          const next = structuredClone(prev);
+          const ok = setValueAtPath(next, parts.slice(1), value);
+          return ok ? next : prev;
+        });
+      }
       const baselineValue = getBaselineValue(path);
       const same = valuesEqual(value, baselineValue);
       setDirtyPaths((prev) => {
@@ -1142,7 +1573,7 @@ export default function SchoolPage() {
         return areSetsEqual(prev, next) ? prev : next;
       });
     },
-    [inputsLocked, getBaselineValue]
+    [inputsLocked, getBaselineValue, setInputs]
   );
 
   // --------------------------------------------------------------
@@ -1170,7 +1601,7 @@ export default function SchoolPage() {
       // `returnValue` to an empty string. The exact message is
       // ignored by most modern browsers, but setting this triggers
       // the confirmation dialog.
-      if (inputsDirty) {
+      if (warnUnsavedChanges) {
         event.preventDefault();
         // Chrome requires returnValue to be set.
         event.returnValue = "";
@@ -1178,7 +1609,7 @@ export default function SchoolPage() {
     };
 
     // Register the event listener when there are unsaved changes.
-    if (inputsDirty) {
+    if (warnUnsavedChanges) {
       window.addEventListener("beforeunload", handleBeforeUnload);
     }
 
@@ -1187,7 +1618,7 @@ export default function SchoolPage() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [inputsDirty]);
+  }, [warnUnsavedChanges]);
 
   // --------------------------------------------------------------
   // Expose a global flag for unsaved changes.
@@ -1200,7 +1631,7 @@ export default function SchoolPage() {
   // necessary. When the component unmounts, we clear the flag.
   useEffect(() => {
     try {
-      window.__fsUnsavedChanges = inputsDirty;
+      window.__fsUnsavedChanges = warnUnsavedChanges;
     } catch (_) {
       // In non-browser environments `window` may not exist.
     }
@@ -1210,7 +1641,7 @@ export default function SchoolPage() {
         window.__fsUnsavedChanges = false;
       } catch (_) { }
     };
-  }, [inputsDirty]);
+  }, [warnUnsavedChanges]);
   const handleIkSalaryComputed = React.useCallback(
     (salaryByYear) => {
       if (inputsLocked) return;
@@ -1243,16 +1674,21 @@ export default function SchoolPage() {
         next.giderler.isletme = next.giderler.isletme || {};
         next.giderler.isletme.items = next.giderler.isletme.items || {};
         for (const k of keys) next.giderler.isletme.items[k] = Number(patch?.[k] || 0);
-        for (const k of keys) {
-          markDirty(`inputs.giderler.isletme.items.${k}`, Number(patch?.[k] || 0));
+        if (canWriteGiderler) {
+          // Derived salary totals should not require Giderler write permission
+          // for HR users; only mark dirty when the user can write expenses.
+          for (const k of keys) {
+            markDirty(`inputs.giderler.isletme.items.${k}`, Number(patch?.[k] || 0));
+          }
         }
         return next;
       });
     },
-    [inputsLocked, markDirty]
+    [inputsLocked, markDirty, canWriteGiderler]
   );
   const handlePlanningGradesChange = React.useCallback(
     (v) => {
+      if (inputsLocked) return;
       if (!v || typeof v !== "object") return;
       setInputs((prev) => {
         const p = prev || {};
@@ -1263,7 +1699,14 @@ export default function SchoolPage() {
         return next;
       });
     },
-    [applyTuitionStudentCounts]
+    [applyTuitionStudentCounts, inputsLocked]
+  );
+  const setNormSafe = useCallback(
+    (updater) => {
+      if (inputsLocked) return;
+      setNorm((prev) => (typeof updater === "function" ? updater(prev) : updater));
+    },
+    [inputsLocked, setNorm]
   );
   const showInputsHeader = INPUT_HEADER_TABS.has(tab);
   const exportDisabled = inputsSaving || calculating || exportingPdf || !report;
@@ -1275,313 +1718,701 @@ export default function SchoolPage() {
     return `${Math.floor(diff / 3600000)} saat once`;
   };
 
-  const getScenarioStatusMeta = (status) => {
-    switch (status) {
-      case "submitted":
-        return { label: "Onayda", className: "is-warn" };
-      case "revision_requested":
-        return { label: "Revize Istendi", className: "is-bad" };
-      case "approved":
-        return { label: "Onaylandi", className: "is-ok" };
-      default:
-        return { label: "Taslak", className: "is-muted" };
-    }
-  };
-
+  // Determine the display label and style for a scenario based on its
+  // workflow status and timestamps.  When a scenario is approved but
+  // has not yet been forwarded to the central office (sent_at is null),
+  // it is considered “Kontrol edildi”.  Once sent_at is set, the
+  // scenario is locked and considered “Onaylandı”.  The draft state
+  // optionally distinguishes “Hazırlanıyor” when progress exists, but
+  // falls back to “Taslak” otherwise.
   useEffect(() => {
     if (exportDisabled) setExportOpen(false);
   }, [exportDisabled]);
 
-  function renderInputsHeader() {
-    const scenarioText = selectedScenario
-      ? `${selectedScenario.name}${selectedScenario.academic_year ? ` • ${selectedScenario.academic_year}` : ""}`
-      : "Senaryo seçilmedi";
-    const hasReport = Boolean(report);
-    const calculateLabel = inputsDirty ? "Kaydet & Hesapla" : hasReport ? "Yeniden Hesapla" : "Hesapla";
-    const exportLabel = exportingPdf ? "PDF hazirlaniyor..." : "Disa Aktar";
-    const showExportButton = tab === "report" || hasReport;
 
-    return (
-      <div className="school-topbar">
-        <div className="school-topbar-left">
-          <Link
-            to="/schools"
-            className="school-back-btn"
-            title="Okullara Don"
-            aria-label="Okullara Don"
-          >
-            <span aria-hidden>&lt;</span>
-          </Link>
 
-          <div className="school-topbar-text">
-            <div className="school-topbar-title">{school?.name || "Okul"}</div>
-
-            <div className="school-topbar-sub">
-              <span className={"school-pill " + (selectedScenario ? "" : "is-muted")}>
-                {scenarioText}
-              </span>
-              {selectedScenario ? (
-                <span className={`school-pill ${getScenarioStatusMeta(selectedScenario.status).className}`}>
-                  {getScenarioStatusMeta(selectedScenario.status).label}
-                </span>
-              ) : null}
-
-              {showInputsHeader && inputs ? (
-                <>
-                  {inputsDirty ? (
-                    <span className="school-pill is-warn">Kaydedilmedi</span>
-                  ) : (
-                    <span className="school-pill is-ok">Kaydedildi</span>
-                  )}
-                  {lastSavedAt ? (
-                    <span className="school-pill is-muted">
-                      {inputsDirty ? `Son kayit: ${formatRelative(lastSavedAt)} (degisiklik var)` : `Kaydedildi: ${formatRelative(lastSavedAt)}`}
-                    </span>
-                  ) : null}
-                  {lastCalculatedAt ? (
-                    <span className="school-pill is-muted">
-                      Hesaplandi: {formatRelative(lastCalculatedAt)}
-                    </span>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        <div className="school-topbar-right">
-          {showInputsHeader ? (
-            inputs ? (
-              <div className="school-actions">
-                <button
-                  type="button"
-                  className={"topbar-btn " + (inputsDirty && !inputsSaving ? "is-save" : "is-ghost")}
-                  onClick={saveInputs}
-                  disabled={!inputsDirty || inputsSaving || inputsLocked}
-                  title={
-                    inputsLocked
-                      ? "Senaryo kilitli"
-                      : inputsDirty
-                        ? "Degisiklikleri kaydet"
-                        : "Kaydedilecek degisiklik yok"
-                  }
-                >
-                  {inputsSaving ? "Kaydediliyor..." : inputsDirty ? "Kaydet" : "Kaydedildi"}
-                </button>
-
-                <button
-                  type="button"
-                  className="topbar-btn is-primary"
-                  onClick={async () => {
-                    if (inputsSaving || calculating) return;
-                    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
-                    if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
-                    if (inputsDirty) {
-                      const ok = await saveInputs();
-                      if (ok) await calculate();
-                      return;
-                    }
-                    await calculate();
-                  }}
-                  disabled={inputsSaving || calculating}
-                  title={calculateLabel}
-                >
-                  {calculating ? "Hesaplaniyor..." : calculateLabel}
-                </button>
-
-                {showExportButton ? (
-                  <div className="action-menu" ref={exportMenuRef}>
-                    <button
-                      type="button"
-                      className={`topbar-btn is-ghost ${exportingPdf ? "is-loading" : ""}`}
-                      onClick={() => {
-                        if (exportDisabled) return;
-                        setExportOpen((prev) => !prev);
-                      }}
-                      disabled={exportDisabled}
-                      aria-haspopup="menu"
-                      aria-expanded={exportOpen}
-                      aria-busy={exportingPdf ? "true" : undefined}
-                    >
-                      {exportingPdf ? <span className="pdf-export-spinner" aria-hidden="true" /> : null}
-                      {exportLabel}
-                    </button>
-                    {exportOpen ? (
-                      <div className="action-menu-panel" role="menu">
-                        <button
-                          type="button"
-                          className="action-menu-item"
-                          onClick={() => {
-                            setExportOpen(false);
-                            handleExport();
-                          }}
-                          disabled={exportDisabled}
-                          role="menuitem"
-                        >
-                          Excel (.xlsx)
-                        </button>
-                        <button
-                          type="button"
-                          className="action-menu-item"
-                          onClick={() => {
-                            setExportOpen(false);
-                            handleExportPdf();
-                          }}
-                          disabled={exportDisabled}
-                          role="menuitem"
-                        >
-                          PDF (.pdf)
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="school-topbar-hint small">Once bir senaryo secin.</div>
-            )
-          ) : null}
-        </div>
-      </div>
-    );
+  function getScenarioStageLabel(s, progressPct) {
+    if (!s) return null;
+    const status = String(s.status || "draft");
+    // Show "Taslak" when no progress; "Hazırlanıyor" when progress exists
+    if (status === "draft") {
+      const pct = Number(progressPct);
+      if (Number.isFinite(pct) && pct > 0) return "Hazırlanıyor";
+      return "Taslak";
+    }
+    if (status === "in_review") return "İncelemede";
+    if (status === "revision_requested") return "Revize istendi";
+    if (status === "sent_for_approval" || status === "submitted") return "Merkeze iletildi";
+    if (status === "approved") {
+      // Sent_at indicates final approval
+      if (s.sent_at) return "Onaylandı";
+      return "Kontrol edildi";
+    }
+    return "Taslak";
+  }
+  function getScenarioStageClass(label) {
+    switch (label) {
+      case "Revize istendi":
+        return "is-bad";
+      case "Merkeze iletildi":
+      case "İncelemede":
+      case "Hazırlanıyor":
+        return "is-warn";
+      case "Kontrol edildi":
+      case "Onaylandı":
+        return "is-ok";
+      case "Taslak":
+      default:
+        return "is-muted";
+    }
+  }
+  function getWorkItemStageLabel(state) {
+    switch (String(state || "not_started")) {
+      case "approved":
+        return "Kontrol edildi";
+      case "needs_revision":
+        return "Revize istendi";
+      case "submitted":
+        return "İncelemede";
+      case "in_progress":
+        return "Hazırlanıyor";
+      default:
+        return "Taslak";
+    }
+  }
+  function getModuleStatusClass(state, scenarioStatus, scenarioSentAt) {
+    if (scenarioStatus === "approved" && scenarioSentAt) {
+      return "is-final";
+    }
+    if (["sent_for_approval", "submitted"].includes(String(scenarioStatus || ""))) {
+      return "is-forwarded";
+    }
+    switch (String(state || "not_started")) {
+      case "needs_revision":
+        return "is-revision";
+      case "approved":
+        return "is-approved";
+      case "submitted":
+        return "is-review";
+      case "in_progress":
+      case "not_started":
+      default:
+        return "is-draft";
+    }
   }
 
-  function renderTopbarMetaAndActions() {
+  function renderStickyFooter() {
+    if (!showInputsHeader) return null;
+    // Build module progress segments.  Each segment uses the pct from progMap
+    // and averages for the combined "norm" and "gider" modules.
+    const moduleKeyToWorkId = {
+      temel: "temel_bilgiler",
+      kapasite: "kapasite",
+      norm: "norm.ders_dagilimi",
+      ik: "ik.local_staff",
+      gelir: "gelirler.unit_fee",
+      gider: "giderler.isletme",
+    };
+    const getModuleWorkState = (moduleKey) => {
+      if (!moduleKey) return "not_started";
+      if (!workItemsLoaded) return "not_started";
+      const workId = moduleKeyToWorkId[moduleKey];
+      if (!workId) return "not_started";
+      const item = Array.isArray(workItems)
+        ? workItems.find((w) => String(w?.work_id) === String(workId))
+        : null;
+      return item?.state ? String(item.state) : "not_started";
+    };
+    const footerModules = [];
+    if (progMap && progMap.temelBilgiler) {
+      footerModules.push({
+        key: "temel",
+        label: "Temel",
+        labelShort: "Temel",
+        pct: pctValue(progMap.temelBilgiler),
+        done: progMap.temelBilgiler.done === true,
+      });
+    }
+    if (progMap && progMap.kapasite) {
+      footerModules.push({
+        key: "kapasite",
+        label: "Kapasite",
+        labelShort: "Kap",
+        pct: pctValue(progMap.kapasite),
+        done: progMap.kapasite.done === true,
+      });
+    }
+    // Combine gradesPlan and norm into a single "Norm" segment.  Use normAvgPct for pct.
+    const normDone = ignoreNormProgress
+      ? (progMap?.gradesPlan?.done === true || progMap?.gradesPlan?.done === undefined)
+      : (progMap?.gradesPlan?.done === true || progMap?.gradesPlan?.done === undefined) &&
+        (progMap?.norm?.done === true || progMap?.norm?.done === undefined);
+    footerModules.push({
+      key: "norm",
+      label: "Norm",
+      labelShort: "Norm",
+      pct: Number.isFinite(normAvgPct) ? normAvgPct : 0,
+      done: normDone,
+    });
+    if (progMap && progMap.ik) {
+      footerModules.push({
+        key: "ik",
+        label: "İK",
+        labelShort: "İK",
+        pct: pctValue(progMap.ik),
+        done: progMap.ik.done === true,
+      });
+    }
+    if (progMap && progMap.gelirler) {
+      footerModules.push({
+        key: "gelir",
+        label: "Gelir",
+        labelShort: "Gel",
+        pct: pctValue(progMap.gelirler),
+        done: progMap.gelirler.done === true,
+      });
+    }
+    // Combine giderler and discounts into a single "Gider" segment.  Use expensesAvgPct.
+    const giderDone =
+      (progMap?.giderler?.done === true || progMap?.giderler?.done === undefined) &&
+      (progMap?.discounts?.done === true || progMap?.discounts?.done === undefined);
+    footerModules.push({
+      key: "gider",
+      label: "Gider",
+      labelShort: "Gid",
+      pct: Number.isFinite(expensesAvgPct) ? expensesAvgPct : 0,
+      done: giderDone,
+    });
+    const allModulesDone = footerModules.every((m) => m.done);
+    // Determine scenario progress pct for label heuristics
+    const scenarioProgressPct = selectedScenario?.progress_pct;
+    // Determine status pills: scenario-first when workflow advanced beyond draft,
+    // but prefer module-level "approved/revision" states.
+    const scenarioStageLabel = selectedScenario ? getScenarioStageLabel(selectedScenario, scenarioProgressPct) : null;
+    const scenarioDisplayLabel =
+      scenarioStageLabel &&
+      ["İncelemede", "Revize istendi", "Merkeze iletildi", "Kontrol edildi", "Onaylandı"].includes(
+        scenarioStageLabel
+      )
+        ? scenarioStageLabel
+        : null;
+    const scenarioDisplayClass = scenarioDisplayLabel ? getScenarioStageClass(scenarioDisplayLabel) : null;
+    const workItemLabel = workItemsLoaded && activeWorkId ? getWorkItemStageLabel(activeWorkState) : null;
+    const workItemClass = workItemLabel ? getScenarioStageClass(workItemLabel) : null;
+    const hasActiveWorkLabel = Boolean(activeWorkId && workItemLabel);
 
+    let scenarioTooltip = null;
+    if (scenarioDisplayLabel === "Kontrol edildi" && selectedScenario?.checked_at) {
+      const d = new Date(selectedScenario.checked_at);
+      scenarioTooltip = `Kontrol: ${Number.isFinite(d.getTime()) ? d.toLocaleString() : ""}`;
+    } else if (scenarioDisplayLabel === "Merkeze iletildi" && selectedScenario?.sent_at) {
+      const d = new Date(selectedScenario.sent_at);
+      scenarioTooltip = `İletildi: ${Number.isFinite(d.getTime()) ? d.toLocaleString() : ""}`;
+    } else if (scenarioDisplayLabel === "Onaylandı" && selectedScenario?.reviewed_at) {
+      const d = new Date(selectedScenario.reviewed_at);
+      scenarioTooltip = `Onay: ${Number.isFinite(d.getTime()) ? d.toLocaleString() : ""}`;
+    }
 
+    let primaryPill = null;
+    let secondaryPill = null;
+
+    const scenarioIsFinal = scenarioDisplayLabel === "Merkeze iletildi" || scenarioDisplayLabel === "Onaylandı";
+    const allowScenarioPill =
+      scenarioIsFinal || !activeWorkId || (workItemsLoaded && scenarioMetaLoaded);
+    const scenarioPillLabel = allowScenarioPill ? scenarioDisplayLabel : null;
+    const scenarioPillClass = allowScenarioPill ? scenarioDisplayClass : null;
+    const scenarioPillTooltip = allowScenarioPill ? scenarioTooltip : null;
+
+    if (scenarioIsFinal && scenarioPillLabel) {
+      primaryPill = { label: scenarioPillLabel, className: scenarioPillClass, tooltip: scenarioPillTooltip };
+    } else if (hasActiveWorkLabel) {
+      primaryPill = { label: workItemLabel, className: workItemClass };
+      const suppressScenarioPill =
+        (scenarioPillLabel === "Revize istendi" && activeWorkState !== "needs_revision") ||
+        (scenarioPillLabel === "Kontrol edildi" && activeWorkState === "needs_revision") ||
+        (scenarioPillLabel === "İncelemede" && activeWorkState === "approved");
+      if (scenarioPillLabel && scenarioPillLabel !== workItemLabel && !suppressScenarioPill) {
+        secondaryPill = { label: scenarioPillLabel, className: scenarioPillClass, tooltip: scenarioPillTooltip };
+      }
+    } else if (scenarioPillLabel) {
+      primaryPill = { label: scenarioPillLabel, className: scenarioPillClass, tooltip: scenarioPillTooltip };
+      if (workItemLabel && workItemLabel !== scenarioPillLabel) {
+        secondaryPill = { label: workItemLabel, className: workItemClass };
+      }
+    } else if (workItemLabel) {
+      primaryPill = { label: workItemLabel, className: workItemClass };
+    }
+    // Determine footer meta text
+    const footerMetaBits = [];
+    if (lastSavedAt) footerMetaBits.push(`Kaydedildi ${formatRelative(lastSavedAt)}`);
+    if (lastCalculatedAt) footerMetaBits.push(`Hesaplandı ${formatRelative(lastCalculatedAt)}`);
+    let showDebug = false;
+    try {
+      showDebug = window?.localStorage?.getItem("fs_debug_kpi") === "1";
+    } catch (_) {
+      showDebug = false;
+    }
+    if (showDebug) {
+      const debugBits = [
+        `calc:${calculating ? "1" : "0"}`,
+        `lastCalc:${lastCalculatedAt ? new Date(lastCalculatedAt).toLocaleTimeString() : "none"}`,
+        `report:${report ? "yes" : "no"}`,
+      ];
+      footerMetaBits.push(`DEBUG ${debugBits.join(" • ")}`);
+    }
+    const footerMetaText = footerMetaBits.join(" • ");
+    const hasFooterMeta = Boolean(footerMetaText);
+    // Determine primary action
+    // We compute role-aware capability flags above.  The final action
+    // selection must respect the following priority order:
+    // 1. Admin "Onayla" > 2. Accountant/Manager "Merkeze ilet" > 3. Principal/HR "Gönder".
+    const role = String(me?.role || "");
+    // Build scope options for permission checks.  Include the countryId if
+    // available (via the loaded school or current user) so that
+    // country-scoped permissions can match.  Without a countryId, a
+    // permission entry with a non-null scope_country_id will not match.
+    const countryIdForScope = school?.country_id ?? me?.country_id ?? null;
+    const scopeOpts = { schoolId, countryId: countryIdForScope };
+    const scenarioStatus = selectedScenario?.status;
+    const hasScenario = selectedScenario && selectedScenario.id;
+    // Helper to check permission using can()
+    const userCan = (res, action) => {
+      try {
+        return can(me, res, action, scopeOpts);
+      } catch {
+        return false;
+      }
+    };
+    const moduleKeyToTab = {
+      temel: "basics",
+      kapasite: "kapasite",
+      norm: "norm",
+      ik: "hr",
+      gelir: "income",
+      gider: "expenses",
+    };
+    const moduleKeyToPageKey = {
+      temel: "temel_bilgiler",
+      kapasite: "kapasite",
+      norm: "norm",
+      ik: "ik",
+      gelir: "gelirler",
+      gider: "giderler",
+    };
+    const canNavigateModule = (moduleKey) => {
+      const pageKey = moduleKeyToPageKey[moduleKey];
+      if (!pageKey) return false;
+      if (userCan(`page.${pageKey}`, "read")) return true;
+      const perms = Array.isArray(me?.permissions) ? me.permissions : [];
+      const countryId = scopeOpts.countryId;
+      return perms.some((perm) => {
+        if (perm.action !== "read" && perm.action !== "write") return false;
+        const res = String(perm.resource || "");
+        if (!res.startsWith(`section.${pageKey}.`)) return false;
+        const permCountry = perm.scope_country_id != null ? Number(perm.scope_country_id) : null;
+        const permSchool = perm.scope_school_id != null ? Number(perm.scope_school_id) : null;
+        if (permCountry != null && countryId != null && Number(permCountry) !== Number(countryId)) return false;
+        if (permSchool != null && schoolId != null && Number(permSchool) !== Number(schoolId)) return false;
+        if (permSchool != null && schoolId == null) return false;
+        if (permCountry != null && countryId == null) return false;
+        return true;
+      });
+    };
+    // Determine if user can perform scenario-level or module-level actions
+    // Scenario can only be sent when the active module is completed.
+    // Map active work ID to internal module key and to page permission resource
+    const workIdToKey = {
+      "temel_bilgiler": "temel",
+      "kapasite": "kapasite",
+      "norm.ders_dagilimi": "norm",
+      "ik.local_staff": "ik",
+      "gelirler.unit_fee": "gelir",
+      "giderler.isletme": "gider",
+    };
+    // Define the potential permission resources for each work item.  A module may
+    // have both a page-level and a section-level resource; having write
+    // permission on any of these resources allows the user to submit the
+    // module.  The order is from most specific (section-level) to page-level.
+    const workIdToWriteResources = {
+      "temel_bilgiler": ["page.temel_bilgiler"],
+      "kapasite": ["section.kapasite.caps", "page.kapasite"],
+      "norm.ders_dagilimi": ["section.norm.ders_dagilimi", "page.norm"],
+      "ik.local_staff": ["section.ik.local_staff", "page.ik"],
+      "gelirler.unit_fee": ["section.gelirler.unit_fee", "page.gelirler"],
+      "giderler.isletme": ["section.giderler.isletme", "page.giderler"],
+    };
+    const activeModuleKey = workIdToKey[String(activeWorkId || "")] || null;
+    const activeModuleObj = footerModules.find((m) => m.key === activeModuleKey);
+    const activeModuleDone = activeModuleObj ? activeModuleObj.done === true : false;
+    // Determine whether the user may attempt to submit (at least show the button).
+    // Principals/HR may submit when the scenario is in draft, in_review, or revision_requested.
+    // We only check module write permission and activeWorkId when enabling the button.
+    const canSubmitScenarioBase =
+      hasScenario &&
+      ["draft", "in_review", "revision_requested"].includes(scenarioStatus) &&
+      (role === "principal" || role === "hr");
+    // Map active work ID to the corresponding page permission resource (if any)
+    const writeResources = activeWorkId ? workIdToWriteResources[String(activeWorkId)] || [] : [];
+    const userHasModuleWrite = writeResources.some((res) => {
+      try {
+        return userCan(res, "write");
+      } catch {
+        return false;
+      }
+    });
+    // Full submit flag: base permission and active module completed
+    // Determine if the user can actually submit the module right now.
+    // Must have base submit rights, an active work item, write permission on that module, and the module must be completed.
+    const canForwardScenario =
+      hasScenario &&
+      (role === "accountant" || role === "manager" || userCan("scenario.forward", "write")) &&
+      scenarioStatus === "approved" &&
+      !selectedScenario?.sent_at &&
+      selectedScenario?.checked_at;
+    const canApproveScenario =
+      hasScenario &&
+      (role === "admin" || userCan("admin.scenario.review", "write")) &&
+      scenarioStatus === "sent_for_approval";
+
+    // Calculate button permission: user must have write permissions on *all* modules
+    // Define the list of module page resources that correspond to scenario modules.
+    const moduleResources = [
+      "page.temel_bilgiler",
+      "page.kapasite",
+      "page.norm",
+      "page.ik",
+      "page.gelirler",
+      "page.giderler",
+    ];
+    const hasAllModuleWritePermissions = moduleResources.every((res) => {
+      try {
+        return can(me, res, "write", scopeOpts);
+      } catch {
+        return false;
+      }
+    });
+    // Determine disabled reasons
+    const primaryTooltipReasons = [];
+    let primaryDisabled = true;
+    let primaryLabel = "";
+    let primaryOnClick = null;
+    // We evaluate actions in priority: Admin > Manager > Principal.
+    if (canApproveScenario) {
+      // Admin final approval
+      primaryLabel = "Onayla";
+      primaryDisabled = false;
+      // Admin page rarely allows editing; still guard against concurrent save/calc
+      if (inputsSaving) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Kaydetme devam ediyor.");
+      }
+      if (calculating) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Hesaplama devam ediyor.");
+      }
+      if (!primaryDisabled) {
+        primaryOnClick = async () => {
+          try {
+            await api.adminReviewScenario(selectedScenario.id, { action: "approve" });
+            toast.success("Onaylandı");
+            await refreshWorkItems();
+            await refreshScenarioMeta();
+          } catch (e) {
+            toast.error(e?.message || "Onay başarısız");
+          }
+        };
+      }
+    } else if (canForwardScenario) {
+      // Accountant/manager forward to admin
+      primaryLabel = "Merkeze ilet";
+      primaryDisabled = false;
+      // disallow if modules incomplete or there are pending changes or locks
+      if (!allModulesDone) {
+        primaryDisabled = true;
+        const incomplete = footerModules.filter((m) => !m.done);
+        primaryTooltipReasons.push(
+          "Tüm modüller tamamlanmalı: " +
+            incomplete.map((m) => `${m.label} ${m.pct}%`).join(", ")
+        );
+      }
+      if (inputsDirty) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Önce değişiklikleri kaydedin.");
+      }
+      if (inputsSaving) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Kaydetme devam ediyor.");
+      }
+      if (calculating) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Hesaplama devam ediyor.");
+      }
+      if (scenarioLocked) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Senaryo kilitli.");
+      }
+      if (!primaryDisabled) {
+        primaryOnClick = async () => {
+          try {
+            if (!ensurePrevRealFxForLocal("Hesaplama")) return;
+            if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
+            // Save and recalc if needed
+            if (inputsDirty) {
+              const ok = await saveInputs();
+              if (!ok) return;
+            }
+            // Always calculate before sending so KPIs are up to date
+            const calcOk = await calculate({ keepTab: true });
+            if (!calcOk) return;
+            await api.sendForApproval(schoolId, selectedScenario.id);
+            toast.success("Merkeze iletildi");
+            await refreshWorkItems();
+            await refreshScenarioMeta();
+          } catch (e) {
+            toast.error(e?.message || "İletme başarısız");
+          }
+        };
+      }
+    } else if (canSubmitScenarioBase) {
+      // Principal/HR submit to manager (module-level). Show button even if disabled.
+      primaryLabel = "Gönder";
+      primaryDisabled = false;
+      // Validate prerequisites for module submission.  If any check fails we still show
+      // the button but keep it disabled with an explanatory tooltip.
+      if (!activeWorkId) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Gönderilecek bir modül yok.");
+      }
+      // User must have write permission on the active module's resource (page or section).
+      if (activeWorkId && !userHasModuleWrite) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Bu modülü gönderme yetkiniz yok.");
+      }
+      // Module must be in a state that allows submission (not submitted or approved).
+      if (activeWorkId && !canSubmitWorkItem) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push(moduleLockReason || "Modül gönderilemez");
+      }
+      // Module must be completed before sending.
+      if (!activeModuleDone) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Bu modül tamamlanmalı.");
+      }
+      // Cannot submit while there are unsaved changes.
+      if (inputsDirty) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Önce değişiklikleri kaydedin.");
+      }
+      if (inputsSaving) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Kaydetme devam ediyor.");
+      }
+      if (calculating) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Hesaplama devam ediyor.");
+      }
+      if (scenarioLocked) {
+        primaryDisabled = true;
+        primaryTooltipReasons.push("Senaryo kilitli.");
+      }
+      if (!primaryDisabled && activeWorkId && userHasModuleWrite && canSubmitWorkItem && activeModuleDone) {
+        // For module-level submission, submit only the active work item.
+        primaryOnClick = async () => {
+          await submitActiveWorkItem();
+        };
+      }
+    }
+    const primaryTooltip =
+      primaryTooltipReasons.length > 0 ? primaryTooltipReasons.join(" • ") : undefined;
+    // Determine calculate and export labels as before
     const hasReport = Boolean(report);
     const calculateLabel = inputsDirty ? "Kaydet & Hesapla" : hasReport ? "Yeniden Hesapla" : "Hesapla";
     const exportLabel = exportingPdf ? "PDF hazirlaniyor..." : "Disa Aktar";
     const showExportButton = tab === "report" || hasReport;
-
     return (
-      <div className="school-page school-page--portal school-topbar-inline">
-        {/* pills (status/year/last saved/last calc) */}
-        <div className="school-topbar-sub">
-
-          {selectedScenario ? (
-            <span className={`school-pill ${getScenarioStatusMeta(selectedScenario.status).className}`}>
-              {getScenarioStatusMeta(selectedScenario.status).label}
-            </span>
-          ) : null}
-
-          {showInputsHeader && inputs ? (
-            <>
-              {inputsDirty ? (
-                <span className="school-pill is-warn">Kaydedilmedi</span>
-              ) : (
-                <span className="school-pill is-ok">Kaydedildi</span>
-              )}
-
-              {lastSavedAt ? (
-                <span className="school-pill is-muted">
-                  {inputsDirty
-                    ? `Son kayit: ${formatRelative(lastSavedAt)} (degisiklik var)`
-                    : `Kaydedildi: ${formatRelative(lastSavedAt)}`}
+      <div className="school-sticky-footer" role="region" aria-label="Scenario actions">
+        <div className="school-sticky-footer-inner">
+          <div className="school-footer-left">
+            {/* Status chips */}
+            <div className="school-footer-pills" role="status" aria-live="polite">
+              {primaryPill ? (
+                <span className={`school-pill ${primaryPill.className}`} title={primaryPill.tooltip}>
+                  {primaryPill.label}
                 </span>
               ) : null}
-
-              {lastCalculatedAt ? (
-                <span className="school-pill is-muted">Hesaplandi: {formatRelative(lastCalculatedAt)}</span>
+              {secondaryPill ? (
+                <span className={`school-pill ${secondaryPill.className}`} title={secondaryPill.tooltip}>
+                  {secondaryPill.label}
+                </span>
               ) : null}
-            </>
-          ) : null}
-        </div>
-
-        {/* actions (same buttons + same classes) */}
-        <div className="school-topbar-right">
-          {showInputsHeader ? (
-            inputs ? (
-              <div className="school-actions">
-                <button
-                  type="button"
-                  className={"topbar-btn " + (inputsDirty && !inputsSaving ? "is-save" : "is-ghost")}
-                  onClick={saveInputs}
-                  disabled={!inputsDirty || inputsSaving || inputsLocked}
-                  title={
-                    inputsLocked
-                      ? "Senaryo kilitli"
-                      : inputsDirty
-                        ? "Degisiklikleri kaydet"
-                        : "Kaydedilecek degisiklik yok"
-                  }
+              {inputs ? (
+                <span
+                  className={`school-pill is-warn ${inputsDirty ? "" : "is-placeholder"}`}
+                  title={inputsDirty ? "Kaydedilmemiş değişiklikler var" : undefined}
+                  aria-hidden={inputsDirty ? undefined : "true"}
                 >
-                  {inputsSaving ? "Kaydediliyor..." : inputsDirty ? "Kaydet" : "Kaydedildi"}
-                </button>
+                  ● Değişiklik var
+                </span>
+              ) : null}
+            </div>
+            {inputs ? (
+              <div
+                className={`school-footer-meta small ${hasFooterMeta ? "" : "is-placeholder"}`}
+                title={hasFooterMeta ? footerMetaText : undefined}
+                aria-hidden={hasFooterMeta ? undefined : "true"}
+              >
+                {hasFooterMeta ? footerMetaText : "Kaydedildi"}
+              </div>
+            ) : null}
+          </div>
 
+      {inputs ? (
+        <>
+          {/* Middle section: progress bar sits in its own container between status and buttons */}
+          <div className="school-footer-middle">
+            <div className="module-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+              {footerModules.map((m) => {
+                const tabKey = moduleKeyToTab[m.key];
+                const canNav = Boolean(tabKey && canNavigateModule(m.key));
+                const isActive = activeModuleKey === m.key;
+                const workState = getModuleWorkState(m.key);
+                const statusClass = getModuleStatusClass(
+                  workState,
+                  selectedScenario?.status,
+                  selectedScenario?.sent_at
+                );
+                const SegmentTag = canNav ? "button" : "div";
+                return (
+                  <SegmentTag
+                    key={m.key}
+                    type={canNav ? "button" : undefined}
+                    onClick={canNav ? () => setTab(tabKey) : undefined}
+                    className={`module-seg ${canNav ? "is-clickable" : ""} ${isActive ? "is-active" : ""}`}
+                    title={`${m.label}: ${Math.round(m.pct)}% ${m.done ? "Tamamlandı" : "Eksik"}`}
+                    aria-disabled={canNav ? undefined : "true"}
+                  >
+                    <div className="module-title">{m.labelShort}</div>
+                    <div className="module-bar">
+                      <div
+                        className={`module-fill ${statusClass}`}
+                        style={{ width: `${Math.min(100, Math.max(0, Math.round(m.pct)))}%` }}
+                      >
+                        <span className="module-percent">{Math.round(m.pct)}%</span>
+                      </div>
+                    </div>
+                  </SegmentTag>
+                );
+              })}
+            </div>
+          </div>
+          {/* Right section: action buttons aligned to the far right */}
+          <div className="school-footer-right">
+            {primaryLabel ? (
+              <Tooltip lines={primaryTooltip ? [primaryTooltip] : []}>
                 <button
                   type="button"
                   className="topbar-btn is-primary"
-                  onClick={async () => {
-                    if (inputsSaving || calculating) return;
-                    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
-                    if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
-                    if (inputsDirty) {
-                      const ok = await saveInputs();
-                      if (ok) await calculate();
-                      return;
-                    }
-                    await calculate();
-                  }}
-                  disabled={inputsSaving || calculating}
-                  title={calculateLabel}
+                  onClick={primaryOnClick}
+                  disabled={primaryDisabled}
+                  title={primaryTooltip}
                 >
-                  {calculating ? "Hesaplaniyor..." : calculateLabel}
+                  {primaryLabel}
+                </button>
+              </Tooltip>
+            ) : null}
+            <button
+              type="button"
+              className={"topbar-btn " + (inputsDirty && !inputsSaving ? "is-save" : "is-ghost")}
+              onClick={saveInputs}
+              disabled={!inputsDirty || inputsSaving || inputsLocked}
+              title={
+                inputsLocked
+                  ? inputsLockedReason
+                  : inputsDirty
+                    ? "Değişiklikleri kaydet"
+                    : "Kaydedilecek değişiklik yok"
+              }
+            >
+              {inputsSaving ? "Kaydediliyor..." : inputsDirty ? "Kaydet" : "Kaydedildi"}
+            </button>
+
+            {hasAllModuleWritePermissions ? (
+              <button
+                type="button"
+                className="topbar-btn is-primary"
+                onClick={async () => {
+                  if (inputsSaving || calculating) return;
+                  if (!ensurePrevRealFxForLocal("Hesaplama")) return;
+                  if (!ensurePlanningStudentsForY2Y3("Hesaplama")) return;
+                  if (inputsDirty) {
+                    const ok = await saveInputs();
+                    if (ok) await calculate();
+                    return;
+                  }
+                  await calculate();
+                }}
+                disabled={inputsSaving || calculating}
+                title={calculateLabel}
+              >
+                {calculating ? "Hesaplanıyor..." : calculateLabel}
+              </button>
+            ) : null}
+
+            {showExportButton ? (
+              <div className="action-menu" ref={exportMenuRef}>
+                <button
+                  type="button"
+                  className={`topbar-btn is-ghost ${exportingPdf ? "is-loading" : ""}`}
+                  onClick={() => {
+                    if (exportDisabled) return;
+                    setExportOpen((prev) => !prev);
+                  }}
+                  disabled={exportDisabled}
+                  aria-haspopup="menu"
+                  aria-expanded={exportOpen}
+                  aria-busy={exportingPdf ? "true" : undefined}
+                >
+                  {exportingPdf ? <span className="pdf-export-spinner" aria-hidden="true" /> : null}
+                  {exportLabel}
                 </button>
 
-                {showExportButton ? (
-                  <div className="action-menu" ref={exportMenuRef}>
+                {exportOpen ? (
+                  <div className="action-menu-panel action-menu-panel--up" role="menu">
                     <button
                       type="button"
-                      className={`topbar-btn is-ghost ${exportingPdf ? "is-loading" : ""}`}
+                      className="action-menu-item"
                       onClick={() => {
-                        if (exportDisabled) return;
-                        setExportOpen((prev) => !prev);
+                        setExportOpen(false);
+                        handleExport();
                       }}
                       disabled={exportDisabled}
-                      aria-haspopup="menu"
-                      aria-expanded={exportOpen}
-                      aria-busy={exportingPdf ? "true" : undefined}
+                      role="menuitem"
                     >
-                      {exportingPdf ? <span className="pdf-export-spinner" aria-hidden="true" /> : null}
-                      {exportLabel}
+                      Excel (.xlsx)
                     </button>
-
-                    {exportOpen ? (
-                      <div className="action-menu-panel" role="menu">
-                        <button
-                          type="button"
-                          className="action-menu-item"
-                          onClick={() => {
-                            setExportOpen(false);
-                            handleExport();
-                          }}
-                          disabled={exportDisabled}
-                          role="menuitem"
-                        >
-                          Excel (.xlsx)
-                        </button>
-                        <button
-                          type="button"
-                          className="action-menu-item"
-                          onClick={() => {
-                            setExportOpen(false);
-                            handleExportPdf();
-                          }}
-                          disabled={exportDisabled}
-                          role="menuitem"
-                        >
-                          PDF (.pdf)
-                        </button>
-                      </div>
-                    ) : null}
+                    <button
+                      type="button"
+                      className="action-menu-item"
+                      onClick={() => {
+                        setExportOpen(false);
+                        handleExportPdf();
+                      }}
+                      disabled={exportDisabled}
+                      role="menuitem"
+                    >
+                      PDF (.pdf)
+                    </button>
                   </div>
                 ) : null}
               </div>
-            ) : (
-              <div className="school-topbar-hint small">Once bir senaryo secin.</div>
-            )
-          ) : null}
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <div className="school-footer-right">
+          <div className="school-footer-hint small">Önce bir senaryo seçin.</div>
+        </div>
+      )}
         </div>
       </div>
     );
@@ -1594,7 +2425,7 @@ export default function SchoolPage() {
     inputs,
     setField,
     norm,
-    setNorm,
+    setNorm: setNormSafe,
     handlePlanningGradesChange,
     dirtyPaths,
     markDirty,
@@ -1617,6 +2448,11 @@ export default function SchoolPage() {
     expensesMissingLines,
     uiScopeKey,
     handleIkSalaryComputed,
+
+    // Work item workflow context
+    workItems,
+    refreshWorkItems,
+    submitWorkItem,
   };
 
   return (
@@ -1668,14 +2504,6 @@ export default function SchoolPage() {
         </div>
       ) : null}
 
-      {outlet?.headerPortalEl
-        ? createPortal(renderTopbarMetaAndActions(), outlet.headerPortalEl)
-        : (
-          <div className="sticky-stack school-nav">
-            {renderInputsHeader()}
-          </div>
-        )}
-
       {!selectedScenarioId ? (
         <div className="card" style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 700 }}>Okul & Senaryo Sec</div>
@@ -1694,6 +2522,7 @@ export default function SchoolPage() {
       ) : (
         <Outlet context={outletContextValue} />
       )}
+      {renderStickyFooter()}
     </div>
   );
 }

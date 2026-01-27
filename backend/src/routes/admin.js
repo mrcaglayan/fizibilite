@@ -5,11 +5,17 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { getPool } = require("../db");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
+const { ensurePermissions } = require("../utils/ensurePermissions");
+const { PERMISSIONS_CATALOG } = require("../utils/permissionsCatalog");
+const { getUserPermissions } = require("../utils/permissionService");
 const { getProgressConfig, parseJsonValue } = require("../utils/progressConfig");
+const { REQUIRED_WORK_IDS } = require("../utils/scenarioWorkflow");
 
 const router = express.Router();
 router.use(requireAuth);
 router.use(requireAdmin);
+
+// Duplicated imports removed below; see above
 
 function normalizeCode(code) {
   return String(code || "").trim().toUpperCase();
@@ -269,7 +275,12 @@ router.post("/users", async (req, res) => {
     if (String(password).length < 8) {
       return res.status(400).json({ error: "Password must be at least 8 characters" });
     }
-    if (!["user", "admin"].includes(role)) {
+    // Validate that the requested role is one of the supported roles.  We allow
+    // both legacy roles (admin, user) and the newly introduced roles
+    // (principal, hr).  Using a constant array improves readability and
+    // prevents accidental omission when adding future roles.
+    const validRoles = ["admin", "user", "principal", "hr", "manager", "accountant"];
+    if (!validRoles.includes(role)) {
       return res.status(400).json({ error: "Invalid role" });
     }
 
@@ -667,6 +678,10 @@ router.get("/scenarios/queue", async (req, res) => {
         sc.progress_pct,
         sc.progress_json,
         sc.progress_calculated_at,
+        sc.sent_at,
+        sc.sent_by,
+        sc.checked_at,
+        sc.checked_by,
         s.id AS school_id,
         s.name AS school_name,
         c.id AS country_id,
@@ -712,6 +727,10 @@ router.get("/scenarios/queue", async (req, res) => {
           progress_pct: row.progress_pct != null ? Number(row.progress_pct) : null,
           progress_json: progressJson,
           progress_calculated_at: row.progress_calculated_at,
+          sent_at: row.sent_at,
+          sent_by: row.sent_by,
+          checked_at: row.checked_at,
+          checked_by: row.checked_by,
         },
         school: { id: row.school_id, name: row.school_name },
         country: { id: row.country_id, name: row.country_name, region: row.country_region },
@@ -762,16 +781,24 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
     );
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
-    if (action === "approve") {
-      if (scenario.status !== "submitted") {
-        return res.status(409).json({ error: "Scenario must be submitted before approval" });
+    if (action === 'approve') {
+      // Admin approval is only allowed after a manager forwards the scenario
+      // via the send‑for‑approval endpoint.  At that point the status
+      // becomes 'sent_for_approval'.
+      if (scenario.status !== 'sent_for_approval') {
+        return res.status(409).json({ error: 'Scenario must be sent for approval before admin approval' });
       }
       let includedYears = normalizeIncludedYears(req.body?.includedYears);
       if (!includedYears.length) includedYears = YEAR_KEYS.slice();
       const includedSet = includedYears.join(",");
 
       await pool.query(
-        "UPDATE school_scenarios SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=:u, review_note=:note WHERE id=:id",
+        `UPDATE school_scenarios
+         SET status='approved',
+             reviewed_at=CURRENT_TIMESTAMP,
+             reviewed_by=:u,
+             review_note=:note
+         WHERE id=:id`,
         { id: scenarioId, u: req.user.id, note: note || null }
       );
 
@@ -799,25 +826,95 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
         { id: scenarioId, note: note || null, u: req.user.id }
       );
     } else {
-      if (!["submitted", "approved"].includes(scenario.status)) {
-        return res.status(409).json({ error: "Scenario must be submitted or approved to request revision" });
+      // Revision requests can be made on scenarios that have been sent to admins
+      // or already approved.  For legacy compatibility we also allow submitted.
+      if (!['sent_for_approval', 'approved', 'submitted'].includes(scenario.status)) {
+        return res.status(409).json({ error: 'Scenario must be sent for approval or approved to request revision' });
       }
       if (!note) return res.status(400).json({ error: "note is required for revision requests" });
-
-      await pool.query(
-        "UPDATE school_scenarios SET status='revision_requested', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=:u, review_note=:note WHERE id=:id",
-        { id: scenarioId, u: req.user.id, note }
+      // Expect revisionWorkIds from body
+      const revisionWorkIdsRaw = req.body?.revisionWorkIds;
+      if (!Array.isArray(revisionWorkIdsRaw) || revisionWorkIdsRaw.length === 0) {
+        return res.status(400).json({ error: 'revisionWorkIds must be a non-empty array' });
+      }
+      // Normalize and validate work IDs
+      const uniqueIds = Array.from(
+        new Set(
+          revisionWorkIdsRaw
+            .map((id) => String(id || '').trim())
+            .filter((id) => Boolean(id))
+        )
       );
-
-      await pool.query(
-        "DELETE FROM school_reporting_scenarios WHERE scenario_id=:id",
-        { id: scenarioId }
-      );
-
-      await pool.query(
-        "INSERT INTO scenario_review_events (scenario_id, action, note, actor_user_id) VALUES (:id,'revise',:note,:u)",
-        { id: scenarioId, note, u: req.user.id }
-      );
+      // Ensure each is in REQUIRED_WORK_IDS
+      for (const wid of uniqueIds) {
+        if (!REQUIRED_WORK_IDS.includes(wid)) {
+          return res.status(400).json({ error: `Invalid work id: ${wid}` });
+        }
+      }
+      if (uniqueIds.length === 0) {
+        return res.status(400).json({ error: 'revisionWorkIds must contain at least one valid work id' });
+      }
+      // Begin transaction to update scenario and work items atomically
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        // Update scenario: set revision_requested and clear sent/check fields
+        await conn.query(
+          `UPDATE school_scenarios
+           SET status='revision_requested',
+               reviewed_at=CURRENT_TIMESTAMP,
+               reviewed_by=:u,
+               review_note=:note,
+               sent_at=NULL,
+               sent_by=NULL,
+               checked_at=NULL,
+               checked_by=NULL
+           WHERE id=:id`,
+          { id: scenarioId, u: req.user.id, note }
+        );
+        // Remove reporting entries
+        await conn.query(
+          'DELETE FROM school_reporting_scenarios WHERE scenario_id=:id',
+          { id: scenarioId }
+        );
+        // Log review event
+        await conn.query(
+          'INSERT INTO scenario_review_events (scenario_id, action, note, actor_user_id) VALUES (:id, :action, :note, :u)',
+          { id: scenarioId, action: 'revise', note, u: req.user.id }
+        );
+        // Ensure all required work items exist.  Insert missing rows with default state 'approved'.
+        for (const wid of REQUIRED_WORK_IDS) {
+          await conn.query(
+            `INSERT INTO scenario_work_items (scenario_id, work_id, state, updated_by)
+             SELECT :sid, :wid, 'approved', :uid
+             FROM DUAL
+             WHERE NOT EXISTS (
+               SELECT 1 FROM scenario_work_items WHERE scenario_id=:sid AND work_id=:wid
+             )`,
+            { sid: scenarioId, wid, uid: req.user.id }
+          );
+        }
+        // Set all required work items to 'approved' by default (lock them)
+        await conn.query(
+          `UPDATE scenario_work_items
+           SET state='approved', updated_by=?, updated_at=CURRENT_TIMESTAMP
+           WHERE scenario_id=? AND work_id IN (?)`,
+          [req.user.id, scenarioId, REQUIRED_WORK_IDS]
+        );
+        // Now set selected ones to 'needs_revision'
+        await conn.query(
+          `UPDATE scenario_work_items
+           SET state='needs_revision', updated_by=?, updated_at=CURRENT_TIMESTAMP
+           WHERE scenario_id=? AND work_id IN (?)`,
+          [req.user.id, scenarioId, uniqueIds]
+        );
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback();
+        conn.release();
+        return res.status(500).json({ error: 'Server error', details: String(err?.message || err) });
+      }
+      conn.release();
     }
 
     const [[updated]] = await pool.query(
@@ -1020,6 +1117,261 @@ router.get("/reports/rollup", async (req, res) => {
  */
 router.get("/reports/rollup.xlsx", async (req, res) => {
   return res.status(501).json({ error: "Rollup XLSX export not implemented yet" });
+});
+
+/**
+ * PATCH /admin/users/:id/role
+ * Body: { role }
+ *
+ * Allows an admin to change a user's role.  Valid roles are defined
+ * by the application (admin, user, principal, hr).  Returns the
+ * updated id and role on success.
+ */
+router.patch("/users/:id/role", async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+    const role = String(req.body?.role || "").trim();
+    // List of allowed roles; update this array when adding new roles.  Includes
+    // the manager/accountant roles.  Only admins may assign the manager role.
+    const validRoles = ["admin", "user", "principal", "hr", "manager", "accountant"];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: "Invalid role" });
+    }
+    // Only admins can assign the manager or accountant roles.  Prevent
+    // non-admins from assigning this high-level role.  This check should
+    // precede updating the database.
+    if ((role === "manager" || role === "accountant") && String(req.user.role) !== "admin") {
+      return res.status(403).json({ error: "Only admins can assign manager/accountant roles" });
+    }
+    const pool = getPool();
+    const [r] = await pool.query("UPDATE users SET role=:role WHERE id=:id", { role, id: userId });
+    if (!r.affectedRows) return res.status(404).json({ error: "User not found" });
+    return res.json({ id: userId, role });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /admin/permissions/catalog
+ *
+ * Ensures all catalog permissions exist in the database and returns the
+ * permissions grouped by their UI group labels.  Each group key
+ * corresponds to the `group` property from the catalog and maps to
+ * an array of permission definitions.
+ */
+router.get("/permissions/catalog", async (req, res) => {
+  try {
+    // Ensure all permissions in the catalog exist in the DB
+    await ensurePermissions();
+    // Group catalog entries by group
+    const grouped = {};
+    for (const perm of PERMISSIONS_CATALOG) {
+      const grp = perm.group || "Other";
+      if (!grouped[grp]) grouped[grp] = [];
+      grouped[grp].push(perm);
+    }
+    return res.json(grouped);
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /admin/users/:id/permissions
+ *
+ * Returns the list of permissions assigned to a user.  Each item
+ * includes the resource, action, and any scope identifiers.
+ */
+router.get("/users/:id/permissions", async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+    const pool = getPool();
+    const perms = await getUserPermissions(pool, userId);
+    return res.json(perms);
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * PUT /admin/users/:id/permissions
+ *
+ * Replaces all permissions for a user.  The body must include a
+ * `permissions` array where each entry contains `resource`, `action`,
+ * and optionally `scope_country_id` and `scope_school_id`.  Any
+ * existing permissions for the user are removed and replaced by the
+ * provided list.  If a permission does not exist in the `permissions`
+ * table it will be created.  Optionally ensures that scoped
+ * permissions match the user's assigned country.
+ */
+router.put("/users/:id/permissions", async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+    const incoming = req.body?.permissions;
+    if (!Array.isArray(incoming)) {
+      return res.status(400).json({ error: "permissions must be an array" });
+    }
+    const pool = getPool();
+    // Ensure user exists and get their country
+    const [[userRow]] = await pool.query("SELECT id, country_id FROM users WHERE id=:id", { id: userId });
+    if (!userRow) return res.status(404).json({ error: "User not found" });
+    const userCountry = userRow.country_id;
+    // Build list of permission entries to insert
+    const entries = [];
+    for (const item of incoming) {
+      const resource = String(item?.resource || "").trim();
+      const action = String(item?.action || "").trim();
+      if (!resource || !action) {
+        return res.status(400).json({ error: "Each permission must include resource and action" });
+      }
+      let scopeCountryId = item?.scope_country_id;
+      let scopeSchoolId = item?.scope_school_id;
+      // Normalize scope values
+      scopeCountryId = scopeCountryId != null ? Number(scopeCountryId) : null;
+      scopeSchoolId = scopeSchoolId != null ? Number(scopeSchoolId) : null;
+      if (scopeCountryId != null && !Number.isFinite(scopeCountryId)) scopeCountryId = null;
+      if (scopeSchoolId != null && !Number.isFinite(scopeSchoolId)) scopeSchoolId = null;
+      // Optionally validate that the country scope matches user's assigned country
+      if (scopeCountryId != null && userCountry != null && Number(scopeCountryId) !== Number(userCountry)) {
+        return res.status(400).json({ error: `scope_country_id ${scopeCountryId} does not match user's country ${userCountry}` });
+      }
+      // Ensure the permission exists in the permissions table
+      let permId = null;
+      const [[permRow]] = await pool.query(
+        "SELECT id FROM permissions WHERE resource=:resource AND action=:action",
+        { resource, action }
+      );
+      if (permRow) {
+        permId = permRow.id;
+      } else {
+        const [ins] = await pool.query(
+          "INSERT INTO permissions (resource, action) VALUES (:resource, :action)",
+          { resource, action }
+        );
+        permId = ins.insertId;
+      }
+      entries.push({ permId, scopeCountryId, scopeSchoolId });
+    }
+    // Replace existing permissions within a transaction
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      // Delete existing
+      await conn.query("DELETE FROM user_permissions WHERE user_id=:uid", { uid: userId });
+      // Insert new
+      for (const row of entries) {
+        await conn.query(
+          "INSERT INTO user_permissions (user_id, permission_id, scope_country_id, scope_school_id) VALUES (:user_id,:permission_id,:scope_country_id,:scope_school_id)",
+          {
+            user_id: userId,
+            permission_id: row.permId,
+            scope_country_id: row.scopeCountryId,
+            scope_school_id: row.scopeSchoolId,
+          }
+        );
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+    // Return updated permissions
+    const updated = await getUserPermissions(pool, userId);
+    return res.json({ id: userId, permissions: updated });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /admin/schools/:schoolId/principals
+ *
+ * Lists principal users assigned to a school. Returns user id, full_name
+ * and email for each principal.
+ */
+router.get("/schools/:schoolId/principals", async (req, res) => {
+  try {
+    const schoolId = Number(req.params.schoolId);
+    if (!Number.isFinite(schoolId)) return res.status(400).json({ error: "Invalid school id" });
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT u.id, u.full_name, u.email
+       FROM school_user_roles sur
+       JOIN users u ON u.id = sur.user_id
+       WHERE sur.school_id = :sid AND sur.role = 'principal'`,
+      { sid: schoolId }
+    );
+    return res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * PUT /admin/schools/:schoolId/principals
+ * Body: { userIds: number[] }
+ *
+ * Replaces the list of principals for a school.  Removes all existing
+ * principal assignments and inserts new rows.  Optionally updates
+ * each user's role to 'principal' if they are not already assigned that role.
+ */
+router.put("/schools/:schoolId/principals", async (req, res) => {
+  try {
+    const schoolId = Number(req.params.schoolId);
+    if (!Number.isFinite(schoolId)) return res.status(400).json({ error: "Invalid school id" });
+    const userIds = req.body?.userIds;
+    if (!Array.isArray(userIds)) {
+      return res.status(400).json({ error: "userIds must be an array" });
+    }
+    // Filter and dedupe userIds
+    const ids = Array.from(
+      new Set(
+        userIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+    );
+    const pool = getPool();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      // Remove existing principal assignments for this school
+      await conn.query(
+        "DELETE FROM school_user_roles WHERE school_id=:sid AND role='principal'",
+        { sid: schoolId }
+      );
+      // Insert new assignments
+      for (const uid of ids) {
+        await conn.query(
+          "INSERT INTO school_user_roles (school_id, user_id, role, assigned_by) VALUES (:sid, :uid, 'principal', :assigned_by)",
+          { sid: schoolId, uid, assigned_by: req.user.id }
+        );
+        // Optionally update user role to principal if not already
+        const [[urow]] = await conn.query(
+          "SELECT role FROM users WHERE id=:id",
+          { id: uid }
+        );
+        if (urow && String(urow.role) !== 'principal') {
+          await conn.query("UPDATE users SET role='principal' WHERE id=:id", { id: uid });
+        }
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+    return res.json({ id: schoolId, principalUserIds: ids });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
 });
 
 module.exports = router;

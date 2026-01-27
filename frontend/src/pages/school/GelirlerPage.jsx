@@ -9,13 +9,23 @@ function pctValue(tab) {
 }
 
 export default function GelirlerPage() {
-  const { inputs, setField, baseYear, inputCurrencyCode, dirtyPaths, markDirty, progMap } =
-    useOutletContext();
+  const {
+    inputs,
+    setField,
+    baseYear,
+    inputCurrencyCode,
+    dirtyPaths,
+    markDirty,
+    progMap,
+  } = useOutletContext();
 
   if (!inputs) return null;
 
+
+
   return (
     <div style={{ marginTop: 12 }}>
+
       <TabProgressHeatmap
         pct={pctValue(progMap?.gelirler)}
         title="Gelirler"

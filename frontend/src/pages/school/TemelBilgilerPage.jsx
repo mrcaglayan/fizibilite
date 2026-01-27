@@ -28,8 +28,12 @@ export default function TemelBilgilerPage() {
 
   if (!inputs) return null;
 
+
+
   return (
     <div style={{ marginTop: 12 }}>
+      {/* Workflow bar for Temel Bilgiler */}
+
       <TabProgressHeatmap
         pct={pctValue(progMap?.temelBilgiler)}
         title="Temel Bilgiler"

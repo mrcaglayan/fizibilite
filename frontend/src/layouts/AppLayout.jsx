@@ -23,7 +23,12 @@ import {
   FaFileInvoiceDollar,
   FaSchool,
   FaTachometerAlt,
+  FaUserShield,
+  FaTasks,
 } from "react-icons/fa";
+
+// Permission helper to determine visibility of navigation items based on user permissions.
+import { can } from "../utils/permissions";
 
 
 function useLocalStorageState(key, defaultValue) {
@@ -51,6 +56,7 @@ function defaultTitle(pathname) {
   if (pathname.startsWith("/countries")) return "Countries";
   if (pathname.startsWith("/progress")) return "Progress Tracking";
   if (pathname.startsWith("/approvals")) return "Çalışma Listeleri";
+  if (pathname.startsWith("/review-queue")) return "Review Queue";
   if (pathname.startsWith("/reports")) return "Reports";
   if (pathname.startsWith("/admin")) return "Admin";
   if (pathname.startsWith("/profile")) return "Profil";
@@ -85,7 +91,15 @@ export default function AppLayout() {
     if (lastActive) schoolId = lastActive;
   }
   const selectedScenarioId = schoolId ? readSelectedScenarioId(schoolId) : null;
-  const showSchoolsMenu = auth.user ? auth.user.role !== "admin" : false;
+  // Determine if the school navigation sidebar should be shown.  When
+  // `auth.user` is null (e.g. during initial load), we still want to
+  // display the schools menu for non-admin users.  Only hide the menu
+  // when a logged-in user has the admin role.  Previously this was
+  // `false` when `auth.user` was null, which caused the sidebar to
+  // disappear until the page was refreshed after selecting a scenario.
+  const showSchoolsMenu = auth.user
+    ? auth.user.role !== "admin"
+    : true;
   const selectPath = schoolId ? `/select?schoolId=${schoolId}` : "/select";
   const clearHeaderMeta = React.useCallback(() => setHeaderMeta(null), [setHeaderMeta]);
   const showDefaultHeader = !headerMeta?.hideDefault;
@@ -203,6 +217,38 @@ export default function AppLayout() {
     });
   };
 
+  // Determine if the user should see the Manage Permissions page.  Users
+  // with the manager or accountant roles implicitly have this ability.  In
+  // addition, any user granted the page.manage_permissions read or write
+  // permission should see the link.  Checking the role here avoids
+  // requiring explicit user_permissions assignments for managers and
+  // accountants.
+  const canManagePermissions = React.useMemo(() => {
+    const role = auth.user?.role;
+    // Only managers (not accountants) are implicitly granted access to Manage Permissions.
+    if (role === "manager") return true;
+    const perms = auth.user?.permissions;
+    if (!Array.isArray(perms)) return false;
+    return perms.some(
+      (p) => p.resource === "page.manage_permissions" && (p.action === "read" || p.action === "write")
+    );
+  }, [auth.user?.permissions, auth.user?.role]);
+
+  // Determine if the user should see the Manager Review Queue page.  Users
+  // with the manager, accountant, or admin roles have implicit access.  In
+  // addition, any user granted the page.manage_permissions read or write
+  // permission can review scenarios.  This mirrors the backend reviewer
+  // policy.
+  const canReviewQueue = React.useMemo(() => {
+    const role = auth.user?.role;
+    if (role === 'admin' || role === 'manager' || role === 'accountant') return true;
+    const perms = auth.user?.permissions;
+    if (!Array.isArray(perms)) return false;
+    return perms.some(
+      (p) => p.resource === 'page.manage_permissions' && (p.action === 'read' || p.action === 'write')
+    );
+  }, [auth.user?.permissions, auth.user?.role]);
+
   const schoolBase = schoolId ? `/schools/${schoolId}` : null;
   const isScenarioReady = Boolean(selectedScenarioId);
   // While on the /select page the side navigation should still indicate which
@@ -267,6 +313,67 @@ export default function AppLayout() {
     },
   ];
 
+  // Filter the navigation items based on read permissions.  A nav item is
+  // shown only if the authenticated user has read access to the corresponding
+  // page resource within the current school context.  When schoolId is
+  // undefined (e.g. on the schools list page) all items are shown.
+  // Do not wrap this in a memoization hook so that it recomputes whenever
+  // auth.user or schoolId changes.  Previously this used React.useMemo,
+  // but users reported that the navigation would not update immediately
+  // after selecting a scenario; computing it inline ensures the sidebar
+  // updates whenever its dependencies change.
+  // Compute the list of navigation items the user can see.  In addition to
+  // standard page-level read permissions, treat a write permission on any
+  // section of a module as sufficient to show the page.  Without this,
+  // users who only have section-level write permissions (e.g. Giderler
+  // expenses) would not see the Giderler page in the sidebar.  We reuse
+  // the `can()` helper for scope checks but add a fallback for
+  // section-level permissions.  Admin users bypass checks via `can()`.
+  let permittedNavItems;
+  if (!schoolId) {
+    // When there is no school context (e.g. /schools list), show all items
+    permittedNavItems = userNavItems;
+  } else if (!auth.user || !Array.isArray(auth.user.permissions)) {
+    // If the user object is missing or has no permissions list yet, show all items
+    permittedNavItems = userNavItems;
+  } else {
+    const countryId = auth.user.country_id;
+    permittedNavItems = userNavItems.filter((item) => {
+      const pageKey = item.id.replace(/-/g, "_");
+      const pageResource = `page.${pageKey}`;
+      // First, check standard page-level read permission
+      if (can(auth.user, pageResource, 'read', { schoolId: Number(schoolId), countryId })) {
+        return true;
+      }
+      // Fallback: if the user has any read or write permission on a section
+      // under this page, show the page.  We need to manually check the
+      // user's permissions list because `can()` does not treat a section
+      // permission as covering its parent page.
+      return auth.user.permissions.some((perm) => {
+        // Only consider read/write actions
+        if (perm.action !== 'read' && perm.action !== 'write') return false;
+        const res = String(perm.resource || '');
+        // Match section.<pageKey>.<...>
+        if (!res.startsWith(`section.${pageKey}.`)) return false;
+        // Check scope: country and school restrictions
+        const permCountry = perm.scope_country_id != null ? Number(perm.scope_country_id) : null;
+        const permSchool = perm.scope_school_id != null ? Number(perm.scope_school_id) : null;
+        // A permission is valid if it is global or matches the provided scope
+        if (permCountry != null && countryId != null && Number(permCountry) !== Number(countryId)) {
+          return false;
+        }
+        if (permSchool != null && schoolId != null && Number(permSchool) !== Number(schoolId)) {
+          return false;
+        }
+        // If permSchool is non-null but provided schoolId is null, skip
+        if (permSchool != null && schoolId == null) return false;
+        // If permCountry is non-null but provided countryId is null, skip
+        if (permCountry != null && countryId == null) return false;
+        return true;
+      });
+    });
+  }
+
   return (
     <div className={"app-shell " + (sidebarCollapsed ? "is-collapsed" : "")}>
       <aside className={"app-sidebar " + (sidebarCollapsed ? "close" : "")}> 
@@ -310,7 +417,7 @@ export default function AppLayout() {
           </li>
           {renderAdminNavItems()}
           {showSchoolsMenu
-            ? userNavItems.map((item) => {
+            ? permittedNavItems.map((item) => {
               // A nav item is blocked only if there is no scenario selected
               // (meaning the user hasn't chosen one yet) and we are not on
               // the select page. When on `/select`, we allow navigation back
@@ -330,8 +437,17 @@ export default function AppLayout() {
               // last visited route to determine which nav item should appear
               // active. This ensures the sidebar keeps its highlight when
               // navigating away from school contexts.
-              if (!isActive && !location.pathname.startsWith("/schools") && lastVisitedRoute) {
+              // When not on a specific school page, we normally highlight the last visited
+              // route to preserve context when switching to the Select page.  However,
+              // we only apply this on the /select page itself.  For other top-level
+              // pages (e.g. /profile, /manage-permissions, /admin), we do not
+              // highlight any school nav item.
+              if (!isActive && location.pathname.startsWith("/select") && lastVisitedRoute) {
                 isActive = item.id === lastVisitedRoute;
+              }
+              // Prevent highlighting of school navigation items when on the Manage Permissions page
+              if (location.pathname.startsWith("/manage-permissions") || location.pathname.startsWith("/profile")) {
+                isActive = false;
               }
               return (
                 <li key={item.id}>
@@ -352,6 +468,37 @@ export default function AppLayout() {
               );
             })
             : null}
+          {/* Insert Manage Permissions link right above the Profile option if applicable */}
+          {canManagePermissions ? (
+            <li key="manage-permissions">
+              <NavLink
+                to="/manage-permissions"
+                className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
+                onClick={handleGuardedNavLink("/manage-permissions")}
+              >
+                <span className="app-nav-icon">
+                  <FaUserShield aria-hidden="true" />
+                </span>
+                <span className="app-label">Manage Permissions</span>
+              </NavLink>
+            </li>
+          ) : null}
+
+          {/* Insert Manager Review Queue link above Manage Permissions if applicable */}
+          {canReviewQueue ? (
+            <li key="review-queue">
+              <NavLink
+                to="/review-queue"
+                className={({ isActive }) => "app-nav-link" + (isActive ? " is-active" : "")}
+                onClick={handleGuardedNavLink("/review-queue")}
+              >
+                <span className="app-nav-icon">
+                  <FaTasks aria-hidden="true" />
+                </span>
+                <span className="app-label">Review Queue</span>
+              </NavLink>
+            </li>
+          ) : null}
           <li>{renderRouteLink({ to: "/profile", label: "Profil", icon: <FaUser /> })}</li>
         </ul>
 
@@ -369,21 +516,7 @@ export default function AppLayout() {
       <section className="app-home-section">
         <div className="app-topbar">
           <div className={`app-topbar-row${headerMeta?.centered ? " app-topbar-row--centered" : ""}`}>
-            <div className="app-topbar-left">
-            {showSchoolsMenu ? (
-              <button
-                type="button"
-                className="nav-btn"
-                onClick={() => handleGuardedNavigate(selectPath)}
-                title="Okul / Senaryo Değiştir"
-              >
-                {/* Use a school icon followed by the combined label and a chevron, similar to the example design. */}
-                <FaSchool aria-hidden="true" />
-                <span style={{ whiteSpace: "nowrap" }}>Okul / Senaryo Değiştir</span>
-                <FaChevronDown aria-hidden="true" />
-              </button>
-            ) : null}
-            </div>
+            <div className="app-topbar-left" />
 
             {showDefaultHeader ? (
               <div className="app-topbar-text">
@@ -391,8 +524,21 @@ export default function AppLayout() {
                 {headerMeta?.subtitle ? <div className="app-topbar-sub">{headerMeta.subtitle}</div> : null}
               </div>
             ) : null}
-
-            <div className="app-topbar-slot" ref={captureHeaderPortalEl} />
+            <div className="app-topbar-slot" ref={captureHeaderPortalEl}>
+              {showSchoolsMenu ? (
+                <button
+                  type="button"
+                  className="nav-btn"
+                  onClick={() => handleGuardedNavigate(selectPath)}
+                  title="Okul / Senaryo Degistir"
+                >
+                  {/* Use a school icon followed by the combined label and a chevron, similar to the example design. */}
+                  <FaSchool aria-hidden="true" />
+                  <span style={{ whiteSpace: "nowrap" }}>Okul / Senaryo Degistir</span>
+                  <FaChevronDown aria-hidden="true" />
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
 

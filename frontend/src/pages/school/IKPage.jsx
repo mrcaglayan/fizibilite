@@ -19,12 +19,16 @@ export default function IKPage() {
     uiScopeKey,
     handleIkSalaryComputed,
     progMap,
+
   } = useOutletContext();
 
   if (!inputs) return null;
 
+
+
   return (
     <div style={{ marginTop: 12 }}>
+
       <TabProgressHeatmap
         pct={pctValue(progMap?.ik)}
         title="IK / HR"

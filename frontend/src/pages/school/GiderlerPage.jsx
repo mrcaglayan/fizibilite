@@ -14,6 +14,7 @@ export default function GiderlerPage() {
     uiScopeKey,
     expensesAvgPct,
     expensesMissingLines,
+
   } = useOutletContext();
 
   if (!inputs) return null;
@@ -22,8 +23,11 @@ export default function GiderlerPage() {
     ? expensesMissingLines.join(" / ")
     : "";
 
+
+
   return (
     <div style={{ marginTop: 12 }}>
+
       <TabProgressHeatmap
         pct={expensesAvgPct}
         title="Giderler"

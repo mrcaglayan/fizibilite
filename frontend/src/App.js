@@ -13,6 +13,9 @@ import AdminCountriesPage from "./pages/AdminCountriesPage";
 import AdminProgressPage from "./pages/AdminProgressPage";
 import AdminApprovalsPage from "./pages/AdminApprovalsPage";
 import AdminReportsPage from "./pages/AdminReportsPage";
+import ManagePermissionsPage from "./pages/ManagePermissionsPage";
+import AdminPermissionsPage from "./pages/AdminPermissionsPage";
+import ManagerReviewQueuePage from "./pages/ManagerReviewQueuePage";
 import AppLayout from "./layouts/AppLayout";
 import TemelBilgilerPage from "./pages/school/TemelBilgilerPage";
 import KapasitePage from "./pages/school/KapasitePage";
@@ -69,6 +72,11 @@ export default function App() {
         <Route path="/progress" element={<AdminProgressPage />} />
         <Route path="/approvals" element={<AdminApprovalsPage />} />
         <Route path="/reports" element={<AdminReportsPage />} />
+        <Route
+          path="/manage-permissions"
+          element={auth.user?.role === "admin" ? <AdminPermissionsPage /> : <ManagePermissionsPage />}
+        />
+        <Route path="/review-queue" element={<ManagerReviewQueuePage />} />
         {/* legacy deep-links like /admin?tab=countries */}
         <Route path="/admin" element={<AdminRedirect />} />
       </Route>

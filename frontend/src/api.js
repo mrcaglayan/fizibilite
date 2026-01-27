@@ -173,18 +173,181 @@ export const api = {
   deleteScenario: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}`, { method: "DELETE" }),
   getScenarioInputs: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/inputs`),
-  saveScenarioInputs: (schoolId, scenarioId, inputs) =>
-    request(`/schools/${schoolId}/scenarios/${scenarioId}/inputs`, { method: "PUT", body: { inputs } }),
+  /**
+   * Save scenario inputs. Optionally accept a list of modifiedPaths for non‑admin enforcement.
+   *
+   * The backend enforces that non‑admin users provide a list of modified input paths (e.g.
+   * `inputs.temelBilgiler`, `inputs.temelBilgiler.kapasite`) when saving.  The modifiedPaths
+   * argument should be an array of strings.  If the caller is an admin or does not need
+   * enforcement, omit the modifiedPaths argument or pass undefined.
+   */
+  /**
+   * Save scenario inputs.  In addition to the scenario data (`inputs`), callers
+   * should provide a list of modified permission resources to allow the
+   * backend to enforce fine‑grained write permissions.  The legacy
+   * `modifiedPaths` argument is accepted as a fallback for backward
+   * compatibility.  When both lists are provided the backend will prefer
+   * `modifiedResources`.
+   *
+   * @param {number|string} schoolId
+   * @param {number|string} scenarioId
+   * @param {object} inputs
+   * @param {string[]} [modifiedResources] List of permission resource keys (e.g. 'page.gelirler', 'section.giderler.isletme')
+   * @param {string[]} [modifiedPaths] Legacy list of dirty input paths for fallback enforcement
+   */
+  saveScenarioInputs: (schoolId, scenarioId, inputs, modifiedResources, modifiedPaths) => {
+    const body = { inputs };
+    if (Array.isArray(modifiedResources) && modifiedResources.length > 0) {
+      body.modifiedResources = modifiedResources;
+    }
+    if (Array.isArray(modifiedPaths) && modifiedPaths.length > 0) {
+      body.modifiedPaths = modifiedPaths;
+    }
+    return request(`/schools/${schoolId}/scenarios/${scenarioId}/inputs`, {
+      method: "PUT",
+      body,
+    });
+  },
   calculateScenario: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/calculate`, { method: "POST" }),
   getReport: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/report`),
   submitScenario: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}/submit`, { method: "POST" }),
+
+  // Work item API
+  /**
+   * Fetch the list of work items for a given scenario.  Returns an array
+   * of { work_id, resource, state, updated_by, updated_at, submitted_at, reviewed_at, manager_comment } objects.
+   */
+  listWorkItems: (schoolId, scenarioId) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/work-items`),
+  /**
+   * Submit a work item (module) for review.  Accepts an optional body
+   * containing a `resource` string to override the default
+   * `section.<workId>` mapping.  Returns the updated work item.
+   */
+  submitWorkItem: (schoolId, scenarioId, workId, body) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/work-items/${workId}/submit`, {
+      method: 'POST',
+      body,
+    }),
+  /**
+   * Review a work item as a manager or accountant.  Requires a body
+   * with an `action` ('approve' or 'revise') and an optional `comment`.
+   * Returns the updated work item and scenario metadata.
+   */
+  reviewWorkItem: (schoolId, scenarioId, workId, body) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/work-items/${workId}/review`, {
+      method: 'POST',
+      body,
+    }),
+  /**
+   * Send a manager‑approved scenario to administrators for final approval.
+   */
+  sendForApproval: (schoolId, scenarioId) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/send-for-approval`, { method: 'POST' }),
   getProgressRequirements: () => request("/meta/progress-requirements"),
 
   adminGetScenarioQueue: (params = {}) => request(`/admin/scenarios/queue${toQuery(params)}`),
   adminReviewScenario: (scenarioId, body) =>
     request(`/admin/scenarios/${scenarioId}/review`, { method: "PATCH", body }),
   adminGetRollup: (params = {}) => request(`/admin/reports/rollup${toQuery(params)}`),
+
+  // --- Role & Permission management (admin) ---
+  /**
+   * Update a user's role. Only admin can call this.
+   * @param {number|string} userId
+   * @param {{ role: string }} payload
+   */
+  adminUpdateUserRole: (userId, payload) =>
+    request(`/admin/users/${userId}/role`, { method: "PATCH", body: payload }),
+
+  /**
+   * Fetch the full permissions catalog grouped by UI labels. Ensures permissions exist in DB.
+   */
+  adminGetPermissionsCatalog: () => request("/admin/permissions/catalog"),
+
+  /**
+   * Get all permissions assigned to a user, including scope information.
+   * @param {number|string} userId
+   */
+  adminGetUserPermissions: (userId) => request(`/admin/users/${userId}/permissions`),
+
+  /**
+   * Replace a user's permissions with the provided list. Each permission entry should
+   * contain resource, action, scope_country_id, and scope_school_id. Existing
+   * permissions are deleted before inserting the new set.
+   * @param {number|string} userId
+   * @param {{ permissions: Array<{resource: string, action: string, scope_country_id?: number|null, scope_school_id?: number|null}> }} payload
+   */
+  adminSetUserPermissions: (userId, payload) =>
+    request(`/admin/users/${userId}/permissions`, { method: "PUT", body: payload }),
+
+  /**
+   * Get the list of users assigned as principals for a given school.
+   * @param {number|string} schoolId
+   */
+  adminGetSchoolPrincipals: (schoolId) =>
+    request(`/admin/schools/${schoolId}/principals`),
+
+  /**
+   * Assign principals to a school. Accepts an array of user IDs. Existing assignments
+   * are removed and replaced with the provided list. Admin only.
+   * @param {number|string} schoolId
+   * @param {{ userIds: number[] }} payload
+   */
+  adminSetSchoolPrincipals: (schoolId, payload) =>
+    request(`/admin/schools/${schoolId}/principals`, { method: "PUT", body: payload }),
+
+  // --- Role & Permission management (manager) ---
+  /**
+   * List users in the manager's country.  Requires manage_permissions permission.
+   */
+  managerListUsers: () => request("/manager/users"),
+  /**
+   * Create a new user (principal or HR) within the caller's country.
+   * Requires user.create permission.
+   */
+  managerCreateUser: (payload) => request("/manager/users", { method: "POST", body: payload }),
+  /**
+   * Update a user's role.  Managers can only assign user, hr, or principal roles.
+   * @param {number|string} userId
+   * @param {{ role: string }} payload
+   */
+  managerUpdateUserRole: (userId, payload) =>
+    request(`/manager/users/${userId}/role`, { method: "PATCH", body: payload }),
+  /**
+   * Fetch the full permissions catalog grouped by UI labels. Ensures permissions exist in DB.
+   */
+  managerGetPermissionsCatalog: () => request("/manager/permissions/catalog"),
+  /**
+   * Get all permissions assigned to a user, including scope information.
+   * @param {number|string} userId
+   */
+  managerGetUserPermissions: (userId) => request(`/manager/users/${userId}/permissions`),
+  /**
+   * Replace a user's permissions with the provided list.
+   * @param {number|string} userId
+   * @param {{ permissions: Array<{resource: string, action: string, scope_country_id?: number|null, scope_school_id?: number|null}> }} payload
+   */
+  managerSetUserPermissions: (userId, payload) =>
+    request(`/manager/users/${userId}/permissions`, { method: "PUT", body: payload }),
+  /**
+   * Get the list of users assigned as principals for a given school.
+   * @param {number|string} schoolId
+   */
+  managerGetSchoolPrincipals: (schoolId) =>
+    request(`/manager/schools/${schoolId}/principals`),
+  /**
+   * Assign principals to a school.  Managers can only assign principals within their own country.
+   * @param {number|string} schoolId
+   * @param {{ userIds: number[] }} payload
+   */
+  managerSetSchoolPrincipals: (schoolId, payload) =>
+    request(`/manager/schools/${schoolId}/principals`, { method: "PUT", body: payload }),
+  /**
+   * Fetch the manager review queue (scenarios + work items) in a single call.
+   */
+  managerGetReviewQueue: () => request("/manager/review-queue"),
 
   downloadXlsx,
   downloadPdf,

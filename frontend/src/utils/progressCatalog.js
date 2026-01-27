@@ -68,21 +68,24 @@ const GIDERLER_ITEMS = [
 ];
 
 const TAB_DEFS = [
-  { key: "temelBilgiler", label: "Temel Bilgiler", sectionIds: [
-    "temel.okulEgitim",
-    "temel.inflation",
-    "temel.ikMevcut",
-    "temel.bursOgr",
-    "temel.rakip",
-    "temel.performans",
-  ] },
+  {
+    key: "temelBilgiler", label: "Temel Bilgiler", sectionIds: [
+      "temel.okulEgitim",
+      "temel.inflation",
+      "temel.ikMevcut",
+      "temel.bursOgr",
+      "temel.rakip",
+      "temel.performans",
+    ]
+  },
   { key: "kapasite", label: "Kapasite", sectionIds: ["kapasite.caps"] },
   { key: "gradesPlan", label: "Sinif/Sube Plani", sectionIds: ["gradesPlan.plan"] },
   { key: "norm", label: "Norm", sectionIds: ["norm.lessons"] },
   { key: "ik", label: "IK / HR", sectionIds: ["ik.localStaff"] },
   { key: "gelirler", label: "Gelirler", sectionIds: ["gelirler.unitFee"] },
   { key: "giderler", label: "Giderler", sectionIds: ["giderler.isletme"] },
-  { key: "indirimler", label: "Indirimler", sectionIds: ["indirimler.discounts"] },
+  // Rename indirimler → discounts to match the normalized permission namespace
+  { key: "discounts", label: "Indirimler", sectionIds: ["discounts.discounts"] },
 ];
 
 const SECTION_DEFS = [
@@ -98,7 +101,8 @@ const SECTION_DEFS = [
   { id: "ik.localStaff", tabKey: "ik", label: "IK Yerel", modeDefault: "ALL", minDefault: null },
   { id: "gelirler.unitFee", tabKey: "gelirler", label: "Birim Ucret", modeDefault: "MIN", minDefault: 1 },
   { id: "giderler.isletme", tabKey: "giderler", label: "Isletme Giderleri", modeDefault: "MIN", minDefault: 5 },
-  { id: "indirimler.discounts", tabKey: "indirimler", label: "Indirimler", modeDefault: "MIN", minDefault: 1 },
+  // Section for discounts.  The id and tabKey follow the new discounts.* namespace.
+  { id: "discounts.discounts", tabKey: "discounts", label: "Indirimler", modeDefault: "MIN", minDefault: 1 },
 ];
 
 const OKUL_EGITIM_FIELDS = [
@@ -512,7 +516,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
   discountRows.forEach((row, idx) => {
     const label = row?.name ? String(row.name) : `Indirim #${idx + 1}`;
     addField(
-      "indirimler.discounts",
+      "discounts.discounts",
       makeField(
         `indirim.${idx}.ratio`,
         `${label} ratio`,
@@ -522,7 +526,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
       )
     );
     addField(
-      "indirimler.discounts",
+      "discounts.discounts",
       makeField(
         `indirim.${idx}.value`,
         `${label} value`,

@@ -117,7 +117,9 @@ const TAB_DEFS = [
   { key: "ik", label: "IK / HR", sectionIds: ["ik.localStaff"] },
   { key: "gelirler", label: "Gelirler", sectionIds: ["gelirler.unitFee"] },
   { key: "giderler", label: "Giderler", sectionIds: ["giderler.isletme"] },
-  { key: "indirimler", label: "Indirimler", sectionIds: ["indirimler.discounts"] },
+  // Renamed tab key from indirimler → discounts for consistency with the new
+  // permission namespace.  Update both the key and the section identifiers.
+  { key: "discounts", label: "Indirimler", sectionIds: ["discounts.discounts"] },
 ];
 
 const SECTION_DEFS = [
@@ -133,7 +135,9 @@ const SECTION_DEFS = [
   { id: "ik.localStaff", tabKey: "ik", label: "IK Yerel", modeDefault: "ALL", minDefault: null },
   { id: "gelirler.unitFee", tabKey: "gelirler", label: "Birim Ucret", modeDefault: "MIN", minDefault: 1 },
   { id: "giderler.isletme", tabKey: "giderler", label: "Isletme Giderleri", modeDefault: "MIN", minDefault: 5 },
-  { id: "indirimler.discounts", tabKey: "indirimler", label: "Indirimler", modeDefault: "MIN", minDefault: 1 },
+  // Section definition for discounts.  The id and tabKey now refer to
+  // `discounts.discounts` instead of the old `indirimler.discounts`.
+  { id: "discounts.discounts", tabKey: "discounts", label: "Indirimler", modeDefault: "MIN", minDefault: 1 },
 ];
 
 const { getProgramType, getVariantKeysForProgramType } = require("./programType");
@@ -541,7 +545,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
   discountRows.forEach((row, idx) => {
     const label = row?.name ? String(row.name) : `Indirim #${idx + 1}`;
     addField(
-      "indirimler.discounts",
+      "discounts.discounts",
       makeField(
         `indirim.${idx}.ratio`,
         `${label} ratio`,
@@ -551,7 +555,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
       )
     );
     addField(
-      "indirimler.discounts",
+      "discounts.discounts",
       makeField(
         `indirim.${idx}.value`,
         `${label} value`,

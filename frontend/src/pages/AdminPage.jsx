@@ -13,6 +13,32 @@ import { ADMIN_TABS } from "../data/adminTabs";
 
 
 const YEAR_KEYS = ["y1", "y2", "y3"];
+
+// Required module identifiers used in the scenario workflow.  When
+// requesting a revision, the admin can choose which of these modules
+// should be unlocked for editing.  These values must stay in sync
+// with the backend REQUIRED_WORK_IDS constant defined in
+// backend/src/utils/scenarioWorkflow.js.
+const REQUIRED_WORK_IDS = [
+  "temel_bilgiler",
+  "kapasite",
+  "norm.ders_dagilimi",
+  "ik.local_staff",
+  "gelirler.unit_fee",
+  "giderler.isletme",
+];
+
+// Human-readable labels for each required module.  Used in the
+// admin revision modal to present checkboxes to select which
+// modules should be sent back for revision.
+const WORK_ID_LABELS = {
+  temel_bilgiler: "Temel Bilgiler",
+  kapasite: "Kapasite",
+  "norm.ders_dagilimi": "Norm",
+  "ik.local_staff": "İK",
+  "gelirler.unit_fee": "Gelirler",
+  "giderler.isletme": "Giderler",
+};
 const DEFAULT_ADMIN_TAB = ADMIN_TABS[0]?.key || "users";
 const isValidAdminTab = (value) => ADMIN_TABS.some((tab) => tab.key === value);
 const getTabFromSearch = (search) => {
@@ -81,16 +107,32 @@ function normalizeProgressConfig(config) {
   return out;
 }
 
-const getStatusMeta = (status) => {
+// Compute status badge metadata for a scenario.  Accepts either a status
+// string or a full scenario object.  When a scenario is approved but
+// has not yet been forwarded to administrators (sent_at is null), it
+// is considered manager-approved (“Kontrol edildi”).
+const getStatusMeta = (scenarioOrStatus) => {
+  const obj = scenarioOrStatus && typeof scenarioOrStatus === 'object' ? scenarioOrStatus : { status: scenarioOrStatus };
+  const status = obj.status;
+  const sentAt = obj.sent_at;
   switch (status) {
-    case "submitted":
-      return { label: "Submitted", className: "is-warn" };
-    case "revision_requested":
-      return { label: "Revision requested", className: "is-bad" };
-    case "approved":
-      return { label: "Approved", className: "is-ok" };
+    case 'revision_requested':
+      return { label: 'Revize istendi', className: 'is-bad' };
+    case 'sent_for_approval':
+      return { label: 'Merkeze iletildi', className: 'is-warn' };
+    case 'approved':
+      if (sentAt) {
+        return { label: 'Onaylandı', className: 'is-ok' };
+      }
+      return { label: 'Kontrol edildi', className: 'is-ok' };
+    case 'in_review':
+      return { label: 'İncelemede', className: 'is-warn' };
+    case 'submitted':
+      return { label: 'Onayda', className: 'is-warn' };
+    case 'draft':
+      return { label: 'Taslak', className: 'is-muted' };
     default:
-      return { label: "Draft", className: "is-muted" };
+      return { label: 'Taslak', className: 'is-muted' };
   }
 };
 
@@ -198,6 +240,41 @@ export default function AdminPage({ forcedTab = null } = {}) {
   const [expandedProgressSections, setExpandedProgressSections] = useState(new Set());
 
   const [queueRows, setQueueRows] = useState([]);
+
+  // Permissions catalog & user permissions state (for admin permission editor)
+  const [permissionsCatalog, setPermissionsCatalog] = useState(null);
+  // Map of permission key (resource|action) to boolean indicating selected for the current user
+  const [permissionSelections, setPermissionSelections] = useState({});
+  // Map of permission key to scope identifier: "country" or "school:<id>"
+  const [permissionScopes, setPermissionScopes] = useState({});
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [permissionsSaving, setPermissionsSaving] = useState(false);
+  // List of schools in the selected user's country for scope selection
+  const [userSchools, setUserSchools] = useState([]);
+  // Define role options for admin when editing a user's role.  Admins can
+  // assign any role, including manager/accountant and admin.
+  const roleOptions = useMemo(
+    () => [
+      { value: "user", label: "User" },
+      { value: "principal", label: "Principal" },
+      { value: "hr", label: "HR" },
+      { value: "manager", label: "Manager" },
+      { value: "accountant", label: "Accountant" },
+      { value: "admin", label: "Admin" },
+    ],
+    []
+  );
+
+  // Track updating of a user's role when editing via the admin Users tab.
+  const [roleUpdating, setRoleUpdating] = useState(false);
+
+  // Principal assignments state per school
+  // principalLists maps schoolId -> array of user objects assigned as principals
+  const [principalLists, setPrincipalLists] = useState({});
+  // principalDrafts maps schoolId -> array of userIds currently selected in the editor
+  const [principalDrafts, setPrincipalDrafts] = useState({});
+  // Track saving state per school when updating principal assignments
+  const [principalSaving, setPrincipalSaving] = useState({});
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueFilters, setQueueFilters] = useState({
     status: "",
@@ -215,6 +292,32 @@ export default function AdminPage({ forcedTab = null } = {}) {
     y2: true,
     y3: true,
   });
+
+  // When the admin requests a revision on a scenario, they must select
+  // which modules should be reopened for editing.  This state maps
+  // module identifiers (work ids) to booleans indicating whether
+  // that module is selected for revision.  It is initialized when
+  // opening the revision modal.
+  const [reviewRevisionSelection, setReviewRevisionSelection] = useState(() => {
+    const initial = {};
+    REQUIRED_WORK_IDS.forEach((id) => (initial[id] = false));
+    return initial;
+  });
+
+  // Helpers to select or clear all modules in the revision selection.  These
+  // functions are memoized via useCallback to avoid re-creating on
+  // every render.
+  const selectAllRevisionWork = useCallback(() => {
+    const next = {};
+    REQUIRED_WORK_IDS.forEach((id) => (next[id] = true));
+    setReviewRevisionSelection(next);
+  }, []);
+
+  const clearRevisionWork = useCallback(() => {
+    const next = {};
+    REQUIRED_WORK_IDS.forEach((id) => (next[id] = false));
+    setReviewRevisionSelection(next);
+  }, []);
   const [reviewSaving, setReviewSaving] = useState(false);
 
   const [rollupYear, setRollupYear] = useState("");
@@ -259,6 +362,84 @@ export default function AdminPage({ forcedTab = null } = {}) {
     () => countries.find((c) => String(c.id) === String(schoolsCountryId)) || null,
     [countries, schoolsCountryId]
   );
+
+  // Load principal lists for each school when the country schools list changes
+  useEffect(() => {
+    // Only load when we are on the countries tab and have schools for the selected country
+    if (activeTab !== "countries") return;
+    if (!Array.isArray(countrySchools) || countrySchools.length === 0) return;
+    countrySchools.forEach((school) => {
+      const id = school.id;
+      // If we haven't loaded this school's principals yet, fetch them
+      if (principalLists[id] === undefined) {
+        (async () => {
+          try {
+            const list = await api.adminGetSchoolPrincipals(id);
+            setPrincipalLists((prev) => ({ ...prev, [id]: Array.isArray(list) ? list : [] }));
+            // Initialize draft selection with current principal IDs
+            const ids = Array.isArray(list) ? list.map((u) => u.id) : [];
+            setPrincipalDrafts((prev) => ({ ...prev, [id]: ids }));
+          } catch (e) {
+            console.error(e);
+            // Do not toast here to avoid spam; errors will be shown on save
+          }
+        })();
+      }
+    });
+  }, [activeTab, countrySchools, principalLists]);
+
+  // Load permissions catalog, user permissions, and schools list for the selected user
+  useEffect(() => {
+    // derive simple IDs from the selectedUser to avoid stale object dependencies
+    const userId = selectedUser?.id;
+    const countryId = selectedUser?.country_id;
+    // If no user selected, reset and exit early
+    if (!userId) {
+      setPermissionsCatalog(null);
+      setPermissionSelections({});
+      setPermissionScopes({});
+      setUserSchools([]);
+      return;
+    }
+    setPermissionsLoading(true);
+    Promise.all([
+      api.adminGetPermissionsCatalog(),
+      api.adminGetUserPermissions(userId),
+      countryId ? api.adminListCountrySchools(countryId) : Promise.resolve([]),
+    ])
+      .then(([catalogData, userPerms, schoolsData]) => {
+        setPermissionsCatalog(catalogData || null);
+        // Determine scope options: flatten schools list
+        let schoolsList = [];
+        if (Array.isArray(schoolsData)) {
+          schoolsList = schoolsData;
+        } else if (schoolsData && Array.isArray(schoolsData.items)) {
+          schoolsList = schoolsData.items;
+        }
+        setUserSchools(schoolsList);
+        // Initialize selection and scope state from existing user perms
+        const sel = {};
+        const scopeMap = {};
+        (userPerms || []).forEach((p) => {
+          const key = `${p.resource}|${p.action}`;
+          sel[key] = true;
+          if (p.scope_school_id != null) {
+            scopeMap[key] = `school:${p.scope_school_id}`;
+          } else {
+            scopeMap[key] = "country";
+          }
+        });
+        setPermissionSelections(sel);
+        setPermissionScopes(scopeMap);
+      })
+      .catch((e) => {
+        console.error(e);
+        toast.error(e?.message || "Failed to load permissions");
+      })
+      .finally(() => {
+        setPermissionsLoading(false);
+      });
+  }, [selectedUser]);
 
   const progressCatalogInputs = useMemo(
     () => ({
@@ -309,6 +490,27 @@ export default function AdminPage({ forcedTab = null } = {}) {
     });
     return Array.from(set).sort();
   }, [countries]);
+
+  // Group permissions by their catalog group for display
+  const permissionsGrouped = useMemo(() => {
+    // When no catalog loaded, return empty object
+    if (!permissionsCatalog) return {};
+    // Backend returns a grouped object (group -> array of permissions) via
+    // /admin/permissions/catalog. When it's already grouped, return it as is.
+    if (!Array.isArray(permissionsCatalog) && typeof permissionsCatalog === "object") {
+      return permissionsCatalog;
+    }
+    // Otherwise if an array is provided, group by the `group` property on each entry.
+    if (Array.isArray(permissionsCatalog)) {
+      return permissionsCatalog.reduce((acc, perm) => {
+        const grp = perm.group || "Other";
+        if (!acc[grp]) acc[grp] = [];
+        acc[grp].push(perm);
+        return acc;
+      }, {});
+    }
+    return {};
+  }, [permissionsCatalog]);
 
   const queueCountryOptions = useMemo(() => {
     if (!queueFilters.region) return countries;
@@ -767,6 +969,159 @@ export default function AdminPage({ forcedTab = null } = {}) {
     }
   }
 
+  // --- Permission editor helpers ---
+  /**
+   * Toggle selection of a permission key (resource|action) in the UI.
+   * When enabling a permission for the first time without a scope, defaults to country scope.
+   */
+  function togglePermission(key) {
+    setPermissionSelections((prev) => {
+      const next = { ...prev };
+      next[key] = !prev[key];
+      return next;
+    });
+    setPermissionScopes((prev) => {
+      // When turning on a permission that doesn’t have a scope yet, default to country
+      if (!permissionSelections[key] && !prev[key]) {
+        return { ...prev, [key]: "country" };
+      }
+      return prev;
+    });
+  }
+
+  /**
+   * Change the scope for a permission key.
+   * @param {string} key The permission key (resource|action)
+   * @param {string} value The selected scope: "country" or "school:<id>"
+   */
+  function changePermissionScope(key, value) {
+    setPermissionScopes((prev) => ({ ...prev, [key]: value }));
+  }
+
+  /**
+   * Persist the current permission selections for the selected user.
+   * Constructs the payload based on selected permissions and scopes and sends
+   * it to the backend. Afterwards reloads the user’s permissions from the
+   * server to ensure UI consistency.
+   */
+  async function saveUserPermissions() {
+    if (!selectedUser) {
+      toast.error("Select a user to edit permissions");
+      return;
+    }
+    const perms = [];
+    const keys = Object.keys(permissionSelections || {});
+    keys.forEach((key) => {
+      if (!permissionSelections[key]) return;
+      const [resource, action] = key.split("|");
+      let scopeVal = permissionScopes[key] || "country";
+      let scope_country_id = null;
+      let scope_school_id = null;
+      // Determine scope
+      if (scopeVal === "country") {
+        // assign scope_country_id based on user's country_id if available
+        if (selectedUser.country_id != null) {
+          scope_country_id = Number(selectedUser.country_id);
+        }
+      } else if (scopeVal.startsWith("school:")) {
+        const idStr = scopeVal.split(":")[1];
+        const sid = Number(idStr);
+        if (Number.isFinite(sid)) {
+          scope_school_id = sid;
+        }
+        // set country_id if available
+        if (selectedUser.country_id != null) {
+          scope_country_id = Number(selectedUser.country_id);
+        }
+      }
+      perms.push({ resource, action, scope_country_id, scope_school_id });
+    });
+    setPermissionsSaving(true);
+    try {
+      await api.adminSetUserPermissions(selectedUser.id, { permissions: perms });
+      // Reload user permissions to reflect server state
+      const updated = await api.adminGetUserPermissions(selectedUser.id);
+      // Recompute selections and scopes based on the latest permissions returned
+      const sel = {};
+      const scopeMap = {};
+      (updated || []).forEach((p) => {
+        const k = `${p.resource}|${p.action}`;
+        sel[k] = true;
+        if (p.scope_school_id != null) {
+          scopeMap[k] = `school:${p.scope_school_id}`;
+        } else {
+          scopeMap[k] = "country";
+        }
+      });
+      setPermissionSelections(sel);
+      setPermissionScopes(scopeMap);
+      toast.success("Permissions saved");
+    } catch (e) {
+      toast.error(e?.message || "Save permissions failed");
+    } finally {
+      setPermissionsSaving(false);
+    }
+  }
+
+  /**
+   * Update the role of the currently selected user.  This is triggered
+   * when an admin chooses a new role from the role selector.  The
+   * function calls the adminUpdateUserRole API and then refreshes
+   * the list of users to reflect the change.  Displays success or
+   * error messages via toast notifications.
+   *
+   * @param {string} role The new role to assign to the user
+   */
+  async function updateSelectedUserRole(role) {
+    // Ensure there is a selected user before updating
+    if (!selectedUser) return;
+    setRoleUpdating(true);
+    try {
+      await api.adminUpdateUserRole(selectedUser.id, { role });
+      // Reload data so the user list reflects the new role
+      await load();
+      // Maintain the current selection after reload
+      setAssignUserId(String(selectedUser.id));
+      toast.success("Role updated");
+    } catch (e) {
+      toast.error(e?.message || "Failed to update role");
+    } finally {
+      setRoleUpdating(false);
+    }
+  }
+
+  // --- Principal assignment helpers ---
+  /**
+   * Handle selection of principal users for a school. Updates the draft state.
+   * @param {number} schoolId
+   * @param {string[]} valueIds Array of selected userId strings from a multi‑select element
+   */
+  function handlePrincipalSelectionChange(schoolId, valueIds) {
+    const ids = valueIds.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+    setPrincipalDrafts((prev) => ({ ...prev, [schoolId]: ids }));
+  }
+
+  /**
+   * Save principal assignments for a given school. Sends the current draft
+   * selection to the backend and updates the local principal list.
+   * @param {number} schoolId
+   */
+  async function savePrincipalAssignments(schoolId) {
+    const userIds = principalDrafts[schoolId] || [];
+    setPrincipalSaving((prev) => ({ ...prev, [schoolId]: true }));
+    try {
+      await api.adminSetSchoolPrincipals(schoolId, { userIds });
+      // Update local list with selected principal user objects
+      const newList = users.filter((u) => u.role === "principal" && userIds.includes(u.id));
+      setPrincipalLists((prev) => ({ ...prev, [schoolId]: newList }));
+      toast.success("Principals updated");
+    } catch (e) {
+      toast.error(e?.message || "Failed to update principals");
+    } finally {
+      setPrincipalSaving((prev) => ({ ...prev, [schoolId]: false }));
+    }
+  }
+
   function getAuthTokenFromStorage() {
     try {
       const keys = ["token", "auth_token", "jwt", "access_token"];
@@ -1048,12 +1403,22 @@ export default function AdminPage({ forcedTab = null } = {}) {
     setReviewModal({ row, action });
     setReviewNote("");
     setReviewIncludedYears({ y1: true, y2: true, y3: true });
+    if (action === "revise") {
+      // Reset revision selection: all modules unchecked by default
+      const initial = {};
+      REQUIRED_WORK_IDS.forEach((id) => (initial[id] = false));
+      setReviewRevisionSelection(initial);
+    }
   };
 
   const closeReviewModal = () => {
     setReviewModal(null);
     setReviewNote("");
     setReviewIncludedYears({ y1: true, y2: true, y3: true });
+    // Reset revision selections on close
+    const reset = {};
+    REQUIRED_WORK_IDS.forEach((id) => (reset[id] = false));
+    setReviewRevisionSelection(reset);
   };
 
   const submitReview = async () => {
@@ -1072,6 +1437,14 @@ export default function AdminPage({ forcedTab = null } = {}) {
         return;
       }
       payload.includedYears = includedYears;
+    } else if (action === "revise") {
+      // Collect selected revision work ids.  At least one must be selected.
+      const revisionWorkIds = REQUIRED_WORK_IDS.filter((id) => reviewRevisionSelection[id]);
+      if (!revisionWorkIds.length) {
+        toast.error("Select at least one module");
+        return;
+      }
+      payload.revisionWorkIds = revisionWorkIds;
     }
     setReviewSaving(true);
     try {
@@ -1432,6 +1805,38 @@ export default function AdminPage({ forcedTab = null } = {}) {
               </div>
             ) : null}
 
+            {reviewModal.action === "revise" ? (
+              <div style={{ marginBottom: 10 }}>
+                <div className="small" style={{ marginBottom: 6 }}>
+                  Sadece seçilen modüller revizeye açılacak (editable).
+                </div>
+                <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                  {REQUIRED_WORK_IDS.map((id) => (
+                    <label
+                      key={id}
+                      className="small"
+                      style={{ display: "inline-flex", gap: 6, alignItems: "center" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(reviewRevisionSelection[id])}
+                        onChange={(e) =>
+                          setReviewRevisionSelection((prev) => ({ ...prev, [id]: e.target.checked }))
+                        }
+                      />
+                      {WORK_ID_LABELS[id] || id}
+                    </label>
+                  ))}
+                  <button type="button" className="btn sm" onClick={selectAllRevisionWork}>
+                    Tümünü seç
+                  </button>
+                  <button type="button" className="btn sm" onClick={clearRevisionWork}>
+                    Temizle
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ marginBottom: 12 }}>
               <div className="small" style={{ marginBottom: 6 }}>
                 Note {reviewModal.action === "revise" ? "(required)" : "(optional)"}
@@ -1491,6 +1896,10 @@ export default function AdminPage({ forcedTab = null } = {}) {
                 <select className="input sm" value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)}>
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
+                  <option value="principal">Principal</option>
+                  <option value="hr">HR</option>
+                  <option value="manager">Manager</option>
+                  <option value="accountant">Accountant</option>
                 </select>
                 <select
                   className="input"
@@ -1557,6 +1966,79 @@ export default function AdminPage({ forcedTab = null } = {}) {
               </div>
             </div>
           </div>
+
+            {/* Permissions editor for the selected user */}
+            <div className="card">
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Permissions</div>
+              {/* Only render the editor when a user is selected */}
+              {!selectedUser ? (
+                <div className="small">Select a user above to edit permissions.</div>
+              ) : permissionsLoading ? (
+                <div className="small">Loading permissions...</div>
+              ) : (
+                <>
+                  {/* Role selector for admin to change the user's role */}
+                  <div style={{ marginBottom: 8 }}>
+                    <label className="small" style={{ marginRight: 8 }}>Role:</label>
+                    <select
+                      className="input sm"
+                      value={selectedUser?.role || "user"}
+                      onChange={(e) => updateSelectedUserRole(e.target.value)}
+                      disabled={roleUpdating}
+                    >
+                      {roleOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {Object.keys(permissionsGrouped).length === 0 ? (
+                    <div className="small">No permissions defined.</div>
+                  ) : (
+                    Object.entries(permissionsGrouped).map(([groupName, perms]) => (
+                      <div key={groupName} style={{ marginBottom: 12 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{groupName}</div>
+                        {perms.map((perm) => {
+                          const key = `${perm.resource}|${perm.action}`;
+                          const isSelected = Boolean(permissionSelections[key]);
+                          const scopeValue = permissionScopes[key] || "country";
+                          return (
+                            <div key={key} className="row" style={{ alignItems: "center", marginBottom: 4 }}>
+                              <label className="small" style={{ flexGrow: 1, display: "flex", alignItems: "center", gap: 6 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => togglePermission(key)}
+                                />
+                                {perm.label}
+                              </label>
+                              {/* Scope selector */}
+                              <select
+                                className="input sm"
+                                disabled={!isSelected}
+                                value={scopeValue}
+                                onChange={(e) => changePermissionScope(key, e.target.value)}
+                              >
+                                <option value="country">Country</option>
+                                {userSchools && userSchools.map((s) => (
+                                  <option key={s.id} value={`school:${s.id}`}>
+                                    {s.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))
+                  )}
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button className="btn primary" onClick={saveUserPermissions} disabled={permissionsSaving}>
+                      {permissionsSaving ? "Saving..." : "Save Permissions"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
 
           <div className="card" style={{ marginTop: 12 }}>
             <div className="row" style={{ justifyContent: "space-between" }}>
@@ -1739,19 +2221,20 @@ export default function AdminPage({ forcedTab = null } = {}) {
                     <th>Status</th>
                     <th>Created At</th>
                     <th>Closed At</th>
+                    <th>Principals</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {countrySchoolsLoading ? (
                     <tr>
-                      <td colSpan="5" className="small">
+                      <td colSpan="6" className="small">
                         Loading...
                       </td>
                     </tr>
                   ) : filteredCountrySchools.length === 0 ? (
                     <tr>
-                      <td colSpan="5" className="small">
+                      <td colSpan="6" className="small">
                         No schools found.
                       </td>
                     </tr>
@@ -1771,7 +2254,16 @@ export default function AdminPage({ forcedTab = null } = {}) {
                           </td>
                           <td className="small">{formatDateTime(school.created_at)}</td>
                           <td className="small">{formatDateTime(school.closed_at)}</td>
+                          {/* Principals column: show assigned principal names */}
                           <td>
+                            {Array.isArray(principalLists[school.id]) && principalLists[school.id].length > 0 ? (
+                              <span>{principalLists[school.id].map((u) => u.full_name || u.email).join(", ")}</span>
+                            ) : (
+                              <span className="small muted">-</span>
+                            )}
+                          </td>
+                          <td>
+                            {/* School name edit and status toggle */}
                             <div className="row">
                               <input
                                 className="input sm"
@@ -1797,6 +2289,34 @@ export default function AdminPage({ forcedTab = null } = {}) {
                                 disabled={isSaving}
                               >
                                 {school.status === "closed" ? "Reopen" : "Close"}
+                              </button>
+                            </div>
+                            {/* Principal assignment editor */}
+                            <div className="row" style={{ marginTop: 4 }}>
+                              <select
+                                multiple
+                                className="input sm"
+                                value={(principalDrafts[school.id] || []).map(String)}
+                                onChange={(e) => {
+                                  const opts = Array.from(e.target.selectedOptions || []);
+                                  const values = opts.map((o) => o.value);
+                                  handlePrincipalSelectionChange(school.id, values);
+                                }}
+                              >
+                                {users
+                                  .filter((u) => u.role === "principal")
+                                  .map((u) => (
+                                    <option key={u.id} value={u.id}>
+                                      {u.email} {u.full_name ? `(${u.full_name})` : ""} #{u.id}
+                                    </option>
+                                  ))}
+                              </select>
+                              <button
+                                className="btn"
+                                onClick={() => savePrincipalAssignments(school.id)}
+                                disabled={Boolean(principalSaving[school.id])}
+                              >
+                                {principalSaving[school.id] ? "Saving..." : "Save"}
                               </button>
                             </div>
                           </td>
@@ -2169,7 +2689,7 @@ export default function AdminPage({ forcedTab = null } = {}) {
                 onChange={(e) => setQueueFilters((prev) => ({ ...prev, status: e.target.value }))}
               >
                 <option value="">All</option>
-                <option value="submitted">Submitted</option>
+                <option value="sent_for_approval">Sent for approval</option>
                 <option value="approved">Approved</option>
                 <option value="revision_requested">Revision requested</option>
                 <option value="draft">Draft</option>
@@ -2351,9 +2871,10 @@ export default function AdminPage({ forcedTab = null } = {}) {
                 </tr>
               ) : (
                 sortedQueueRows.map((row) => {
-                  const statusMeta = getStatusMeta(row.scenario?.status);
-                  const canApprove = row.scenario?.status === "submitted";
-                  const canRevise = ["submitted", "approved"].includes(row.scenario?.status);
+                  const statusMeta = getStatusMeta(row.scenario);
+                  const canApprove =
+                    row.scenario?.status === 'sent_for_approval' || row.scenario?.status === 'submitted';
+                  const canRevise = ['sent_for_approval', 'approved', 'submitted'].includes(row.scenario?.status);
                   const missing = row.missingKpis?.y1 || row.missingKpis?.y2 || row.missingKpis?.y3;
                   const progressPct = Number.isFinite(Number(row.scenario?.progress_pct))
                     ? Math.round(Number(row.scenario.progress_pct))
@@ -2403,14 +2924,14 @@ export default function AdminPage({ forcedTab = null } = {}) {
                             onClick={() => openReviewModal(row, "approve")}
                             disabled={!canApprove || reviewSaving}
                           >
-                            Approve
+                            Onayla
                           </button>
                           <button
                             className="btn"
                             onClick={() => openReviewModal(row, "revise")}
                             disabled={!canRevise || reviewSaving}
                           >
-                            Revise
+                            Revizyon İste
                           </button>
                         </div>
                       </td>

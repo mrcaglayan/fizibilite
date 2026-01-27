@@ -3,7 +3,7 @@
 
 const express = require("express");
 const { getPool } = require("../db");
-const { requireAuth, requireAssignedCountry } = require("../middleware/auth");
+const { requireAuth, requireAssignedCountry, requireSchoolPermission } = require("../middleware/auth");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -86,7 +86,11 @@ async function assertSchoolInUserCountry(pool, schoolId, countryId) {
 /**
  * GET /schools/:schoolId/norm-config
  */
-router.get("/schools/:schoolId/norm-config", async (req, res) => {
+router.get(
+  "/schools/:schoolId/norm-config",
+  // Require read access to the Norm page for the given school
+  requireSchoolPermission('page.norm', 'read', 'schoolId'),
+  async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
     const pool = getPool();
@@ -125,13 +129,18 @@ router.get("/schools/:schoolId/norm-config", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
-});
+  }
+);
 
 /**
  * PUT /schools/:schoolId/norm-config
  * Body: { teacherWeeklyMaxHours, curriculumWeeklyHours }
  */
-router.put("/schools/:schoolId/norm-config", async (req, res) => {
+router.put(
+  "/schools/:schoolId/norm-config",
+  // Require write permission to the Norm page for the given school
+  requireSchoolPermission('page.norm', 'write', 'schoolId'),
+  async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
     const payload = req.body || {};
@@ -170,6 +179,7 @@ router.put("/schools/:schoolId/norm-config", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
-});
+  }
+);
 
 module.exports = router;

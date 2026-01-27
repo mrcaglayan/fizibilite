@@ -9,13 +9,26 @@ function pctValue(tab) {
 }
 
 export default function KapasitePage() {
-  const { inputs, setField, school, me, baseYear, programType, dirtyPaths, markDirty, progMap } =
-    useOutletContext();
+  const {
+    inputs,
+    setField,
+    school,
+    me,
+    baseYear,
+    programType,
+    dirtyPaths,
+    markDirty,
+    progMap,
+
+  } = useOutletContext();
 
   if (!inputs) return null;
 
+
+
   return (
     <div style={{ marginTop: 12 }}>
+
       <TabProgressHeatmap
         pct={pctValue(progMap?.kapasite)}
         title="Kapasite"

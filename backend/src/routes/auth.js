@@ -4,6 +4,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { getPool } = require("../db");
+const { getUserPermissions } = require("../utils/permissionService");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
@@ -163,7 +164,28 @@ router.get("/me", requireAuth, async (req, res) => {
       { id: req.user.id }
     );
     if (!row) return res.status(404).json({ error: "User not found" });
-
+    // Fetch user permissions; these should not go into the JWT but can be returned here
+    let permissions = [];
+    try {
+      permissions = await getUserPermissions(pool, req.user.id);
+    } catch (_) {
+      permissions = [];
+    }
+    // Fetch principal school assignments if applicable
+    let principalSchoolIds = [];
+    if (String(row.role) === 'principal') {
+      try {
+        const [assignRows] = await pool.query(
+          `SELECT school_id FROM school_user_roles WHERE user_id=:uid AND role='principal'`,
+          { uid: req.user.id }
+        );
+        principalSchoolIds = Array.isArray(assignRows)
+          ? assignRows.map((r) => Number(r.school_id)).filter((n) => Number.isFinite(n))
+          : [];
+      } catch (_) {
+        principalSchoolIds = [];
+      }
+    }
     return res.json({
       id: row.id,
       full_name: row.full_name,
@@ -174,6 +196,8 @@ router.get("/me", requireAuth, async (req, res) => {
       role: row.role,
       region: row.region,
       must_reset_password: Boolean(row.must_reset_password),
+      permissions,
+      principalSchoolIds,
     });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });

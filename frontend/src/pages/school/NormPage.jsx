@@ -15,12 +15,16 @@ export default function NormPage() {
     markDirty,
     normAvgPct,
     normMissingLines,
+
   } = useOutletContext();
 
   const missingPreview = Array.isArray(normMissingLines) ? normMissingLines.join(" / ") : "";
 
+
+
   return (
     <div style={{ marginTop: 12 }}>
+
       <TabProgressHeatmap
         pct={normAvgPct}
         title="Norm"
