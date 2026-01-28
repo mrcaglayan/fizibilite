@@ -3,6 +3,11 @@
 const express = require("express");
 const { getPool } = require("../db");
 const {
+  computeIncomeFromGelirler,
+  computeStudentsFromGrades,
+  calculateDiscounts,
+} = require("../engine/feasibilityEngine");
+const {
   requireAuth,
   requireAssignedCountry,
   requireSchoolContextAccess,
@@ -50,6 +55,28 @@ const OPERATING_KEYS = new Set([
   "tahsilEdilemeyenGelirler",
 ]);
 
+const SERVICE_KEYS = new Set(["yemek", "uniforma", "kitapKirtasiye", "ulasimServis"]);
+const SERVICE_TO_INCOME_KEY = {
+  yemek: "yemek",
+  uniforma: "uniforma",
+  kitapKirtasiye: "kitap",
+  ulasimServis: "ulasim",
+};
+
+const DORM_KEYS = new Set(["yurtGiderleri", "digerYurt"]);
+const DORM_TO_INCOME_KEY = {
+  yurtGiderleri: "yurt",
+  digerYurt: "yazOkulu",
+};
+
+const DISCOUNT_TOTAL_KEY = "discountsTotal";
+const SPLITTABLE_KEYS = new Set([
+  ...OPERATING_KEYS,
+  ...SERVICE_KEYS,
+  ...DORM_KEYS,
+  DISCOUNT_TOTAL_KEY,
+]);
+
 function safeNum(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -62,6 +89,57 @@ function roundTo(value, decimals) {
   return Math.round((n + Number.EPSILON) * m) / m;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pickGradesForY1(inputs) {
+  if (!inputs || typeof inputs !== "object") return [];
+  if (Array.isArray(inputs?.gradesYears?.y1)) return inputs.gradesYears.y1;
+  if (Array.isArray(inputs?.grades)) return inputs.grades;
+  return [];
+}
+
+function computeDiscountTotalY1(inputs, warnings) {
+  const grades = pickGradesForY1(inputs);
+  const totalStudents = computeStudentsFromGrades(grades).total;
+  const incomeBase = computeIncomeFromGelirler({
+    totalStudents,
+    gelirler: inputs?.gelirler || {},
+  });
+
+  const tuitionStudents = safeNum(incomeBase?.tuitionStudents);
+  const grossTuition = safeNum(incomeBase?.grossTuition);
+  const avgTuition = safeNum(incomeBase?.tuitionAvgFee);
+
+  if (tuitionStudents <= 0 || grossTuition <= 0) {
+    warnings.push("Burs/indirim havuzu için brut ogrenim ucreti 0.");
+    return 0;
+  }
+
+  const list = Array.isArray(inputs?.discounts) ? inputs.discounts : [];
+  const discountCategories = list.map((d) => {
+    if (!d) return d;
+    const count = d.studentCount != null && d.studentCount !== "" ? safeNum(d.studentCount) : null;
+    const ratioFromCount =
+      count != null && tuitionStudents > 0 ? clamp(count / tuitionStudents, 0, 1) : null;
+    const ratio = ratioFromCount != null ? ratioFromCount : clamp(safeNum(d.ratio), 0, 1);
+    return {
+      ...d,
+      ratio,
+      value: safeNum(d.value),
+    };
+  });
+
+  const disc = calculateDiscounts({
+    tuitionStudents,
+    grossTuition,
+    tuitionAvgFee: avgTuition,
+    discountCategories,
+  });
+
+  return safeNum(disc?.totalDiscounts);
+}
 function parseInputsJson(inputsRaw) {
   if (inputsRaw == null) return {};
   if (typeof inputsRaw === "string") {
@@ -138,7 +216,7 @@ function filterExpenseKeys(keys, warnings) {
     if (!key) continue;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (!OPERATING_KEYS.has(key)) {
+    if (!SPLITTABLE_KEYS.has(key)) {
       warnings.push(`Gider anahtari desteklenmiyor: ${key}`);
       continue;
     }
@@ -253,10 +331,39 @@ async function buildPreview({
   }
   const inputs = parseInputsJson(inputsRow.inputs_json);
 
-  const pools = cleanExpenseKeys.map((key) => ({
-    expenseKey: key,
-    poolAmount: roundTo(safeNum(inputs?.giderler?.isletme?.items?.[key]), 6),
-  }));
+  const nonEdRows = Array.isArray(inputs?.gelirler?.nonEducationFees?.rows)
+    ? inputs.gelirler.nonEducationFees.rows
+    : [];
+  const nonEdByKey = new Map(nonEdRows.map((row) => [String(row?.key || ""), row]));
+  const dormRows = Array.isArray(inputs?.gelirler?.dormitory?.rows)
+    ? inputs.gelirler.dormitory.rows
+    : [];
+  const dormByKey = new Map(dormRows.map((row) => [String(row?.key || ""), row]));
+
+  const pools = cleanExpenseKeys.map((key) => {
+    let poolAmount = 0;
+    if (OPERATING_KEYS.has(key)) {
+      poolAmount = safeNum(inputs?.giderler?.isletme?.items?.[key]);
+    } else if (SERVICE_KEYS.has(key)) {
+      const incomeKey = SERVICE_TO_INCOME_KEY[key];
+      const incRow = incomeKey ? nonEdByKey.get(incomeKey) : null;
+      const sc = safeNum(incRow?.studentCount);
+      const uc = safeNum(inputs?.giderler?.ogrenimDisi?.items?.[key]?.unitCost);
+      poolAmount = sc * uc;
+    } else if (DORM_KEYS.has(key)) {
+      const incomeKey = DORM_TO_INCOME_KEY[key];
+      const incRow = incomeKey ? dormByKey.get(incomeKey) : null;
+      const sc = safeNum(incRow?.studentCount);
+      const uc = safeNum(inputs?.giderler?.yurt?.items?.[key]?.unitCost);
+      poolAmount = sc * uc;
+    } else if (key === DISCOUNT_TOTAL_KEY) {
+      poolAmount = computeDiscountTotalY1(inputs, warnings);
+    }
+    return {
+      expenseKey: key,
+      poolAmount: roundTo(poolAmount, 6),
+    };
+  });
 
   const includedIds = includedTargets.map((t) => Number(t.scenarioId));
   const basisRows = new Map();

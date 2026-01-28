@@ -827,6 +827,7 @@ router.post(
         { name: "KURUM İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
         { name: "İSTİSNAİ İNDİRİM", mode: "percent", value: 0, ratio: 0 },
         { name: "YEREL MEVZUATIN ŞART KOŞTUĞU İNDİRİM", mode: "percent", value: 0, ratio: 0 },
+        { name: "Paylaşılan Burs/İndirim (Dağıtım)", mode: "percent", value: 0, ratio: 0 },
       ],
 
       // Excel "Giderler" yapısına uygun (tek yıl)

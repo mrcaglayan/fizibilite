@@ -4,7 +4,7 @@ import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom
 import { ToastContainer, toast } from "react-toastify";
 // Import additional icons for better visual cues on the action buttons.
 // FaCheckCircle represents approval actions and FaTrash represents deletion actions.
-import { FaCheckCircle, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import { FaCheckCircle, FaPaperPlane, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import ProgressBar from "../components/ui/ProgressBar";
@@ -1319,11 +1319,14 @@ export default function SelectPage() {
     }),
     [auth.user?.country_id, selectedSchoolId]
   );
+  const role = String(auth.user?.role || "");
   const canCreateScenario = can(auth.user, "scenario.create", "write", permissionScope);
   const canEditScenarioPlan = can(auth.user, "scenario.plan_edit", "write", permissionScope);
   const canCopyScenario = can(auth.user, "scenario.copy", "write", permissionScope);
   const canExpenseSplit = can(auth.user, "scenario.expense_split", "write", permissionScope);
   const canSubmitScenario = can(auth.user, "scenario.submit", "write", permissionScope);
+  const canForwardScenario =
+    role === "manager" || role === "accountant" || can(auth.user, "scenario.forward", "write", permissionScope);
   const canDeleteScenario = can(auth.user, "scenario.delete", "write", permissionScope);
 
   // Lock editing when the scenario has been forwarded to admins (sent_for_approval)
@@ -1333,10 +1336,13 @@ export default function SelectPage() {
   const toolbarLocked = Boolean(selectedRowScenario) && isScenarioLocked(selectedRowScenario);
   const canEditToolbar = Boolean(selectedRowScenario) && !toolbarLocked && canEditScenarioPlan;
   const canDeleteToolbar = Boolean(selectedRowScenario) && !toolbarLocked && canDeleteScenario;
-  const canSubmitToolbar =
+  const isSubmitStage =
     Boolean(selectedRowScenario) &&
-    (selectedRowScenario.status === "draft" || selectedRowScenario.status === "revision_requested") &&
-    canSubmitScenario;
+    (selectedRowScenario.status === "draft" || selectedRowScenario.status === "revision_requested");
+  const isForwardStage =
+    Boolean(selectedRowScenario) && selectedRowScenario.status === "approved" && !selectedRowScenario.sent_at;
+  const canSubmitToolbar = isSubmitStage && canSubmitScenario;
+  const canForwardToolbar = isForwardStage && canForwardScenario;
   const canCopyToolbar = Boolean(selectedRowScenario) && inputs && canCopyScenario;
   const toolbarIsCopying =
     selectedRowScenario && String(copyingScenarioId) === String(selectedRowScenario.id);
@@ -2040,19 +2046,22 @@ export default function SelectPage() {
   }
 
   async function calculate(options = {}) {
-    if (!selectedSchoolId || !selectedScenarioIdLocal) return;
-    if (!ensurePrevRealFxForLocal("Hesaplama")) return;
-    if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return;
+    if (!selectedSchoolId || !selectedScenarioIdLocal) return false;
+    if (!ensurePrevRealFxForLocal("Hesaplama")) return false;
+    if (!options.skipPlanValidation && !ensurePlanningStudentsForY2Y3("Hesaplama")) return false;
     setCalculating(true);
     setErr("");
+    let ok = false;
     try {
       const data = await api.calculateScenario(selectedSchoolId, selectedScenarioIdLocal);
       setReport(data.results);
+      ok = true;
     } catch (e) {
       setErr(e.message || "Calculation failed");
     } finally {
       setCalculating(false);
     }
+    return ok;
   }
 
   async function submitScenarioForApproval(scenarioId) {
@@ -2080,6 +2089,36 @@ export default function SelectPage() {
       await refreshScenarios();
     } catch (e) {
       setErr(e.message || "Submit failed");
+    } finally {
+      setSubmittingScenarioId(null);
+    }
+  }
+
+  async function sendScenarioForApproval(scenarioId) {
+    if (!canForwardScenario) return;
+    if (!selectedSchoolId || !scenarioId || scenarioId !== selectedScenarioIdLocal) return;
+    const status = String(selectedScenario?.status || "draft");
+    if (status !== "approved" || selectedScenario?.sent_at) {
+      setErr("Senaryo merkeze iletilemez.");
+      return;
+    }
+    if (!ensurePrevRealFxForLocal("Merkeze iletme")) return;
+    if (!ensurePlanningStudentsForY2Y3("Merkeze iletme")) return;
+    if (submittingScenarioId) return;
+
+    setErr("");
+    setSubmittingScenarioId(scenarioId);
+    try {
+      const calcOk = await calculate({ keepTab: true });
+      if (!calcOk) return;
+      const data = await api.sendForApproval(selectedSchoolId, scenarioId);
+      toast.success("Merkeze iletildi");
+      if (data?.scenario) {
+        setSelectedScenario((prev) => ({ ...(prev || {}), ...data.scenario }));
+      }
+      await refreshScenarios();
+    } catch (e) {
+      setErr(e.message || "Gonderme basarisiz");
     } finally {
       setSubmittingScenarioId(null);
     }
@@ -2879,7 +2918,24 @@ export default function SelectPage() {
                     </span>
                   </button>
                 ) : null}
-                {canSubmitScenario ? (
+                {canForwardScenario && isForwardStage ? (
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={() => {
+                      if (!selectedRowScenario) return;
+                      sendScenarioForApproval(selectedRowScenario.id);
+                    }}
+                    disabled={!canForwardToolbar || calculating || scenarioOpsBusy}
+                    title="Merkeze ilet"
+                  >
+                    <span className="btn-inner">
+                      {toolbarIsSubmitting ? <InlineSpinner /> : <FaPaperPlane style={{ marginRight: 4 }} />}
+                      <span>Merkeze ilet</span>
+                    </span>
+                  </button>
+                ) : null}
+                {canSubmitScenario && isSubmitStage ? (
                   <button
                     type="button"
                     className="btn primary"

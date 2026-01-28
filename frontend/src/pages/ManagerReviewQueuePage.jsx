@@ -1,10 +1,11 @@
 // frontend/src/pages/ManagerReviewQueuePage.jsx
 
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useNavigate, useOutletContext } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext';
+import { writeGlobalLastRouteSegment, writeLastVisitedPath, writeSelectedScenarioId } from '../utils/schoolNavStorage';
 
 /**
  * ManagerReviewQueuePage
@@ -36,6 +37,25 @@ const WORK_ID_LABELS = {
   'gelirler.unit_fee': 'Gelirler',
   'giderler.isletme': 'Giderler',
 };
+
+const WORK_ID_TO_ROUTE = {
+  'temel_bilgiler': 'temel-bilgiler',
+  'kapasite': 'kapasite',
+  'norm.ders_dagilimi': 'norm',
+  'ik.local_staff': 'ik',
+  'gelirler.unit_fee': 'gelirler',
+  'giderler.isletme': 'giderler',
+};
+
+const FILTER_TABS = [
+  { key: 'all', label: 'TÃ¼mÃ¼' },
+  { key: 'ready', label: 'Merkeze Ä°letmeye HazÄ±r' },
+  { key: 'in_review', label: 'Ä°ncelemede' },
+  { key: 'revision', label: 'Revize Ä°stendi' },
+  { key: 'approved', label: 'Kontrol Edildi' },
+  { key: 'sent', label: 'Merkeze Ä°letildi' },
+  { key: 'approved_final', label: 'OnaylandÄ±' },
+];
 
 // Map scenario status and sent_at to visual badge metadata.  A scenario
 // that is approved but has not yet been forwarded to administrators
@@ -82,8 +102,11 @@ function getWorkItemStateMeta(state) {
 export default function ManagerReviewQueuePage() {
   const auth = useAuth();
   const outlet = useOutletContext();
+  const navigate = useNavigate();
   const [queueData, setQueueData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [activeFilter, setActiveFilter] = useState('all');
+  const [collapsedCards, setCollapsedCards] = useState({});
 
   // Determine whether the current user is allowed to view the review queue.
   const canView = useMemo(() => {
@@ -128,6 +151,65 @@ export default function ManagerReviewQueuePage() {
   useEffect(() => {
     loadQueue();
   }, [loadQueue]);
+
+  const matchFilter = useCallback((entry, filterKey) => {
+    if (!entry) return false;
+    const scenario = entry.scenario || {};
+    const status = scenario.status;
+    const sentAt = scenario.sent_at;
+    const approvedCount = Number(entry.approvedCount || 0);
+    const allApproved = approvedCount === REQUIRED_WORK_IDS.length;
+    const isManagerApproved = status === 'approved' && !sentAt;
+    const isFinalApproved = status === 'approved' && !!sentAt;
+    switch (filterKey) {
+      case 'ready':
+        return isManagerApproved && allApproved;
+      case 'in_review':
+        return status === 'in_review' || status === 'submitted';
+      case 'revision':
+        return status === 'revision_requested';
+      case 'approved':
+        return isManagerApproved;
+      case 'sent':
+        return status === 'sent_for_approval';
+      case 'approved_final':
+        return isFinalApproved;
+      case 'all':
+      default:
+        return true;
+    }
+  }, []);
+
+  const filterCounts = useMemo(() => {
+    const base = Object.fromEntries(FILTER_TABS.map((t) => [t.key, 0]));
+    base.all = Array.isArray(queueData) ? queueData.length : 0;
+    if (!Array.isArray(queueData)) return base;
+    queueData.forEach((entry) => {
+      FILTER_TABS.forEach((tab) => {
+        if (tab.key === 'all') return;
+        if (matchFilter(entry, tab.key)) base[tab.key] += 1;
+      });
+    });
+    return base;
+  }, [queueData, matchFilter]);
+
+  const filteredRows = useMemo(() => {
+    if (!Array.isArray(queueData)) return [];
+    if (activeFilter === 'all') return queueData;
+    return queueData.filter((entry) => matchFilter(entry, activeFilter));
+  }, [queueData, activeFilter, matchFilter]);
+
+  const handleNavigateToModule = useCallback(
+    (schoolId, scenarioId, workId) => {
+      const segment = WORK_ID_TO_ROUTE[workId];
+      if (!segment) return;
+      writeSelectedScenarioId(schoolId, scenarioId);
+      writeLastVisitedPath(schoolId, scenarioId, segment);
+      writeGlobalLastRouteSegment(segment);
+      navigate(`/schools/${schoolId}/${segment}`);
+    },
+    [navigate]
+  );
 
   // Handlers for approving or revising a work item
   const handleApprove = async (schoolId, scenarioId, workId) => {
@@ -178,13 +260,13 @@ export default function ManagerReviewQueuePage() {
   // Group results by school for rendering
   const grouped = useMemo(() => {
     const bySchool = {};
-    for (const entry of queueData) {
+    for (const entry of filteredRows) {
       const sid = String(entry.school.id);
       if (!bySchool[sid]) bySchool[sid] = { school: entry.school, scenarios: [] };
       bySchool[sid].scenarios.push(entry);
     }
     return Object.values(bySchool);
-  }, [queueData]);
+  }, [filteredRows]);
 
   if (!canView) {
     return (
@@ -201,6 +283,21 @@ export default function ManagerReviewQueuePage() {
 
   return (
     <div className="container">
+      <div className="review-queue-tabs" role="tablist" aria-label="Senaryo filtresi">
+        {FILTER_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`review-queue-tab ${activeFilter === tab.key ? 'is-active' : ''}`}
+            onClick={() => setActiveFilter(tab.key)}
+            role="tab"
+            aria-selected={activeFilter === tab.key}
+          >
+            <span>{tab.label}</span>
+            <span className="review-queue-count">{filterCounts[tab.key] ?? 0}</span>
+          </button>
+        ))}
+      </div>
       {loading ? (
         <div className="card">Loading...</div>
       ) : grouped.length === 0 ? (
@@ -214,6 +311,7 @@ export default function ManagerReviewQueuePage() {
             {scenarios.map(({ scenario, requiredItems, approvedCount }) => {
               const statusMeta = getScenarioStatusMeta(scenario);
               const allApproved = approvedCount === REQUIRED_WORK_IDS.length;
+              const isCollapsed = collapsedCards[scenario.id] ?? true;
               return (
                 <div key={scenario.id} className="card" style={{ marginBottom: 12 }}>
                   <div
@@ -233,6 +331,19 @@ export default function ManagerReviewQueuePage() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <button
+                        className="btn sm review-queue-toggle"
+                        type="button"
+                        onClick={() =>
+                          setCollapsedCards((prev) => ({
+                            ...prev,
+                            [scenario.id]: !(prev[scenario.id] ?? true),
+                          }))
+                        }
+                        title={isCollapsed ? 'Detaylari ac' : 'Detaylari kapat'}
+                      >
+                        {isCollapsed ? 'Ac' : 'Kapat'}
+                      </button>
+                      <button
                         className="btn primary"
                         type="button"
                         onClick={() => handleSendForApproval(school.id, scenario.id)}
@@ -247,17 +358,19 @@ export default function ManagerReviewQueuePage() {
                       </button>
                     </div>
                   </div>
-                  <table className="table" style={{ marginTop: 12 }}>
-                    <thead>
-                      <tr>
-                        <th>Modül</th>
-                        <th>Durum</th>
-                        <th>Gönderildi</th>
-                        <th>Yorum</th>
-                        <th>Aksiyon</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <div className={`review-queue-card-body ${isCollapsed ? "is-collapsed" : "is-open"}`}>
+                    <div className="review-queue-card-inner">
+                       <table className="table">
+                         <thead>
+                           <tr>
+                             <th>Modül</th>
+                             <th>Durum</th>
+                             <th>Gönderildi</th>
+                             <th>Yorum</th>
+                             <th>Aksiyon</th>
+                           </tr>
+                         </thead>
+                         <tbody>
                       {requiredItems.map(({ workId, item }) => {
                         const state = item?.state || 'not_started';
                         const meta = getWorkItemStateMeta(state);
@@ -267,9 +380,23 @@ export default function ManagerReviewQueuePage() {
                         const comment = item?.manager_comment || '-';
                         const canApprove = state === 'submitted';
                         const canRevise = state === 'submitted';
+                        const canNavigate = Boolean(WORK_ID_TO_ROUTE[workId]);
                         return (
                           <tr key={workId} className={state === 'submitted' ? 'highlight-row' : ''}>
-                            <td>{WORK_ID_LABELS[workId] || workId}</td>
+                            <td>
+                              {canNavigate ? (
+                                <button
+                                  type="button"
+                                  className="review-queue-module-link"
+                                  onClick={() => handleNavigateToModule(school.id, scenario.id, workId)}
+                                  title="ModÃ¼le git"
+                                >
+                                  {WORK_ID_LABELS[workId] || workId}
+                                </button>
+                              ) : (
+                                WORK_ID_LABELS[workId] || workId
+                              )}
+                            </td>
                             <td>
                               <span className={`status-badge ${meta.className}`}>{meta.label}</span>
                             </td>
@@ -299,8 +426,15 @@ export default function ManagerReviewQueuePage() {
                           </tr>
                         );
                       })}
-                    </tbody>
-                  </table>
+                         </tbody>
+                       </table>
+                    </div>
+                  </div>
+                  {isCollapsed ? (
+                    <div className="small muted review-queue-collapsed-hint">
+                      Detaylari gormek icin acin.
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

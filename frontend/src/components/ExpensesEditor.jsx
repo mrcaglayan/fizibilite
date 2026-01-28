@@ -144,6 +144,7 @@ const BURS_DEFAULTS = [
   { name: "KURUM İNDİRİMİ" },
   { name: "İSTİSNAİ İNDİRİM" },
   { name: "YEREL MEVZUATIN ŞART KOŞTUĞU İNDİRİM" },
+  { name: "Paylaşılan Burs/İndirim (Dağıtım)" },
 ];
 
 function deepMerge(target, source) {

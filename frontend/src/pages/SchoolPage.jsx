@@ -293,6 +293,7 @@ export default function SchoolPage() {
   const [workItems, setWorkItems] = useState([]);
   const [workItemsLoaded, setWorkItemsLoaded] = useState(false);
   const [scenarioMetaLoaded, setScenarioMetaLoaded] = useState(false);
+  const [reviewingWorkItem, setReviewingWorkItem] = useState(false);
 
   // scenarios
   const [scenarios, setScenarios] = useState([]);
@@ -1555,6 +1556,24 @@ export default function SchoolPage() {
     }
     await submitWorkItem(activeWorkId);
   }, [activeWorkId, inputsDirty, saveInputs, submitWorkItem]);
+  const reviewActiveWorkItem = useCallback(
+    async (action = "approve") => {
+      if (!activeWorkId || !selectedScenario?.id) return;
+      if (reviewingWorkItem) return;
+      setReviewingWorkItem(true);
+      try {
+        await api.reviewWorkItem(schoolId, selectedScenario.id, activeWorkId, { action });
+        toast.success(action === "approve" ? "Onaylandı" : "Revize istendi");
+        await refreshWorkItems();
+        await refreshScenarioMeta();
+      } catch (e) {
+        toast.error(e?.message || "İşlem başarısız");
+      } finally {
+        setReviewingWorkItem(false);
+      }
+    },
+    [activeWorkId, selectedScenario?.id, reviewingWorkItem, schoolId, refreshWorkItems, refreshScenarioMeta]
+  );
   const role = String(me?.role || "");
   const isAccountant = role === "accountant";
   const suppressUnsavedWarning =
@@ -2099,6 +2118,27 @@ export default function SchoolPage() {
       hasScenario &&
       (role === "admin" || userCan("admin.scenario.review", "write")) &&
       scenarioStatus === "sent_for_approval";
+    const canReviewWorkItem =
+      hasScenario &&
+      activeWorkId &&
+      activeWorkState === "submitted" &&
+      (role === "admin" ||
+        role === "manager" ||
+        role === "accountant" ||
+        userCan("page.manage_permissions", "read") ||
+        userCan("page.manage_permissions", "write"));
+    const reviewDisabled =
+      reviewingWorkItem || inputsSaving || calculating || inputsDirty;
+    let reviewTooltip = "Modülü onayla";
+    if (inputsDirty) {
+      reviewTooltip = "Önce değişiklikleri kaydedin.";
+    } else if (inputsSaving) {
+      reviewTooltip = "Kaydetme devam ediyor.";
+    } else if (calculating) {
+      reviewTooltip = "Hesaplama devam ediyor.";
+    } else if (reviewingWorkItem) {
+      reviewTooltip = "Onaylanıyor...";
+    }
 
     // Calculate button permission: user must have write permissions on *all* modules
     // Define the list of module page resources that correspond to scenario modules.
@@ -2336,6 +2376,20 @@ export default function SchoolPage() {
           </div>
           {/* Right section: action buttons aligned to the far right */}
           <div className="school-footer-right">
+            {canReviewWorkItem ? (
+              <Tooltip lines={reviewTooltip ? [reviewTooltip] : []}>
+                <button
+                  type="button"
+                  className="topbar-btn is-primary"
+                  onClick={() => reviewActiveWorkItem("approve")}
+                  disabled={reviewDisabled}
+                  title={reviewTooltip}
+                >
+                  <FaCheckCircle aria-hidden="true" />
+                  <span>{reviewingWorkItem ? "Onaylanıyor..." : "Onayla"}</span>
+                </button>
+              </Tooltip>
+            ) : null}
             {primaryLabel ? (
               <Tooltip lines={primaryTooltip ? [primaryTooltip] : []}>
                 <button
