@@ -4216,3 +4216,199 @@ li.showMenu > .app-sub-menu {
   transition: var(--sb-tran);
 }
 .app-logout:hover { background: #1d4ed8; }
+
+
+/* =========================================================
+   Expandable Review Queue Cards (Aceternity-style)
+   ========================================================= */
+
+.review-queue-cards {
+  display: grid;
+  gap: 12px;
+}
+
+.rq-card-compact {
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+.rq-card-compact:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.12);
+}
+
+.rq-compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rq-compact-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 260px;
+}
+
+.rq-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #14b8a6);
+  box-shadow: 0 12px 18px rgba(37, 99, 235, 0.22);
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.rq-thumb--lg {
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  font-size: 20px;
+}
+
+.rq-title {
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.rq-title--lg {
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.rq-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rq-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rq-open-pill {
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-weight: 900;
+  border-radius: 999px;
+  padding: 9px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+.rq-open-pill:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+.rq-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  z-index: 80;
+}
+
+.rq-modal-wrap {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  z-index: 90;
+}
+
+.rq-close-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 18px 26px rgba(15, 23, 42, 0.14);
+  cursor: pointer;
+  z-index: 95;
+}
+
+.rq-close-icon {
+  width: 18px;
+  height: 18px;
+  color: #0f172a;
+}
+
+.rq-modal {
+  width: 100%;
+  max-width: 920px;
+  max-height: 90vh;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 22px;
+}
+
+.rq-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 1), rgba(255, 255, 255, 1));
+}
+
+.rq-modal-head-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.rq-modal-top-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rq-modal-body {
+  padding: 14px 16px 18px;
+  overflow: auto;
+}
+
+/* Give the table a little breathing room in the modal */
+.rq-modal .table {
+  margin-top: 10px;
+}
+
+/* Better mobile layout */
+@media (max-width: 520px) {
+  .rq-modal {
+    max-height: 92vh;
+    border-radius: 18px;
+  }
+  .rq-thumb--lg {
+    width: 62px;
+    height: 62px;
+    border-radius: 20px;
+  }
+  .rq-title--lg {
+    font-size: 16px;
+  }
+}
