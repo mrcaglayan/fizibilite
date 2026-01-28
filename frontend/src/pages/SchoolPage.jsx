@@ -2042,7 +2042,7 @@ export default function SchoolPage() {
     const canSubmitScenarioBase =
       hasScenario &&
       ["draft", "in_review", "revision_requested"].includes(scenarioStatus) &&
-      (role === "principal" || role === "hr");
+      (role === "principal" || role === "hr" || role === "manager" || role === "accountant");
     // Map active work ID to the corresponding page permission resource (if any)
     const writeResources = activeWorkId ? workIdToWriteResources[String(activeWorkId)] || [] : [];
     const userHasModuleWrite = writeResources.some((res) => {
