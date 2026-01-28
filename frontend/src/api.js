@@ -297,6 +297,19 @@ export const api = {
    */
   adminSetSchoolPrincipals: (schoolId, payload) =>
     request(`/admin/schools/${schoolId}/principals`, { method: "PUT", body: payload }),
+  /**
+   * Get the list of principal/HR assignments (with module responsibility) for a school.
+   * @param {number|string} schoolId
+   */
+  adminGetSchoolAssignments: (schoolId) =>
+    request(`/admin/schools/${schoolId}/assignments`),
+  /**
+   * Replace principal/HR assignments (with module responsibility) for a school.
+   * @param {number|string} schoolId
+   * @param {{ assignments: Array<{userId: number, role: string, modules: string[]}> }} payload
+   */
+  adminSetSchoolAssignments: (schoolId, payload) =>
+    request(`/admin/schools/${schoolId}/assignments`, { method: "PUT", body: payload }),
 
   // --- Role & Permission management (manager) ---
   /**
@@ -315,6 +328,20 @@ export const api = {
    */
   managerUpdateUserRole: (userId, payload) =>
     request(`/manager/users/${userId}/role`, { method: "PATCH", body: payload }),
+  /**
+   * Update a user's email within the manager's country.
+   * @param {number|string} userId
+   * @param {{ email: string }} payload
+   */
+  managerUpdateUserEmail: (userId, payload) =>
+    request(`/manager/users/${userId}/email`, { method: "PATCH", body: payload }),
+  /**
+   * Reset a user's password and return a temporary password.
+   * @param {number|string} userId
+   * @param {{ password?: string }} payload
+   */
+  managerResetUserPassword: (userId, payload = {}) =>
+    request(`/manager/users/${userId}/reset-password`, { method: "POST", body: payload }),
   /**
    * Fetch the full permissions catalog grouped by UI labels. Ensures permissions exist in DB.
    */
@@ -344,6 +371,19 @@ export const api = {
    */
   managerSetSchoolPrincipals: (schoolId, payload) =>
     request(`/manager/schools/${schoolId}/principals`, { method: "PUT", body: payload }),
+  /**
+   * Get the list of principal/HR assignments (with module responsibility) for a school.
+   * @param {number|string} schoolId
+   */
+  managerGetSchoolAssignments: (schoolId) =>
+    request(`/manager/schools/${schoolId}/assignments`),
+  /**
+   * Replace principal/HR assignments (with module responsibility) for a school.
+   * @param {number|string} schoolId
+   * @param {{ assignments: Array<{userId: number, role: string, modules: string[]}> }} payload
+   */
+  managerSetSchoolAssignments: (schoolId, payload) =>
+    request(`/manager/schools/${schoolId}/assignments`, { method: "PUT", body: payload }),
   /**
    * Fetch the manager review queue (scenarios + work items) in a single call.
    */

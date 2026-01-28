@@ -4,7 +4,7 @@ import React, { useMemo, useState } from "react";
 import NumberInput from "./NumberInput";
 
 export default function DiscountsEditor({ discounts, onChange }) {
-  const list = Array.isArray(discounts) ? discounts : [];
+  const list = useMemo(() => (Array.isArray(discounts) ? discounts : []), [discounts]);
   const [name, setName] = useState("");
   const [mode, setMode] = useState("percent");
   const [value, setValue] = useState(0);

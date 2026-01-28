@@ -166,7 +166,11 @@ router.put(
     }
 
     await pool.query(
-      "UPDATE school_norm_configs SET teacher_weekly_max_hours=:h, curriculum_weekly_hours_json=:j, updated_by=:u WHERE school_id=:id",
+      "INSERT INTO school_norm_configs (school_id, teacher_weekly_max_hours, curriculum_weekly_hours_json, updated_by) " +
+        "VALUES (:id, :h, :j, :u) " +
+        "ON DUPLICATE KEY UPDATE teacher_weekly_max_hours=VALUES(teacher_weekly_max_hours), " +
+        "curriculum_weekly_hours_json=VALUES(curriculum_weekly_hours_json), " +
+        "updated_by=VALUES(updated_by)",
       {
         h: normalized.years.y1.teacherWeeklyMaxHours,
         j: JSON.stringify({ years: normalized.years }),

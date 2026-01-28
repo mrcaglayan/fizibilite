@@ -1,57 +1,118 @@
-// frontend/src/pages/ManagePermissionsPage.jsx
-
-import React, { useEffect, useState, useMemo, useCallback } from "react";
-import { useAuth } from "../auth/AuthContext";
-import { api } from "../api";
-import { can } from "../utils/permissions";
-import { toast } from "react-toastify";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import PermissionsTable from "../components/permissions/PermissionsTable";
+import { toast } from "react-toastify";
+import { api } from "../api";
 
-/**
- * ManagePermissionsPage allows users with the manage_permissions permission to
- * view and update roles and permissions for users within their assigned
- * country.  Managers can assign user, HR, and principal roles but are not
- * allowed to grant the manager or admin roles.  They can also grant
- * resource-level read/write permissions scoped to country or specific
- * schools.  This page is a simplified subset of the Admin page tailored
- * for managers.
- */
+const REQUIRED_MODULES = [
+  "Temel Bilgiler",
+  "Kapasite",
+  "Norm",
+  "İK (HR)",
+  "Gelirler",
+  "Giderler",
+];
+
+const MODULE_ALIASES = {
+  "Norm İK (HR)": ["Norm", "İK (HR)"],
+};
+
+const ROLE_LABELS = {
+  principal: "Principal",
+  hr: "HR",
+  accountant: "Accountant",
+};
+
+const ROLE_OPTIONS = [
+  { value: "principal", label: "Principal" },
+  { value: "hr", label: "HR" },
+];
+
+const normalizeModuleList = (modules) => {
+  if (!Array.isArray(modules)) return [];
+  const expanded = [];
+  modules.forEach((moduleName) => {
+    const clean = String(moduleName || "").trim();
+    if (!clean) return;
+    const alias = MODULE_ALIASES[clean];
+    if (alias) {
+      expanded.push(...alias);
+      return;
+    }
+    expanded.push(clean);
+  });
+  return Array.from(new Set(expanded));
+};
+
+const normalizeAssignmentsFromApi = (rows) => {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((row) => {
+      const userId = Number(row?.userId ?? row?.user_id);
+      const role = String(row?.role || "").trim().toLowerCase();
+      const modules = normalizeModuleList(row?.modules);
+      return { userId, role, modules };
+    })
+    .filter(
+      (row) =>
+        Number.isFinite(row.userId) &&
+        row.userId > 0 &&
+        (row.role === "principal" || row.role === "hr" || row.role === "accountant")
+    );
+};
+
+const normalizeAssignmentPayload = (assignments) =>
+  (Array.isArray(assignments) ? assignments : []).map((assignment) => ({
+    userId: assignment.userId,
+    role: assignment.role,
+    modules: normalizeModuleList(assignment.modules),
+  }));
+
 export default function ManagePermissionsPage() {
-  const auth = useAuth();
   const outlet = useOutletContext();
-  const [users, setUsers] = useState([]);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [selectedUserId, setSelectedUserId] = useState(null);
-  const [permissionsCatalog, setPermissionsCatalog] = useState(null);
-  const [permissionsLoading, setPermissionsLoading] = useState(false);
-  const [permissionSelections, setPermissionSelections] = useState({});
-  const [permissionScopes, setPermissionScopes] = useState({});
-  const [userSchools, setUserSchools] = useState([]);
-  const [savingPermissions, setSavingPermissions] = useState(false);
-  // State for school principal assignments
-  const [principalAssignments, setPrincipalAssignments] = useState({});
-  const [loadingPrincipals, setLoadingPrincipals] = useState(false);
-  const [savingPrincipals, setSavingPrincipals] = useState(false);
-  const [roleUpdating, setRoleUpdating] = useState(false);
-  const [newUserName, setNewUserName] = useState("");
-  const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserPassword, setNewUserPassword] = useState("");
-  const [newUserRole, setNewUserRole] = useState("principal");
-  const [creatingUser, setCreatingUser] = useState(false);
-  const [newSchoolName, setNewSchoolName] = useState("");
-  const [creatingSchool, setCreatingSchool] = useState(false);
+  const saveVersionRef = useRef({});
 
-  // Set the header meta on mount so that the top bar displays an appropriate
-  // title and subtitle.  Clear the header meta on unmount to avoid
-  // persisting it when navigating away.  Without this, the default
-  // header may use stale values from previous pages, leading to a
-  // mismatched topbar style.
+  // === State for users, schools and assignments ===
+  const [users, setUsers] = useState([]);
+  const [schools, setSchools] = useState([]);
+  const [assignmentsBySchool, setAssignmentsBySchool] = useState({});
+  const assignmentsBySchoolRef = useRef({});
+
+  // Loading/saving flags
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [schoolsLoading, setSchoolsLoading] = useState(false);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [savingSchoolIds, setSavingSchoolIds] = useState({});
+
+  // UI state: which school row is selected (for drawer) and which tab is active
+  const [selectedSchoolId, setSelectedSchoolId] = useState(null);
+  const [activeTab, setActiveTab] = useState("assignments");
+
+  // Add user drawer state (existing)
+  const [newUserId, setNewUserId] = useState("");
+  const [newRole, setNewRole] = useState("principal");
+
+  // Create user form state for the Create User tab
+  const [createFullName, setCreateFullName] = useState("");
+  const [createEmail, setCreateEmail] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [createRole, setCreateRole] = useState("principal");
+  const [createSchoolId, setCreateSchoolId] = useState("");
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [createSchoolName, setCreateSchoolName] = useState("");
+  const [creatingSchool, setCreatingSchool] = useState(false);
+  const [userRoleDrafts, setUserRoleDrafts] = useState({});
+  const [userEmailDrafts, setUserEmailDrafts] = useState({});
+  const [updatingUserIds, setUpdatingUserIds] = useState({});
+  const [resettingUserIds, setResettingUserIds] = useState({});
+  const [temporaryPasswords, setTemporaryPasswords] = useState({});
+
   useEffect(() => {
-    // Center the header to align the "Okul / Senaryo Değiştir" button
+    // Set a generic title and subtitle for the access management hub.  When
+    // this page mounts the header will reflect that users can manage
+    // assignments and create new users within their country.
     outlet?.setHeaderMeta?.({
       title: "Manage Permissions",
-      subtitle: "Assign roles and permissions",
+      subtitle: "Assign users to schools and create new users",
       centered: true,
     });
     return () => {
@@ -59,563 +120,925 @@ export default function ManagePermissionsPage() {
     };
   }, [outlet]);
 
-  // Fetch the list of users that the manager/admin can manage
+  const normalizeSchoolsList = useCallback((list) => {
+    if (Array.isArray(list)) return list;
+    if (list && Array.isArray(list.items)) return list.items;
+    return [];
+  }, []);
+
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
       const list = await api.managerListUsers();
       setUsers(Array.isArray(list) ? list : []);
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || "Failed to load users");
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to load users");
     } finally {
       setUsersLoading(false);
     }
   }, []);
 
-  const permissionScope = useMemo(
-    () => ({ countryId: auth.user?.country_id ?? null }),
-    [auth.user?.country_id]
-  );
-  const canCreateUsers = can(auth.user, "user.create", "write", permissionScope);
-  const canCreateSchools = can(auth.user, "school.create", "write", permissionScope);
-
-  const refreshSchools = useCallback(async () => {
+  const loadSchools = useCallback(async () => {
+    setSchoolsLoading(true);
     try {
-      const schools = await api.listSchools();
-      if (Array.isArray(schools)) {
-        setUserSchools(schools);
-      } else if (schools && Array.isArray(schools.items)) {
-        setUserSchools(schools.items);
-      }
-    } catch (_) {
-      // ignore
+      const list = await api.listSchools();
+      setSchools(normalizeSchoolsList(list));
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to load schools");
+      setSchools([]);
+    } finally {
+      setSchoolsLoading(false);
     }
-  }, []);
+  }, [normalizeSchoolsList]);
 
-  // Load permissions catalog, current user permissions, and school list for the selected user.
-  //
-  // We wrap this function in useCallback so it has a stable identity across
-  // renders. This avoids triggering the permissions effect when nothing has
-  // changed and allows us to include it safely in effect dependencies.
-  const loadPermissionsForUser = useCallback(async (user) => {
-    if (!user) {
-      setPermissionsCatalog(null);
-      setPermissionSelections({});
-      setPermissionScopes({});
-      setUserSchools([]);
+  const loadAssignmentsForSchools = useCallback(async (schoolsList) => {
+    if (!Array.isArray(schoolsList) || schoolsList.length === 0) {
+      setAssignmentsBySchool({});
       return;
     }
-    setPermissionsLoading(true);
+    setAssignmentsLoading(true);
     try {
-      const [catalogData, userPerms, schools] = await Promise.all([
-        api.managerGetPermissionsCatalog(),
-        api.managerGetUserPermissions(user.id),
-        api.listSchools(),
-      ]);
-      setPermissionsCatalog(catalogData || null);
-      // Flatten schools list (manager sees only their country's schools)
-      let schoolsList = [];
-      if (Array.isArray(schools)) {
-        schoolsList = schools;
-      } else if (schools && Array.isArray(schools.items)) {
-        schoolsList = schools.items;
-      }
-      setUserSchools(schoolsList);
-      // Initialize selection state from existing user permissions
-      const sel = {};
-      const scopes = {};
-      (userPerms || []).forEach((p) => {
-        const key = `${p.resource}|${p.action}`;
-        sel[key] = true;
-        if (p.scope_school_id != null) {
-          scopes[key] = `school:${p.scope_school_id}`;
+      const results = await Promise.allSettled(
+        schoolsList.map((school) => api.managerGetSchoolAssignments(school.id))
+      );
+      const next = {};
+      let hasError = false;
+      results.forEach((result, index) => {
+        const schoolId = schoolsList[index]?.id;
+        if (schoolId == null) return;
+        if (result.status === "fulfilled") {
+          next[String(schoolId)] = normalizeAssignmentsFromApi(result.value);
         } else {
-          scopes[key] = "country";
+          hasError = true;
+          next[String(schoolId)] = [];
         }
       });
-      setPermissionSelections(sel);
-      setPermissionScopes(scopes);
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || "Failed to load permissions");
+      if (hasError) {
+        toast.error("Failed to load some school assignments");
+      }
+      setAssignmentsBySchool(next);
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to load school assignments");
+      setAssignmentsBySchool({});
     } finally {
-      setPermissionsLoading(false);
+      setAssignmentsLoading(false);
     }
   }, []);
 
-  // On mount, load users
   useEffect(() => {
     loadUsers();
-  }, [loadUsers]);
+    loadSchools();
+  }, [loadUsers, loadSchools]);
 
-  // When a user is selected or the user list changes, load their permissions and catalog
   useEffect(() => {
-    const user = users.find((u) => String(u.id) === String(selectedUserId));
-    loadPermissionsForUser(user);
-  }, [selectedUserId, users, loadPermissionsForUser]);
+    assignmentsBySchoolRef.current = assignmentsBySchool;
+  }, [assignmentsBySchool]);
 
-  // Load current principal assignments for each school in the manager's country.
-  // This runs whenever the list of userSchools changes (e.g. after loading catalog).
   useEffect(() => {
-    async function loadPrincipals() {
-      if (!Array.isArray(userSchools) || userSchools.length === 0) {
-        return;
-      }
-      setLoadingPrincipals(true);
-      const assignments = {};
-      try {
-        // Load principals for each school sequentially
-        for (const s of userSchools) {
-          try {
-            const list = await api.managerGetSchoolPrincipals(s.id);
-            assignments[s.id] = Array.isArray(list) ? list.map((u) => u.id) : [];
-          } catch (_) {
-            assignments[s.id] = [];
-          }
-        }
-        setPrincipalAssignments(assignments);
-      } finally {
-        setLoadingPrincipals(false);
-      }
-    }
-    loadPrincipals();
-  }, [userSchools]);
-
-  // Handler: update selected principals for a school
-  function handlePrincipalChange(schoolId, selectedIds) {
-    setPrincipalAssignments((prev) => ({ ...prev, [schoolId]: selectedIds }));
-  }
-
-  // Save principal assignments across all schools.  Loops through each school
-  // and calls the backend endpoint.  Shows a toast on completion or error.
-  async function savePrincipalAssignments() {
-    if (!Array.isArray(userSchools) || userSchools.length === 0) return;
-    setSavingPrincipals(true);
-    try {
-      for (const s of userSchools) {
-        const ids = Array.isArray(principalAssignments[s.id]) ? principalAssignments[s.id] : [];
-        await api.managerSetSchoolPrincipals(s.id, { userIds: ids });
-      }
-      toast.success("Principal assignments saved");
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || 'Failed to save principal assignments');
-    } finally {
-      setSavingPrincipals(false);
-    }
-  }
-
-  // Utility: group permissions by group from catalog
-  const permissionsGrouped = useMemo(() => {
-    if (!permissionsCatalog) return {};
-    if (typeof permissionsCatalog === "object" && !Array.isArray(permissionsCatalog)) {
-      return permissionsCatalog;
-    }
-    if (Array.isArray(permissionsCatalog)) {
-      return permissionsCatalog.reduce((acc, perm) => {
-        const grp = perm.group || "Other";
-        if (!acc[grp]) acc[grp] = [];
-        acc[grp].push(perm);
-        return acc;
-      }, {});
-    }
-    return {};
-  }, [permissionsCatalog]);
-
-  const togglePermission = useCallback((key, scopeValue = "country") => {
-    setPermissionSelections((prev) => {
-      const next = { ...prev };
-      const nextValue = !prev[key];
-      next[key] = nextValue;
-      setPermissionScopes((prevScopes) => {
-        const copy = { ...prevScopes };
-        if (!nextValue) {
-          delete copy[key];
-        } else if (!copy[key]) {
-          copy[key] = scopeValue || "country";
-        }
-        return copy;
-      });
-      return next;
-    });
-  }, []);
-
-  function togglePermissionGroup(groupKeys, nextValue) {
-    if (!Array.isArray(groupKeys) || groupKeys.length === 0) return;
-    setPermissionSelections((prev) => {
-      const next = { ...prev };
-      groupKeys.forEach((key) => {
-        next[key] = nextValue;
-      });
-      return next;
-    });
-    setPermissionScopes((prev) => {
-      const next = { ...prev };
-      if (nextValue) {
-        groupKeys.forEach((key) => {
-          if (!next[key]) next[key] = "country";
-        });
-      } else {
-        groupKeys.forEach((key) => {
-          delete next[key];
-        });
-      }
-      return next;
-    });
-  }
-
-  function changePermissionScopeForResource(resource, value) {
-    const readKey = `${resource}|read`;
-    const writeKey = `${resource}|write`;
-    setPermissionScopes((prev) => ({ ...prev, [readKey]: value, [writeKey]: value }));
-  }
-
-  async function saveUserPermissions() {
-    const user = users.find((u) => String(u.id) === String(selectedUserId));
-    if (!user) {
-      toast.error("Select a user");
+    if (schools.length === 0) {
+      setAssignmentsBySchool({});
       return;
     }
-    const scopeCountryId = auth.user?.country_id != null ? Number(auth.user.country_id) : null;
-    const perms = [];
-    const keys = Object.keys(permissionSelections || {});
-    keys.forEach((k) => {
-      if (!permissionSelections[k]) return;
-      const [resource, action] = k.split("|");
-      let scopeVal = permissionScopes[k] || "country";
-      let scope_country_id = null;
-      let scope_school_id = null;
-      if (scopeVal === "country") {
-        if (scopeCountryId != null) {
-          scope_country_id = scopeCountryId;
-        }
-      } else if (scopeVal.startsWith("school:")) {
-        const sidStr = scopeVal.split(":")[1];
-        const sid = Number(sidStr);
-        if (Number.isFinite(sid)) {
-          scope_school_id = sid;
-        }
-        if (scopeCountryId != null) {
-          scope_country_id = scopeCountryId;
-        }
-      }
-      perms.push({ resource, action, scope_country_id, scope_school_id });
+    loadAssignmentsForSchools(schools);
+  }, [schools, loadAssignmentsForSchools]);
+
+  useEffect(() => {
+    if (!selectedSchoolId) return;
+    if (!schools.some((school) => String(school.id) === String(selectedSchoolId))) {
+      setSelectedSchoolId(null);
+    }
+  }, [schools, selectedSchoolId]);
+
+  useEffect(() => {
+    setNewUserId("");
+  }, [selectedSchoolId]);
+
+  const selectedSchool = useMemo(
+    () => schools.find((school) => String(school.id) === String(selectedSchoolId)) || null,
+    [schools, selectedSchoolId]
+  );
+
+  const selectedAssignments = useMemo(() => {
+    if (!selectedSchool) return [];
+    return assignmentsBySchool[String(selectedSchool.id)] || [];
+  }, [assignmentsBySchool, selectedSchool]);
+
+  const isSavingSelected = selectedSchool
+    ? Boolean(savingSchoolIds[String(selectedSchool.id)])
+    : false;
+
+  const getUserById = (id) => users.find((user) => Number(user.id) === Number(id)) || null;
+
+  const getUserLabel = (user) =>
+    user?.full_name || user?.name || user?.email || (user?.id != null ? `User ${user.id}` : "Unknown");
+
+  const getMissingModules = (assignments) => {
+    const covered = new Set();
+    (assignments || []).forEach((assignment) => {
+      (assignment.modules || []).forEach((moduleName) => covered.add(moduleName));
     });
-    setSavingPermissions(true);
+    return REQUIRED_MODULES.filter((moduleName) => !covered.has(moduleName));
+  };
+
+  const persistAssignments = useCallback(async (schoolId, nextAssignments, previousAssignments) => {
+    if (!schoolId) return;
+    const key = String(schoolId);
+    const nextVersion = (saveVersionRef.current[key] || 0) + 1;
+    saveVersionRef.current[key] = nextVersion;
+    setSavingSchoolIds((prev) => ({ ...prev, [key]: true }));
     try {
-      await api.managerSetUserPermissions(user.id, { permissions: perms });
-      // Reload to reflect server state
-      const updated = await api.managerGetUserPermissions(user.id);
-      const sel = {};
-      const scopeMap = {};
-      (updated || []).forEach((p) => {
-        const key = `${p.resource}|${p.action}`;
-        sel[key] = true;
-        if (p.scope_school_id != null) {
-          scopeMap[key] = `school:${p.scope_school_id}`;
-        } else {
-          scopeMap[key] = "country";
+      const payload = normalizeAssignmentPayload(nextAssignments);
+      const response = await api.managerSetSchoolAssignments(schoolId, { assignments: payload });
+      if (saveVersionRef.current[key] !== nextVersion) return;
+      const savedAssignments = Array.isArray(response)
+        ? response
+        : response?.assignments || payload;
+      const normalized = normalizeAssignmentsFromApi(savedAssignments);
+      setAssignmentsBySchool((prev) => ({ ...prev, [key]: normalized }));
+    } catch (err) {
+      console.error(err);
+      if (saveVersionRef.current[key] !== nextVersion) return;
+      setAssignmentsBySchool((prev) => ({ ...prev, [key]: previousAssignments }));
+      toast.error(err?.message || "Failed to save assignments");
+    } finally {
+      if (saveVersionRef.current[key] === nextVersion) {
+        setSavingSchoolIds((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      }
+    }
+  }, []);
+
+  const applyAssignmentUpdate = useCallback(
+    (schoolId, updater) => {
+      if (!schoolId) return;
+      const key = String(schoolId);
+      const currentAssignments = Array.isArray(assignmentsBySchoolRef.current[key])
+        ? assignmentsBySchoolRef.current[key]
+        : [];
+      const nextAssignments = updater(currentAssignments);
+      if (nextAssignments === currentAssignments) return;
+      setAssignmentsBySchool((prev) => ({ ...prev, [key]: nextAssignments }));
+      persistAssignments(schoolId, nextAssignments, currentAssignments);
+    },
+    [persistAssignments]
+  );
+
+  const toggleModule = (schoolId, userId, role, moduleName) => {
+    applyAssignmentUpdate(schoolId, (assignments) =>
+      assignments.map((assignment) => {
+        if (assignment.userId !== userId || assignment.role !== role) {
+          return assignment;
         }
-      });
-      setPermissionSelections(sel);
-      setPermissionScopes(scopeMap);
-      toast.success("Saved");
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || "Save failed");
-    } finally {
-      setSavingPermissions(false);
-    }
-  }
+        const existing = Array.isArray(assignment.modules) ? assignment.modules : [];
+        const hasModule = existing.includes(moduleName);
+        const modules = hasModule
+          ? existing.filter((item) => item !== moduleName)
+          : [...existing, moduleName];
+        return { ...assignment, modules };
+      })
+    );
+  };
 
-  async function updateUserRole(role) {
-    const user = users.find((u) => String(u.id) === String(selectedUserId));
+  const toggleAllModules = (schoolId, userId, role, shouldSelectAll) => {
+    applyAssignmentUpdate(schoolId, (assignments) =>
+      assignments.map((assignment) => {
+        if (assignment.userId !== userId || assignment.role !== role) {
+          return assignment;
+        }
+        return {
+          ...assignment,
+          modules: shouldSelectAll ? [...REQUIRED_MODULES] : [],
+        };
+      })
+    );
+  };
+
+  const removeAssignment = (schoolId, userId) => {
+    applyAssignmentUpdate(schoolId, (assignments) =>
+      assignments.filter((assignment) => assignment.userId !== userId)
+    );
+  };
+
+  const addAssignment = () => {
+    if (!selectedSchool || !newUserId) return;
+    const userId = Number(newUserId);
+    if (!Number.isFinite(userId)) return;
+    const roleToAssign = selectedAddUser?.role === "accountant" ? "accountant" : newRole;
+    applyAssignmentUpdate(selectedSchool.id, (assignments) => {
+      const alreadyAssigned = assignments.some(
+        (assignment) => assignment.userId === userId
+      );
+      if (alreadyAssigned) return assignments;
+      return [
+        ...assignments,
+        {
+          userId,
+          role: roleToAssign,
+          modules: [],
+        },
+      ];
+    });
+    setNewUserId("");
+  };
+
+  const availableUsers = useMemo(() => {
+    if (!selectedSchool) return [];
+    const assignedIds = new Set(
+      selectedAssignments.map((assignment) => assignment.userId)
+    );
+    return users.filter((user) => !assignedIds.has(user.id));
+  }, [selectedAssignments, selectedSchool, users]);
+
+  const selectedAddUser = useMemo(() => {
+    if (!newUserId) return null;
+    return users.find((user) => String(user.id) === String(newUserId)) || null;
+  }, [newUserId, users]);
+
+  const isAccountantSelection = selectedAddUser?.role === "accountant";
+
+  useEffect(() => {
+    if (!selectedAddUser) return;
+    if (selectedAddUser.role === "accountant" && newRole !== "accountant") {
+      setNewRole("accountant");
+    } else if (selectedAddUser.role !== "accountant" && newRole === "accountant") {
+      setNewRole("principal");
+    }
+  }, [selectedAddUser, newRole]);
+
+  const editableRoles = useMemo(() => ["user", "principal", "hr"], []);
+
+  const handleRoleDraftChange = (userId, value) => {
+    setUserRoleDrafts((prev) => ({ ...prev, [userId]: value }));
+  };
+
+  const handleEmailDraftChange = (userId, value) => {
+    setUserEmailDrafts((prev) => ({ ...prev, [userId]: value }));
+  };
+
+  const handleSaveUser = async (user) => {
     if (!user) return;
-    setRoleUpdating(true);
-    try {
-      await api.managerUpdateUserRole(user.id, { role });
-      toast.success("Role updated");
-      // reload users list
-      await loadUsers();
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || "Failed to update role");
-    } finally {
-      setRoleUpdating(false);
-    }
-  }
+    const userId = user.id;
+    const nextEmail = String(userEmailDrafts[userId] ?? user.email ?? "").trim();
+    const nextRole = String(userRoleDrafts[userId] ?? user.role ?? "").trim().toLowerCase();
+    const canEditRole = editableRoles.includes(user.role) || editableRoles.includes(nextRole);
+    const changes = [];
 
-  async function createUser() {
-    if (!canCreateUsers) return;
-    const email = newUserEmail.trim();
-    const password = newUserPassword;
-    const fullName = newUserName.trim();
-    if (!email || !password) {
+    if (nextEmail && nextEmail !== user.email) {
+      changes.push(() => api.managerUpdateUserEmail(userId, { email: nextEmail }));
+    }
+    if (canEditRole && nextRole && nextRole !== user.role) {
+      changes.push(() => api.managerUpdateUserRole(userId, { role: nextRole }));
+    }
+
+    if (changes.length === 0) {
+      toast.info("No changes to save");
+      return;
+    }
+
+    setUpdatingUserIds((prev) => ({ ...prev, [userId]: true }));
+    try {
+      for (const fn of changes) {
+        await fn();
+      }
+      toast.success("User updated");
+      await loadUsers();
+      setUserRoleDrafts((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      setUserEmailDrafts((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to update user");
+    } finally {
+      setUpdatingUserIds((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+    }
+  };
+
+  const handleResetPassword = async (user) => {
+    if (!user) return;
+    const userId = user.id;
+    setResettingUserIds((prev) => ({ ...prev, [userId]: true }));
+    try {
+      const response = await api.managerResetUserPassword(userId);
+      const tempPassword = response?.temporary_password;
+      if (tempPassword) {
+        setTemporaryPasswords((prev) => ({ ...prev, [userId]: tempPassword }));
+      }
+      toast.success("Temporary password generated");
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to reset password");
+    } finally {
+      setResettingUserIds((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Handle creating a new user and optionally assigning them to a school.
+   * The manager API will scope the new user to the caller's country.  If a
+   * school is selected in the Create User tab, the newly created user will
+   * be automatically assigned to that school with the chosen role and no
+   * module responsibilities.  After creation the users and assignments
+   * lists are refreshed.
+   */
+  const handleCreateUser = async (event) => {
+    event?.preventDefault?.();
+    const trimmedEmail = createEmail.trim();
+    if (!trimmedEmail || !createPassword) {
       toast.error("Email and password are required");
       return;
     }
-    if (password.length < 8) {
+    if (createPassword.length < 8) {
       toast.error("Password must be at least 8 characters");
       return;
     }
-    if (!["principal", "hr"].includes(newUserRole)) {
+    if (!["principal", "hr"].includes(createRole)) {
       toast.error("Role must be Principal or HR");
       return;
     }
     setCreatingUser(true);
     try {
-      await api.managerCreateUser({
-        full_name: fullName || null,
-        email,
-        password,
-        role: newUserRole,
-      });
+      const payload = {
+        full_name: createFullName ? createFullName.trim() : null,
+        email: trimmedEmail,
+        password: createPassword,
+        role: createRole,
+      };
+      // Create the user in the manager's country
+      const userResp = await api.managerCreateUser(payload);
       toast.success("User created");
-      setNewUserName("");
-      setNewUserEmail("");
-      setNewUserPassword("");
-      setNewUserRole("principal");
+      // Refresh users list so the new user is available for assignments
       await loadUsers();
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || "Failed to create user");
+      // If a school was selected, immediately assign the new user to that school
+      const schoolId = createSchoolId;
+      if (schoolId) {
+        const newUserId = userResp?.id;
+        if (newUserId) {
+          const key = String(schoolId);
+          const currentAssignments = Array.isArray(assignmentsBySchoolRef.current[key])
+            ? assignmentsBySchoolRef.current[key]
+            : [];
+          const nextAssignments = [
+            ...currentAssignments,
+            { userId: newUserId, role: createRole, modules: [] },
+          ];
+          persistAssignments(schoolId, nextAssignments, currentAssignments);
+        }
+      }
+      // Reset form fields
+      setCreateFullName("");
+      setCreateEmail("");
+      setCreatePassword("");
+      setCreateRole("principal");
+      setCreateSchoolId("");
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to create user");
     } finally {
       setCreatingUser(false);
     }
-  }
+  };
 
-  async function createSchool() {
-    if (!canCreateSchools) return;
-    const name = newSchoolName.trim();
-    if (!name) {
+  const handleCreateSchool = async (event) => {
+    event?.preventDefault?.();
+    const trimmedName = createSchoolName.trim();
+    if (!trimmedName) {
       toast.error("School name is required");
       return;
     }
     setCreatingSchool(true);
     try {
-      await api.createSchool({ name });
+      await api.createSchool({ name: trimmedName });
       toast.success("School created");
-      setNewSchoolName("");
-      await refreshSchools();
-    } catch (e) {
-      console.error(e);
-      toast.error(e?.message || "Failed to create school");
+      setCreateSchoolName("");
+      await loadSchools();
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to create school");
     } finally {
       setCreatingSchool(false);
     }
-  }
-
-  // Determine available role options (manager cannot assign manager or admin roles)
-  const roleOptions = [
-    { value: "user", label: "User" },
-    { value: "hr", label: "HR" },
-    { value: "principal", label: "Principal" },
-  ];
+  };
 
   return (
     <div className="permissions-page">
       <div className="container permissions-page-content" style={{ padding: "1rem" }}>
-      <h1>Manage Permissions</h1>
-      {(canCreateUsers || canCreateSchools) && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Create</div>
-          {canCreateUsers && (
-            <div style={{ marginBottom: 12 }}>
-              <div className="small" style={{ marginBottom: 6 }}>New Principal / HR</div>
-              <div className="row" style={{ alignItems: "center", gap: 8 }}>
-                <input
-                  className="input sm"
-                  placeholder="Full name"
-                  value={newUserName}
-                  onChange={(e) => setNewUserName(e.target.value)}
-                />
-                <input
-                  className="input sm"
-                  placeholder="Email"
-                  value={newUserEmail}
-                  onChange={(e) => setNewUserEmail(e.target.value)}
-                />
-                <input
-                  className="input sm"
-                  placeholder="Temporary password"
-                  type="password"
-                  value={newUserPassword}
-                  onChange={(e) => setNewUserPassword(e.target.value)}
-                />
-                <select
-                  className="input sm"
-                  value={newUserRole}
-                  onChange={(e) => setNewUserRole(e.target.value)}
-                >
-                  <option value="principal">Principal</option>
-                  <option value="hr">HR</option>
-                </select>
-                <button className="btn primary" onClick={createUser} disabled={creatingUser}>
-                  {creatingUser ? "Creating..." : "Create User"}
-                </button>
-              </div>
+        {/* Top bar with tabs */}
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div className="access-hub-tabs">
+            <div
+              className={`access-hub-tab ${activeTab === "assignments" ? "is-active" : ""}`}
+              onClick={() => {
+                setActiveTab("assignments");
+                setSelectedSchoolId(null);
+              }}
+            >
+              School assignments
             </div>
-          )}
-          {canCreateSchools && (
-            <div>
-              <div className="small" style={{ marginBottom: 6 }}>New School (your country)</div>
-              <div className="row" style={{ alignItems: "center", gap: 8 }}>
-                <input
-                  className="input sm"
-                  placeholder="School name"
-                  value={newSchoolName}
-                  onChange={(e) => setNewSchoolName(e.target.value)}
-                />
-                <button className="btn primary" onClick={createSchool} disabled={creatingSchool}>
-                  {creatingSchool ? "Creating..." : "Create School"}
-                </button>
-              </div>
+            <div
+              className={`access-hub-tab ${activeTab === "createUser" ? "is-active" : ""}`}
+              onClick={() => {
+                setActiveTab("createUser");
+                setSelectedSchoolId(null);
+              }}
+            >
+              Create user
             </div>
-          )}
-        </div>
-      )}
-      {/* Users list */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Users</div>
-        {usersLoading ? (
-          <div>Loading users...</div>
-        ) : users.length === 0 ? (
-          <div>No users found.</div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id} className={String(u.id) === String(selectedUserId) ? "is-selected" : ""}>
-                  <td>{u.id}</td>
-                  <td>{u.full_name || "-"}</td>
-                  <td>{u.email}</td>
-                  <td>{u.role}</td>
-                  <td>
-                    <button className="btn" onClick={() => setSelectedUserId(String(u.id))}>
-                      Edit
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      {/* Permission and role editor */}
-      {selectedUserId && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>
-            Edit User: {users.find((u) => String(u.id) === String(selectedUserId))?.full_name || "User"}
+            <div
+              className={`access-hub-tab ${activeTab === "createSchool" ? "is-active" : ""}`}
+              onClick={() => {
+                setActiveTab("createSchool");
+                setSelectedSchoolId(null);
+              }}
+            >
+              Create school
+            </div>
           </div>
-          {permissionsLoading ? (
-            <div>Loading permissions...</div>
-          ) : (
-            <>
-              {/* Role selector */}
-              <div style={{ marginBottom: 8 }}>
-                <label className="small" style={{ marginRight: 8 }}>Role:</label>
-                <select
-                  className="input sm"
-                  value={users.find((u) => String(u.id) === String(selectedUserId))?.role || "user"}
-                  onChange={(e) => updateUserRole(e.target.value)}
-                  disabled={roleUpdating}
-                >
-                  {roleOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-              </div>
-              <PermissionsTable
-                permissionsGrouped={permissionsGrouped}
-                permissionSelections={permissionSelections}
-                permissionScopes={permissionScopes}
-                userSchools={userSchools}
-                isAdmin={false}
-                onTogglePermission={togglePermission}
-                onToggleGroup={togglePermissionGroup}
-                onScopeChange={changePermissionScopeForResource}
-              />
-            </>
-          )}
         </div>
-      )}
+        {/* Tab content */}
+        {activeTab === "assignments" && (
+          <>
+            {/* School assignments list */}
+            <div className="school-assignments-page" style={{ paddingTop: 24 }}>
+              <div className="school-assignments-header">
+                <div>
+                  <h2>School assignments</h2>
+                  <p>Assign principals, HR users, and module responsibility by school.</p>
+                </div>
+              </div>
+              <div className="school-assignments-table-wrap">
+                <table className="table school-assignments-table">
+                  <thead>
+                    <tr>
+                      <th>School</th>
+                      <th>Principals</th>
+                      <th>HR Users</th>
+                      <th>Accountants</th>
+                      <th>Missing Modules</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schoolsLoading ? (
+                      <tr>
+                        <td colSpan={5}>Loading schools...</td>
+                      </tr>
+                    ) : schools.length === 0 ? (
+                      <tr>
+                        <td colSpan={5}>No schools found.</td>
+                      </tr>
+                    ) : (
+                      schools.map((school) => {
+                        const key = String(school.id);
+                        const assignments = assignmentsBySchool[key];
+                        const assignmentsReady = Array.isArray(assignments);
+                        const principals = assignmentsReady
+                          ? assignments
+                              .filter((assignment) => assignment.role === "principal")
+                              .map((assignment) => getUserLabel(getUserById(assignment.userId)))
+                          : [];
+                        const hrUsers = assignmentsReady
+                          ? assignments
+                              .filter((assignment) => assignment.role === "hr")
+                              .map((assignment) => getUserLabel(getUserById(assignment.userId)))
+                          : [];
+                        const accountants = assignmentsReady
+                          ? assignments
+                              .filter((assignment) => assignment.role === "accountant")
+                              .map((assignment) => getUserLabel(getUserById(assignment.userId)))
+                          : [];
+                        const missingModules = assignmentsReady
+                          ? getMissingModules(assignments)
+                          : [];
+                        return (
+                          <tr
+                            key={school.id}
+                            className="school-assignments-row"
+                            onClick={() => setSelectedSchoolId(school.id)}
+                          >
+                            <td>
+                              <div className="school-assignments-name">{school.name}</div>
+                            </td>
+                            <td>
+                              {assignmentsReady
+                                ? principals.length > 0
+                                  ? principals.join(", ")
+                                  : "None"
+                                : assignmentsLoading
+                                  ? "Loading..."
+                                  : "None"}
+                            </td>
+                            <td>
+                              {assignmentsReady
+                                ? hrUsers.length > 0
+                                  ? hrUsers.join(", ")
+                                  : "None"
+                                : assignmentsLoading
+                                  ? "Loading..."
+                                  : "None"}
+                            </td>
+                            <td>
+                              {assignmentsReady
+                                ? accountants.length > 0
+                                  ? accountants.join(", ")
+                                  : "None"
+                                : assignmentsLoading
+                                  ? "Loading..."
+                                  : "None"}
+                            </td>
+                            <td className="school-assignments-missing">
+                              {assignmentsReady
+                                ? missingModules.length > 0
+                                  ? missingModules.join(", ")
+                                  : "None"
+                                : assignmentsLoading
+                                  ? "Loading..."
+                                  : "None"}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {/* Drawer and overlay for assignments */}
+            <div
+              className={`school-assignments-overlay ${selectedSchool ? "is-open" : ""}`}
+              onClick={() => setSelectedSchoolId(null)}
+              role="button"
+              aria-label="Close school assignments"
+              tabIndex={-1}
+            />
+            <aside className={`school-assignments-drawer ${selectedSchool ? "is-open" : ""}`}>
+              <div className="school-assignments-drawer-header">
+                <div>
+                  <div className="school-assignments-drawer-title">School assignments</div>
+                  <div className="school-assignments-drawer-subtitle">
+                    {selectedSchool ? selectedSchool.name : "Select a school"}
+                  </div>
+                </div>
+                <button
+                  className="btn school-assignments-close"
+                  onClick={() => setSelectedSchoolId(null)}
+                  aria-label="Close drawer"
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="school-assignments-drawer-body">
+                {!selectedSchool ? (
+                  <div className="school-assignments-empty">Select a school to start editing.</div>
+                ) : !Array.isArray(assignmentsBySchool[String(selectedSchool.id)]) ? (
+                  <div className="school-assignments-empty">Loading assignments...</div>
+                ) : (
+                  <>
+                    <div className="school-assignments-section-title">Assigned users</div>
+                    {selectedAssignments.length === 0 ? (
+                      <div className="school-assignments-empty">No users assigned yet.</div>
+                    ) : (
+                      selectedAssignments.map((assignment) => {
+                        const user = getUserById(assignment.userId);
+                        const allSelected =
+                          REQUIRED_MODULES.length > 0 &&
+                          REQUIRED_MODULES.every((module) =>
+                            (assignment.modules || []).includes(module)
+                          );
+                        return (
+                          <div
+                            key={assignment.userId}
+                            className="school-assignments-card"
+                          >
+                            <div className="school-assignments-card-header">
+                              <div>
+                                <div className="school-assignments-card-name">
+                                  {getUserLabel(user)}
+                                </div>
+                                <div className="school-assignments-card-role">
+                                  {ROLE_LABELS[assignment.role] || assignment.role}
+                                </div>
+                              </div>
+                              <button
+                                className="btn btn-sm danger"
+                                onClick={() =>
+                                  removeAssignment(selectedSchool.id, assignment.userId)
+                                }
+                                type="button"
+                                disabled={isSavingSelected}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="school-assignments-modules">
+                              <label className="school-assignments-module-item">
+                                <input
+                                  type="checkbox"
+                                  checked={allSelected}
+                                  onChange={(event) =>
+                                    toggleAllModules(
+                                      selectedSchool.id,
+                                      assignment.userId,
+                                      assignment.role,
+                                      event.target.checked
+                                    )
+                                  }
+                                  disabled={isSavingSelected}
+                                />
+                                <span>Select all</span>
+                              </label>
+                              {REQUIRED_MODULES.map((moduleName) => (
+                                <label
+                                  key={moduleName}
+                                  className="school-assignments-module-item"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={(assignment.modules || []).includes(moduleName)}
+                                    onChange={() =>
+                                      toggleModule(
+                                        selectedSchool.id,
+                                        assignment.userId,
+                                        assignment.role,
+                                        moduleName
+                                      )
+                                    }
+                                    disabled={isSavingSelected}
+                                  />
+                                  <span>{moduleName}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>School Principals Assignment</div>
-        {loadingPrincipals ? (
-          <div>Loading principals...</div>
-        ) : !userSchools || userSchools.length === 0 ? (
-          <div>No schools found.</div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>School</th>
-                <th>Principals</th>
-              </tr>
-            </thead>
-            <tbody>
-              {userSchools.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.name}</td>
-                  <td>
-                    <select
-                      multiple
-                      className="input"
-                      style={{ minWidth: 200 }}
-                      value={principalAssignments[s.id] || []}
-                      onChange={(e) => {
-                        const selected = Array.from(e.target.selectedOptions).map((o) => Number(o.value));
-                        handlePrincipalChange(s.id, selected);
-                      }}
-                    >
-                      {users
-                        .filter((u) => u.role === "principal")
-                        .map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.full_name || u.email || u.id}
-                          </option>
-                        ))}
-                    </select>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <div className="school-assignments-section-title">Add user</div>
+                    <div className="school-assignments-add-card">
+                      <div className="school-assignments-add-row">
+                        <select
+                          className="input"
+                          value={newUserId}
+                          onChange={(event) => setNewUserId(event.target.value)}
+                          disabled={availableUsers.length === 0 || isSavingSelected || usersLoading}
+                        >
+                          <option value="">Select user</option>
+                          {availableUsers.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {getUserLabel(user)}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          className="input"
+                          value={newRole}
+                          onChange={(event) => setNewRole(event.target.value)}
+                          disabled={isSavingSelected || isAccountantSelection}
+                        >
+                          {(isAccountantSelection
+                            ? [{ value: "accountant", label: "Accountant" }]
+                            : ROLE_OPTIONS
+                          ).map((role) => (
+                            <option key={role.value} value={role.value}>
+                              {role.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="btn primary"
+                          onClick={addAssignment}
+                          disabled={!newUserId || isSavingSelected}
+                          type="button"
+                        >
+                          Add
+                        </button>
+                      </div>
+                      {!usersLoading && availableUsers.length === 0 && (
+                        <div className="small">All users are already assigned.</div>
+                      )}
+                      {usersLoading && <div className="small">Loading users...</div>}
+                    </div>
+
+                    <div className="school-assignments-missing-line">
+                      <span className="school-assignments-missing-label">Missing modules:</span>{" "}
+                      {getMissingModules(selectedAssignments).length > 0
+                        ? getMissingModules(selectedAssignments).join(", ")
+                        : "None"}
+                      {isSavingSelected && <span className="small">Saving...</span>}
+                    </div>
+                  </>
+                )}
+              </div>
+            </aside>
+          </>
         )}
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn primary" onClick={savePrincipalAssignments} disabled={savingPrincipals}>
-            {savingPrincipals ? "Saving..." : "Save Principals"}
-          </button>
-        </div>
-      </div>
-      </div>
-      {selectedUserId ? (
-        <div className="permissions-sticky-footer" role="region" aria-label="Permission actions">
-          <div className="permissions-sticky-footer-inner">
-            <div className="permissions-footer-pills" />
-            <div className="permissions-footer-actions">
-              <button
-                className="btn primary"
-                onClick={saveUserPermissions}
-                disabled={savingPermissions || permissionsLoading}
-              >
-                {savingPermissions ? "Saving..." : "Save Permissions"}
-              </button>
+        {activeTab === "createUser" && (
+          /* Create user tab */
+          <div className="access-hub-grid" style={{ marginTop: 16 }}>
+            <div className="left-pane">
+              {/* Left pane can display instructions or remain empty for now */}
+              <div style={{ marginBottom: 12, fontWeight: 700 }}>Create a new user</div>
+              <div className="small" style={{ marginBottom: 12 }}>
+                Fill out the form to create a new Principal or HR user. You can optionally assign the user to a school in your country.
+              </div>
+            </div>
+            <div className="right-pane">
+              <form onSubmit={handleCreateUser} className="create-user-form">
+                <div className="row" style={{ flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                  <input
+                    className="input full"
+                    placeholder="Full name"
+                    value={createFullName}
+                    onChange={(e) => setCreateFullName(e.target.value)}
+                  />
+                  <input
+                    className="input full"
+                    placeholder="Email"
+                    type="email"
+                    value={createEmail}
+                    onChange={(e) => setCreateEmail(e.target.value)}
+                  />
+                  <input
+                    className="input full"
+                    placeholder="Temporary password"
+                    type="password"
+                    value={createPassword}
+                    onChange={(e) => setCreatePassword(e.target.value)}
+                  />
+                  <select
+                    className="input full"
+                    value={createRole}
+                    onChange={(e) => setCreateRole(e.target.value)}
+                  >
+                    <option value="principal">Principal</option>
+                    <option value="hr">HR</option>
+                  </select>
+                  <select
+                    className="input full"
+                    value={createSchoolId}
+                    onChange={(e) => setCreateSchoolId(e.target.value)}
+                  >
+                    <option value="">Unassigned to school</option>
+                    {schools.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+                  <button
+                    type="submit"
+                    className="btn primary"
+                    disabled={creatingUser}
+                  >
+                    {creatingUser ? "Creating..." : "Create user"}
+                  </button>
+                </div>
+              </form>
+              <div className="user-management-section">
+                <div className="user-management-title">Users in your country</div>
+                {usersLoading ? (
+                  <div className="small">Loading users...</div>
+                ) : users.length === 0 ? (
+                  <div className="small">No users found.</div>
+                ) : (
+                  <div className="user-management-list">
+                    <div className="user-management-header">
+                      <div>User</div>
+                      <div>Email</div>
+                      <div>Role</div>
+                      <div>Actions</div>
+                    </div>
+                    {users.map((user) => {
+                      const userId = user.id;
+                      const emailValue = userEmailDrafts[userId] ?? user.email ?? "";
+                      const roleValue = userRoleDrafts[userId] ?? user.role ?? "user";
+                      const canEditRole = editableRoles.includes(user.role);
+                      const isUpdating = Boolean(updatingUserIds[userId]);
+                      const isResetting = Boolean(resettingUserIds[userId]);
+                      return (
+                        <div key={userId} className="user-management-row">
+                          <div className="user-management-name">
+                            <div>{getUserLabel(user)}</div>
+                            <div className="small">{user.email}</div>
+                          </div>
+                          <div>
+                            <input
+                              className="input full"
+                              value={emailValue}
+                              onChange={(event) =>
+                                handleEmailDraftChange(userId, event.target.value)
+                              }
+                              disabled={isUpdating}
+                            />
+                          </div>
+                          <div>
+                            {canEditRole ? (
+                              <select
+                                className="input full"
+                                value={roleValue}
+                                onChange={(event) =>
+                                  handleRoleDraftChange(userId, event.target.value)
+                                }
+                                disabled={isUpdating}
+                              >
+                                <option value="user">User</option>
+                                <option value="principal">Principal</option>
+                                <option value="hr">HR</option>
+                              </select>
+                            ) : (
+                              <div className="user-management-role">{user.role}</div>
+                            )}
+                          </div>
+                          <div className="user-management-actions">
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() => handleSaveUser(user)}
+                              disabled={isUpdating}
+                            >
+                              {isUpdating ? "Saving..." : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() => handleResetPassword(user)}
+                              disabled={isResetting}
+                            >
+                              {isResetting ? "Resetting..." : "Reset password"}
+                            </button>
+                          </div>
+                          {temporaryPasswords[userId] && (
+                            <div className="user-management-temp">
+                              Temporary password:{" "}
+                              <span className="user-management-temp-value">
+                                {temporaryPasswords[userId]}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
+        )}
+        {activeTab === "createSchool" && (
+          <div className="access-hub-grid" style={{ marginTop: 16 }}>
+            <div className="left-pane">
+              <div style={{ marginBottom: 12, fontWeight: 700 }}>Create a new school</div>
+              <div className="small" style={{ marginBottom: 12 }}>
+                Add a school in your country to start assigning users and modules.
+              </div>
+            </div>
+            <div className="right-pane">
+              <form onSubmit={handleCreateSchool} className="create-school-form">
+                <div className="row" style={{ flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                  <input
+                    className="input full"
+                    placeholder="School name"
+                    value={createSchoolName}
+                    onChange={(e) => setCreateSchoolName(e.target.value)}
+                  />
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+                  <button
+                    type="submit"
+                    className="btn primary"
+                    disabled={creatingSchool}
+                  >
+                    {creatingSchool ? "Creating..." : "Create school"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

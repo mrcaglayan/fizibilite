@@ -253,6 +253,7 @@ CREATE TABLE `school_user_roles` (
   `school_id` bigint NOT NULL,
   `user_id` bigint NOT NULL,
   `role` varchar(50) NOT NULL,
+  `modules_json` json DEFAULT NULL,
   `assigned_by` bigint DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`school_id`,`user_id`,`role`),

@@ -2,6 +2,7 @@
 
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const { getPool } = require("../db");
 const { ensurePermissions } = require("../utils/ensurePermissions");
 const { PERMISSIONS_CATALOG } = require("../utils/permissionsCatalog");
@@ -20,6 +21,119 @@ const router = express.Router();
 
 // Require authentication on all routes. Specific permissions are enforced per-route.
 router.use(requireAuth);
+
+function generateTemporaryPassword(length = 12) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*?";
+  const bytes = crypto.randomBytes(Math.max(12, Number(length) || 12));
+  let out = "";
+  for (let i = 0; i < bytes.length && out.length < length; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+const ASSIGNMENT_ROLES = ["principal", "hr", "accountant"];
+const MODULE_ALIASES = {
+  "Norm İK (HR)": ["Norm", "İK (HR)"],
+};
+const MODULE_GROUP_MAP = {
+  "Temel Bilgiler": ["Temel Bilgiler"],
+  Kapasite: ["Kapasite"],
+  Norm: ["Norm"],
+  "İK (HR)": ["IK / HR"],
+  "IK (HR)": ["IK / HR"],
+  "IK / HR": ["IK / HR"],
+  Gelirler: ["Gelirler"],
+  Giderler: ["Giderler"],
+};
+const MODULE_GROUPS = new Set(Object.values(MODULE_GROUP_MAP).flat());
+const MODULE_PERMISSION_ENTRIES = PERMISSIONS_CATALOG.filter((perm) =>
+  MODULE_GROUPS.has(perm.group)
+);
+const MODULE_PERMISSION_RESOURCES = Array.from(
+  new Set(MODULE_PERMISSION_ENTRIES.map((perm) => perm.resource))
+);
+
+function normalizeModules(value) {
+  if (!Array.isArray(value)) return [];
+  const expanded = [];
+  value.forEach((item) => {
+    const clean = String(item).trim();
+    if (!clean) return;
+    const alias = MODULE_ALIASES[clean];
+    if (alias) {
+      expanded.push(...alias);
+      return;
+    }
+    expanded.push(clean);
+  });
+  return Array.from(new Set(expanded));
+}
+
+function parseModulesJson(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return normalizeModules(value);
+  try {
+    return normalizeModules(JSON.parse(value));
+  } catch (_) {
+    return [];
+  }
+}
+
+function parseAssignmentsPayload(payload) {
+  if (!Array.isArray(payload)) {
+    return { error: "assignments must be an array" };
+  }
+  const byUserId = new Map();
+  for (const item of payload) {
+    const userId = Number(item?.userId);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return { error: "Invalid userId in assignments" };
+    }
+    const role = String(item?.role || "").trim().toLowerCase();
+    if (!ASSIGNMENT_ROLES.includes(role)) {
+      return { error: "Invalid role in assignments" };
+    }
+    const modules = normalizeModules(item?.modules);
+    const existing = byUserId.get(userId);
+    if (existing && existing.role !== role) {
+      return { error: `User ${userId} assigned multiple roles` };
+    }
+    byUserId.set(userId, { userId, role, modules });
+  }
+  return { assignments: Array.from(byUserId.values()) };
+}
+
+function getPermissionEntriesForModules(modules) {
+  const groups = new Set();
+  (modules || []).forEach((moduleName) => {
+    const clean = String(moduleName || "").trim();
+    if (!clean) return;
+    const mapped = MODULE_GROUP_MAP[clean];
+    if (!mapped) return;
+    mapped.forEach((group) => groups.add(group));
+  });
+  if (groups.size === 0) return [];
+  return MODULE_PERMISSION_ENTRIES.filter((perm) => groups.has(perm.group));
+}
+
+async function loadModulePermissionIds(pool) {
+  if (MODULE_PERMISSION_RESOURCES.length === 0) {
+    return { permIds: [], permIdByKey: new Map() };
+  }
+  const [rows] = await pool.query(
+    "SELECT id, resource, action FROM permissions WHERE resource IN (:resources) AND action IN ('read', 'write')",
+    { resources: MODULE_PERMISSION_RESOURCES }
+  );
+  const permIdByKey = new Map();
+  const permIds = [];
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const key = `${row.resource}|${row.action}`;
+    permIdByKey.set(key, row.id);
+    permIds.push(row.id);
+  });
+  return { permIds, permIdByKey };
+}
 
 /**
  * GET /manager/review-queue
@@ -477,6 +591,247 @@ router.patch("/users/:id/role", requirePermission("page.manage_permissions", "wr
 });
 
 /**
+ * PATCH /manager/users/:id/email
+ *
+ * Updates a user's email within the manager's country.
+ */
+router.patch("/users/:id/email", requirePermission("page.manage_permissions", "write"), async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+    const email = String(req.body?.email ?? "").trim();
+    if (!email) return res.status(400).json({ error: "email is required" });
+    const pool = getPool();
+    const [[target]] = await pool.query(
+      "SELECT id, country_id FROM users WHERE id=:id",
+      { id: userId }
+    );
+    if (!target) return res.status(404).json({ error: "User not found" });
+    if (!req.user.country_id || Number(target.country_id) !== Number(req.user.country_id)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const [[existing]] = await pool.query(
+      "SELECT id FROM users WHERE email=:email AND id<>:id",
+      { email, id: userId }
+    );
+    if (existing) return res.status(409).json({ error: "Email already registered" });
+    await pool.query("UPDATE users SET email=:email WHERE id=:id", { email, id: userId });
+    return res.json({ id: userId, email });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * POST /manager/users/:id/reset-password
+ *
+ * Resets a user's password and returns a temporary password.
+ * Body (optional): { password }
+ */
+router.post("/users/:id/reset-password", requirePermission("page.manage_permissions", "write"), async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isFinite(userId)) return res.status(400).json({ error: "Invalid user id" });
+    const customPasswordRaw = req.body?.password;
+    const temporaryPassword =
+      customPasswordRaw != null && String(customPasswordRaw).trim()
+        ? String(customPasswordRaw)
+        : generateTemporaryPassword(12);
+    if (String(temporaryPassword).length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+    const pool = getPool();
+    const [[user]] = await pool.query(
+      "SELECT id, email, country_id FROM users WHERE id=:id",
+      { id: userId }
+    );
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!req.user.country_id || Number(user.country_id) !== Number(req.user.country_id)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const password_hash = await bcrypt.hash(String(temporaryPassword), 10);
+    await pool.query(
+      "UPDATE users SET password_hash=:password_hash, must_reset_password=1 WHERE id=:id",
+      { id: userId, password_hash }
+    );
+    return res.json({
+      ok: true,
+      user_id: userId,
+      email: user.email,
+      temporary_password: temporaryPassword,
+      must_reset_password: true,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /manager/schools/:schoolId/assignments
+ *
+ * Lists principal/HR assignments (with module responsibility) for a school.
+ */
+router.get(
+  "/schools/:schoolId/assignments",
+  requirePermission("page.manage_permissions", "write"),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      if (!Number.isFinite(schoolId)) return res.status(400).json({ error: "Invalid school id" });
+      const pool = getPool();
+      const [[school]] = await pool.query(
+        "SELECT id, country_id FROM schools WHERE id=:id",
+        { id: schoolId }
+      );
+      if (!school) return res.status(404).json({ error: "School not found" });
+      if (!req.user.country_id || Number(school.country_id) !== Number(req.user.country_id)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const [rows] = await pool.query(
+        `SELECT user_id, role, modules_json
+       FROM school_user_roles
+       WHERE school_id = :sid AND role IN ('principal', 'hr', 'accountant')`,
+      { sid: schoolId }
+    );
+      const assignments = (Array.isArray(rows) ? rows : []).map((row) => ({
+        userId: Number(row.user_id),
+        role: row.role,
+        modules: parseModulesJson(row.modules_json),
+      }));
+      return res.json(assignments);
+    } catch (e) {
+      return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
+ * PUT /manager/schools/:schoolId/assignments
+ * Body: { assignments: Array<{ userId, role, modules }> }
+ *
+ * Replaces principal/HR assignments (with module responsibility) for a school.
+ */
+router.put(
+  "/schools/:schoolId/assignments",
+  requirePermission("page.manage_permissions", "write"),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      if (!Number.isFinite(schoolId)) return res.status(400).json({ error: "Invalid school id" });
+      const parsed = parseAssignmentsPayload(req.body?.assignments);
+      if (parsed.error) return res.status(400).json({ error: parsed.error });
+      const assignments = parsed.assignments || [];
+      const pool = getPool();
+      const [[school]] = await pool.query(
+        "SELECT id, country_id FROM schools WHERE id=:id",
+        { id: schoolId }
+      );
+      if (!school) return res.status(404).json({ error: "School not found" });
+      if (!req.user.country_id || Number(school.country_id) !== Number(req.user.country_id)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await ensurePermissions();
+      const { permIds: modulePermIds, permIdByKey } = await loadModulePermissionIds(pool);
+      const ids = Array.from(new Set(assignments.map((a) => a.userId)));
+      let usersById = new Map();
+      if (ids.length > 0) {
+        const [users] = await pool.query(
+          "SELECT id, country_id, role FROM users WHERE id IN (:ids)",
+          { ids }
+        );
+        if (!Array.isArray(users) || users.length !== ids.length) {
+          return res.status(400).json({ error: "One or more users not found" });
+        }
+        usersById = new Map(users.map((row) => [Number(row.id), row]));
+        for (const row of users) {
+          if (Number(row.country_id) !== Number(req.user.country_id)) {
+            return res.status(400).json({ error: `User ${row.id} is not in manager's country` });
+          }
+        }
+        for (const assignment of assignments) {
+          if (assignment.role !== "accountant") continue;
+          const userRow = usersById.get(assignment.userId);
+          if (!userRow || String(userRow.role) !== "accountant") {
+            return res.status(400).json({ error: `User ${assignment.userId} is not an accountant` });
+          }
+        }
+      }
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        const [existingRows] = await conn.query(
+          "SELECT DISTINCT user_id FROM school_user_roles WHERE school_id=:sid AND role IN ('principal', 'hr', 'accountant')",
+          { sid: schoolId }
+        );
+        const cleanupUserIds = new Set(
+          (Array.isArray(existingRows) ? existingRows : []).map((row) => Number(row.user_id))
+        );
+        ids.forEach((uid) => cleanupUserIds.add(uid));
+        await conn.query(
+          "DELETE FROM school_user_roles WHERE school_id=:sid AND role IN ('principal', 'hr', 'accountant')",
+          { sid: schoolId }
+        );
+        for (const assignment of assignments) {
+          await conn.query(
+            `INSERT INTO school_user_roles (school_id, user_id, role, assigned_by, modules_json)
+             VALUES (:sid, :uid, :role, :by, :modules_json)`,
+            {
+              sid: schoolId,
+              uid: assignment.userId,
+              role: assignment.role,
+              by: req.user.id,
+              modules_json: JSON.stringify(assignment.modules || []),
+            }
+          );
+          const userRow = usersById.get(assignment.userId);
+          if (assignment.role !== "accountant" && userRow && String(userRow.role) !== assignment.role) {
+            await conn.query("UPDATE users SET role=:role WHERE id=:id", {
+              role: assignment.role,
+              id: assignment.userId,
+            });
+          }
+        }
+        if (modulePermIds.length > 0 && cleanupUserIds.size > 0) {
+          for (const uid of cleanupUserIds) {
+            await conn.query(
+              "DELETE FROM user_permissions WHERE user_id=:uid AND scope_school_id=:sid AND permission_id IN (:permIds)",
+              { uid, sid: schoolId, permIds: modulePermIds }
+            );
+          }
+        }
+        for (const assignment of assignments) {
+          const entries = getPermissionEntriesForModules(assignment.modules);
+          if (!entries.length) continue;
+          const keys = new Set(entries.map((entry) => `${entry.resource}|${entry.action}`));
+          for (const key of keys) {
+            const permId = permIdByKey.get(key);
+            if (!permId) continue;
+            await conn.query(
+              "INSERT INTO user_permissions (user_id, permission_id, scope_country_id, scope_school_id) VALUES (:uid,:pid,:cid,:sid)",
+              {
+                uid: assignment.userId,
+                pid: permId,
+                cid: school.country_id ?? null,
+                sid: schoolId,
+              }
+            );
+          }
+        }
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback();
+        throw err;
+      } finally {
+        conn.release();
+      }
+      return res.json({ id: schoolId, assignments });
+    } catch (e) {
+      return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
  * GET /manager/schools/:schoolId/principals
  *
  * Lists principal users assigned to a school within the manager's country.
@@ -559,6 +914,16 @@ router.put(
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+      const [existing] = await conn.query(
+        "SELECT user_id, modules_json FROM school_user_roles WHERE school_id=:sid AND role='principal'",
+        { sid: schoolId }
+      );
+      const modulesByUserId = new Map(
+        (Array.isArray(existing) ? existing : []).map((row) => [
+          Number(row.user_id),
+          row.modules_json,
+        ])
+      );
       // Remove existing assignments
       await conn.query(
         "DELETE FROM school_user_roles WHERE school_id=:sid AND role='principal'",
@@ -567,8 +932,13 @@ router.put(
       // Insert new assignments
       for (const uid of ids) {
         await conn.query(
-          "INSERT INTO school_user_roles (school_id, user_id, role, assigned_by) VALUES (:sid, :uid, 'principal', :by)",
-          { sid: schoolId, uid, by: req.user.id }
+          "INSERT INTO school_user_roles (school_id, user_id, role, assigned_by, modules_json) VALUES (:sid, :uid, 'principal', :by, :modules_json)",
+          {
+            sid: schoolId,
+            uid,
+            by: req.user.id,
+            modules_json: modulesByUserId.get(uid) ?? null,
+          }
         );
         // Update user role to principal if necessary
         const [[urow]] = await conn.query(

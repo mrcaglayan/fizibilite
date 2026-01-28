@@ -398,6 +398,397 @@ input[type="number"]::-webkit-inner-spin-button {
 .select-page-tables {
   --select-table-height: clamp(320px, 60vh, 640px);
 }
+
+/* ==== Access Management hub styles ====
+ * These classes are used for the refactored ManagePermissionsPage,
+ * which now acts as a hub for managing users, permissions, schools,
+ * and principal assignments. The design follows the existing design
+ * language with subtle borders, rounded corners and muted colours.
+ */
+
+/* Tab bar at the top of the hub content */
+.access-hub-tabs {
+  display: flex;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 16px;
+  gap: 24px;
+}
+.access-hub-tab {
+  padding: 8px 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: #6b7280;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.access-hub-tab:hover {
+  color: #374151;
+}
+.access-hub-tab.is-active {
+  color: #111827;
+  border-color: #111827;
+}
+
+/* Two‑pane grid used by both tabs */
+.access-hub-grid {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+.access-hub-grid .left-pane {
+  width: 280px;
+  flex-shrink: 0;
+}
+.access-hub-grid .right-pane {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 768px) {
+  .access-hub-grid {
+    flex-direction: column;
+  }
+  .access-hub-grid .left-pane,
+  .access-hub-grid .right-pane {
+    width: 100%;
+  }
+}
+
+/* List item for users and schools */
+.access-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+  margin-bottom: 8px;
+}
+.access-list-item:hover {
+  background: #f9fafb;
+}
+.access-list-item.is-selected {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.role-tag {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.role-tag.is-ok {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #065f46;
+}
+.role-tag.is-warn {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #92400e;
+}
+.role-tag.is-muted {
+  background: rgba(148, 163, 184, 0.18);
+  border-color: rgba(148, 163, 184, 0.4);
+  color: #475569;
+}
+
+/* ==== School assignments page ==== */
+.school-assignments-page {
+  padding: 24px 0 32px;
+}
+.school-assignments-header h2 {
+  margin: 0 0 4px;
+  font-size: 24px;
+}
+.school-assignments-header p {
+  margin: 0;
+  color: #6b7280;
+}
+.school-assignments-table-wrap {
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  overflow: hidden;
+}
+.school-assignments-table {
+  width: 100%;
+  font-size: 13px;
+}
+.school-assignments-row {
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.school-assignments-table tbody tr.school-assignments-row:hover td {
+  background: #f9fafb;
+}
+.school-assignments-name {
+  font-weight: 600;
+}
+.school-assignments-missing {
+  color: #b45309;
+}
+.school-assignments-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 1000;
+}
+.school-assignments-overlay.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.school-assignments-drawer {
+  position: fixed;
+  top: 0;
+  right: -420px;
+  width: min(420px, 92vw);
+  height: 100%;
+  background: #ffffff;
+  border-left: 1px solid #e5e7eb;
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.2);
+  transition: right 0.3s ease;
+  z-index: 1010;
+  display: flex;
+  flex-direction: column;
+}
+.school-assignments-drawer.is-open {
+  right: 0;
+}
+.school-assignments-drawer-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.school-assignments-drawer-title {
+  font-weight: 700;
+}
+.school-assignments-drawer-subtitle {
+  color: #6b7280;
+  font-size: 13px;
+}
+.school-assignments-close {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1;
+}
+.school-assignments-drawer-body {
+  padding: 16px 20px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+.school-assignments-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 16px 0 8px;
+}
+.school-assignments-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f9fafb;
+  margin-bottom: 12px;
+}
+.school-assignments-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.school-assignments-card-name {
+  font-weight: 600;
+}
+.school-assignments-card-role {
+  color: #6b7280;
+  font-size: 12px;
+}
+.school-assignments-modules {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+.school-assignments-module-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.school-assignments-add-card {
+  border: 1px dashed #d1d5db;
+  padding: 12px;
+  border-radius: 10px;
+  background: #ffffff;
+}
+.school-assignments-add-row {
+  display: grid;
+  grid-template-columns: 1fr 120px auto;
+  gap: 8px;
+  align-items: center;
+}
+.school-assignments-add-row .input {
+  width: 100%;
+}
+.school-assignments-missing-line {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.school-assignments-missing-label {
+  font-weight: 600;
+}
+.school-assignments-empty {
+  padding: 12px 0;
+  color: #6b7280;
+}
+@media (max-width: 720px) {
+  .school-assignments-table th:nth-child(2),
+  .school-assignments-table td:nth-child(2),
+  .school-assignments-table th:nth-child(3),
+  .school-assignments-table td:nth-child(3),
+  .school-assignments-table th:nth-child(4),
+  .school-assignments-table td:nth-child(4) {
+    display: none;
+  }
+  .school-assignments-add-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==== User management list (ManagePermissionsPage) ==== */
+.user-management-section {
+  margin-top: 24px;
+}
+.user-management-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.user-management-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+.user-management-header,
+.user-management-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.4fr 0.8fr 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+.user-management-header {
+  background: #f3f4f6;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.user-management-row {
+  border-top: 1px solid #e5e7eb;
+}
+.user-management-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 600;
+}
+.user-management-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.user-management-role {
+  font-weight: 600;
+  color: #6b7280;
+}
+.user-management-temp {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.user-management-temp-value {
+  font-weight: 700;
+}
+@media (max-width: 960px) {
+  .user-management-header {
+    display: none;
+  }
+  .user-management-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Drawer overlay and panel */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  z-index: 1000;
+}
+.drawer {
+  width: min(420px, 100%);
+  max-width: 100%;
+  background: #fff;
+  border-left: 1px solid #e5e7eb;
+  box-shadow: -12px 0 28px rgba(0, 0, 0, 0.12);
+  padding: 16px;
+  overflow-y: auto;
+}
+
+/* Chips for assigned principals */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: #b91c1c;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.chip-remove:hover {
+  color: #7f1d1d;
+}
 .select-table-card {
   display: flex;
   flex-direction: column;
@@ -2056,8 +2447,8 @@ hr {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  /* Allow the export menu to escape the footer without being clipped. */
+  overflow: visible;
 }
 .school-page .school-sticky-footer .action-menu-panel {
   top: auto;
