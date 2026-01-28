@@ -2202,7 +2202,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
       }
     }
 
-    const etag = crypto.createHash("sha1").update(resultsString).digest("hex");
+    const etagSource =
+      typeof resultsString === "string"
+        ? resultsString
+        : JSON.stringify(resultsString ?? resultsPayload ?? {});
+    const etag = crypto.createHash("sha1").update(etagSource).digest("hex");
     const ifNoneMatch = req.headers["if-none-match"];
     if (ifNoneMatch && ifNoneMatch === etag) {
       return res.status(304).end();
