@@ -935,30 +935,6 @@ export default function SchoolPage() {
         // ignore (e.g., token missing)
       }
 
-      // Attempt to load the norm configuration.  If the user lacks
-      // permission to read the norm page, the backend will return a
-      // 403 error with a message like "Missing read permission for
-      // page.norm".  In that case, silently ignore the error and
-      // continue loading the remainder of the school data.  Users
-      // without norm access should still be able to view and edit
-      // other modules (e.g. expenses) without the page failing to
-      // load.  See issue reported by users: salaries pulled from
-      // norm should not require page.norm read permission just to
-      // open the school page.
-      try {
-        const n = await api.getNormConfig(schoolId);
-        setNorm(n);
-        setBaselineNorm(n ? structuredClone(n) : null);
-        clearDirtyPrefix("norm.");
-      } catch (err) {
-        // If fetching the norm configuration fails due to missing
-        // permissions, simply set norm to null.  Do not update the
-        // global error state or interrupt the boot process.
-        setNorm(null);
-        setBaselineNorm(null);
-        clearDirtyPrefix("norm.");
-      }
-
       setBootLoadingLabel("Senaryolar kontrol ediliyor...");
       const sc = await api.listScenarios(schoolId);
       setScenarios(sc);
@@ -1008,7 +984,10 @@ export default function SchoolPage() {
         setReport(null);
         setPrevReport(null);
         setPrevScenarioMeta(null);
+        setNorm(null);
+        setBaselineNorm(null);
         clearDirtyPrefix("inputs.");
+        clearDirtyPrefix("norm.");
         return;
       }
       setErr("");
@@ -1031,6 +1010,18 @@ export default function SchoolPage() {
         setInputs(normalized);
         setBaselineInputs(normalized && typeof normalized === "object" ? structuredClone(normalized) : normalized);
         clearDirtyPrefix("inputs.");
+
+        // Load scenario-scoped norm configuration. If missing permission, keep null.
+        try {
+          const n = await api.getNormConfig(schoolId, selectedScenarioId);
+          setNorm(n);
+          setBaselineNorm(n ? structuredClone(n) : null);
+          clearDirtyPrefix("norm.");
+        } catch (_) {
+          setNorm(null);
+          setBaselineNorm(null);
+          clearDirtyPrefix("norm.");
+        }
       } catch (e) {
         setErr(e.message || "Failed to load scenario inputs");
       }
@@ -1111,19 +1102,19 @@ export default function SchoolPage() {
   const inputsLocked = scenarioLocked || moduleLocked;
 
   const saveNormConfig = useCallback(async () => {
-    if (!norm) return;
+    if (!norm || !selectedScenarioId) return;
     const payload = norm?.years
       ? { years: norm.years }
       : {
         teacherWeeklyMaxHours: norm.teacherWeeklyMaxHours,
         curriculumWeeklyHours: norm.curriculumWeeklyHours,
       };
-    await api.saveNormConfig(schoolId, payload);
-    const n = await api.getNormConfig(schoolId);
+    await api.saveNormConfig(schoolId, selectedScenarioId, payload);
+    const n = await api.getNormConfig(schoolId, selectedScenarioId);
     setNorm(n);
     setBaselineNorm(n ? structuredClone(n) : null);
     clearDirtyPrefix("norm.");
-  }, [norm, schoolId, clearDirtyPrefix]);
+  }, [norm, selectedScenarioId, schoolId, clearDirtyPrefix]);
 
   // B) Save inputs with HR->Expenses salary patch applied + Capacity normalization
   const saveInputs = useCallback(async () => {

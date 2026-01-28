@@ -93,14 +93,35 @@ router.get(
   async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
+    const scenarioIdRaw = req.query?.scenarioId;
+    const scenarioId = scenarioIdRaw != null ? Number(scenarioIdRaw) : null;
+    if (scenarioIdRaw != null && !Number.isFinite(scenarioId)) {
+      return res.status(400).json({ error: "Invalid scenarioId" });
+    }
     const pool = getPool();
     const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
     if (!school) return res.status(404).json({ error: "School not found" });
 
-    const [[row]] = await pool.query(
-      "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json, updated_at FROM school_norm_configs WHERE school_id=:school_id",
-      { school_id: schoolId }
-    );
+    let row = null;
+    if (scenarioId) {
+      const [[scenario]] = await pool.query(
+        "SELECT id FROM school_scenarios WHERE id=:id AND school_id=:school_id",
+        { id: scenarioId, school_id: schoolId }
+      );
+      if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+      const [[scenarioRow]] = await pool.query(
+        "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json, updated_at FROM scenario_norm_configs WHERE scenario_id=:id",
+        { id: scenarioId }
+      );
+      row = scenarioRow || null;
+    }
+    if (!row) {
+      const [[schoolRow]] = await pool.query(
+        "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json, updated_at FROM school_norm_configs WHERE school_id=:school_id",
+        { school_id: schoolId }
+      );
+      row = schoolRow || null;
+    }
 
     if (!row) {
       // should not happen, but handle
@@ -143,6 +164,11 @@ router.put(
   async (req, res) => {
   try {
     const schoolId = Number(req.params.schoolId);
+    const scenarioIdRaw = req.query?.scenarioId;
+    const scenarioId = scenarioIdRaw != null ? Number(scenarioIdRaw) : null;
+    if (scenarioIdRaw != null && !Number.isFinite(scenarioId)) {
+      return res.status(400).json({ error: "Invalid scenarioId" });
+    }
     const payload = req.body || {};
     const normalized = normalizeNormYears({
       years: payload.years,
@@ -163,6 +189,30 @@ router.put(
     if (!school) return res.status(404).json({ error: "School not found" });
     if (school.status === "closed" && req.user.role !== "admin") {
       return res.status(403).json({ error: "School is closed." });
+    }
+
+    if (scenarioId) {
+      const [[scenario]] = await pool.query(
+        "SELECT id FROM school_scenarios WHERE id=:id AND school_id=:school_id",
+        { id: scenarioId, school_id: schoolId }
+      );
+      if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+
+      await pool.query(
+        "INSERT INTO scenario_norm_configs (scenario_id, teacher_weekly_max_hours, curriculum_weekly_hours_json, updated_by) " +
+          "VALUES (:id, :h, :j, :u) " +
+          "ON DUPLICATE KEY UPDATE teacher_weekly_max_hours=VALUES(teacher_weekly_max_hours), " +
+          "curriculum_weekly_hours_json=VALUES(curriculum_weekly_hours_json), " +
+          "updated_by=VALUES(updated_by)",
+        {
+          h: normalized.years.y1.teacherWeeklyMaxHours,
+          j: JSON.stringify({ years: normalized.years }),
+          u: req.user.id,
+          id: scenarioId,
+        }
+      );
+
+      return res.json({ ok: true });
     }
 
     await pool.query(

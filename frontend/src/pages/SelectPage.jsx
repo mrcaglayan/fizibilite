@@ -101,7 +101,7 @@ const COPY_SECTION_RESOURCES = {
   // Norm: lesson distribution (Y1) maps to the ders_dagilimi section
   'norm.lessonY1': ['section.norm.ders_dagilimi'],
   // HR (IK): all HR data.  Use page‑level resource since there is only one section defined.
-  'hr.ik': ['page.ik'],
+  'hr.ik': ['section.ik.local_staff'],
   // Gelirler: income.  Use page‑level resource (covers all income categories)
   // For the Gelirler module, use the unit_fee section instead of the page
   // resource.  This allows users who only have section‑level write access
@@ -340,6 +340,21 @@ function filterInputsForCopyBySelection(srcInputs, selection) {
   }
 
   return next;
+}
+
+function buildEmptyNormCurriculum() {
+  const empty = {};
+  getGradeOptions().forEach((g) => {
+    empty[g] = {};
+  });
+  return empty;
+}
+
+function buildEmptyNormYear(maxHours) {
+  return {
+    teacherWeeklyMaxHours: Number.isFinite(maxHours) && maxHours > 0 ? maxHours : 24,
+    curriculumWeeklyHours: buildEmptyNormCurriculum(),
+  };
 }
 
 function convertInputsUsdToLocalForCopy(inputs, fx) {
@@ -859,7 +874,7 @@ export default function SelectPage() {
 
       const [inputsData, normData] = await Promise.all([
         api.getScenarioInputs(schoolId, latest.id),
-        api.getNormConfig(schoolId).catch(() => null),
+        api.getNormConfig(schoolId, latest.id).catch(() => null),
       ]);
 
       const progress = computeScenarioProgress({
@@ -1027,11 +1042,13 @@ export default function SelectPage() {
     setScenarioProgressLoading(true);
     async function loadScenarioProgress() {
       try {
-        const normData = await api.getNormConfig(selectedSchoolId).catch(() => null);
         const results = await Promise.all(
           scenarios.map(async (scenario) => {
             try {
-              const inputsData = await api.getScenarioInputs(selectedSchoolId, scenario.id);
+              const [inputsData, normData] = await Promise.all([
+                api.getScenarioInputs(selectedSchoolId, scenario.id),
+                api.getNormConfig(selectedSchoolId, scenario.id).catch(() => null),
+              ]);
               const progress = computeScenarioProgress({
                 inputs: inputsData?.inputs,
                 norm: normData,
@@ -1859,6 +1876,39 @@ export default function SelectPage() {
       // mapping above for how selection keys map to permission resources.
       const modifiedResources = buildModifiedResourcesFromCopySelection(selection);
       await api.saveScenarioInputs(selectedSchoolId, created.id, clonedInputs, modifiedResources);
+
+      if (selection["norm.lessonY1"]) {
+        try {
+          const sourceNorm = await api.getNormConfig(selectedSchoolId, selectedScenarioIdLocal);
+          if (sourceNorm) {
+            const sourceYears = sourceNorm?.years && typeof sourceNorm.years === "object" ? sourceNorm.years : {};
+            const baseHours = Number(
+              sourceYears?.y1?.teacherWeeklyMaxHours ??
+                sourceNorm?.teacherWeeklyMaxHours ??
+                24
+            );
+            const y1 = sourceYears?.y1
+              ? structuredClone(sourceYears.y1)
+              : {
+                teacherWeeklyMaxHours: Number.isFinite(baseHours) && baseHours > 0 ? baseHours : 24,
+                curriculumWeeklyHours:
+                  sourceNorm?.curriculumWeeklyHours && typeof sourceNorm.curriculumWeeklyHours === "object"
+                    ? structuredClone(sourceNorm.curriculumWeeklyHours)
+                    : buildEmptyNormCurriculum(),
+              };
+            const payload = {
+              years: {
+                y1,
+                y2: buildEmptyNormYear(baseHours),
+                y3: buildEmptyNormYear(baseHours),
+              },
+            };
+            await api.saveNormConfig(selectedSchoolId, created.id, payload);
+          }
+        } catch (err) {
+          console.warn("[copyScenario] norm copy skipped", err);
+        }
+      }
 
       await refreshScenarios();
       setSelectedScenarioIdLocal(created.id);

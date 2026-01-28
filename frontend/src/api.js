@@ -163,8 +163,14 @@ export const api = {
   deleteSchool: (id) => request(`/schools/${id}`, { method: "DELETE" }),
   getSchool: (id) => request(`/schools/${id}`),
 
-  getNormConfig: (schoolId) => request(`/schools/${schoolId}/norm-config`),
-  saveNormConfig: (schoolId, payload) => request(`/schools/${schoolId}/norm-config`, { method: "PUT", body: payload }),
+  getNormConfig: (schoolId, scenarioId) => {
+    const qs = scenarioId ? `?scenarioId=${encodeURIComponent(scenarioId)}` : "";
+    return request(`/schools/${schoolId}/norm-config${qs}`);
+  },
+  saveNormConfig: (schoolId, scenarioId, payload) => {
+    const qs = scenarioId ? `?scenarioId=${encodeURIComponent(scenarioId)}` : "";
+    return request(`/schools/${schoolId}/norm-config${qs}`, { method: "PUT", body: payload });
+  },
 
   listScenarios: (schoolId) => request(`/schools/${schoolId}/scenarios`),
   createScenario: (schoolId, payload) => request(`/schools/${schoolId}/scenarios`, { method: "POST", body: payload }),

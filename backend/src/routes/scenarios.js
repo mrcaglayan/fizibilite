@@ -113,6 +113,21 @@ function normalizeKademeConfig(input) {
 
 const NORM_YEAR_KEYS = ["y1", "y2", "y3"];
 const DEFAULT_NORM_MAX_HOURS = 24;
+const NORM_GRADE_KEYS = ["KG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+
+function buildEmptyNormCurriculum() {
+  const empty = {};
+  NORM_GRADE_KEYS.forEach((g) => (empty[g] = {}));
+  return empty;
+}
+
+function buildEmptyNormYears(maxHours = DEFAULT_NORM_MAX_HOURS) {
+  return {
+    y1: { teacherWeeklyMaxHours: maxHours, curriculumWeeklyHours: buildEmptyNormCurriculum() },
+    y2: { teacherWeeklyMaxHours: maxHours, curriculumWeeklyHours: buildEmptyNormCurriculum() },
+    y3: { teacherWeeklyMaxHours: maxHours, curriculumWeeklyHours: buildEmptyNormCurriculum() },
+  };
+}
 
 function normalizeNormConfigRow(row) {
   const maxHoursRaw = Number(row?.teacher_weekly_max_hours);
@@ -149,6 +164,23 @@ function normalizeNormConfigRow(row) {
     teacherWeeklyMaxHours: years.y1.teacherWeeklyMaxHours,
     curriculumWeeklyHours: years.y1.curriculumWeeklyHours,
   };
+}
+
+async function getNormConfigRowForScenario(pool, schoolId, scenarioId) {
+  if (!pool) throw new Error("getNormConfigRowForScenario requires pool");
+  const sid = Number(schoolId);
+  const scid = Number(scenarioId);
+  if (!Number.isFinite(sid) || !Number.isFinite(scid)) return null;
+  const [[scenarioRow]] = await pool.query(
+    "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM scenario_norm_configs WHERE scenario_id=:id",
+    { id: scid }
+  );
+  if (scenarioRow) return scenarioRow;
+  const [[schoolRow]] = await pool.query(
+    "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
+    { id: sid }
+  );
+  return schoolRow || null;
 }
 
 const KPI_YEAR_KEYS = ["y1", "y2", "y3"];
@@ -844,6 +876,17 @@ router.post(
       { scenario_id: r.insertId, json: JSON.stringify(defaultInputs), updated_by: req.user.id }
     );
 
+    const emptyNormYears = buildEmptyNormYears(DEFAULT_NORM_MAX_HOURS);
+    await pool.query(
+      "INSERT INTO scenario_norm_configs (scenario_id, teacher_weekly_max_hours, curriculum_weekly_hours_json, updated_by) VALUES (:scenario_id, :hours, :json, :updated_by)",
+      {
+        scenario_id: r.insertId,
+        hours: DEFAULT_NORM_MAX_HOURS,
+        json: JSON.stringify({ years: emptyNormYears }),
+        updated_by: req.user.id,
+      }
+    );
+
     return res.json({
       id: r.insertId,
       name,
@@ -1293,10 +1336,34 @@ router.put(
           if (!resKey) return;
           // Normalize: strip wildcard
           const base = resKey.endsWith('.*') ? resKey.slice(0, -2) : resKey;
+          if (base.startsWith('page.')) {
+            const parts = base.split('.');
+            if (parts.length >= 2) {
+              const page = parts[1];
+              if (page === 'temel_bilgiler' || page === 'kapasite') {
+                workEntries.push({ resource: base, workId: page });
+              }
+            }
+            return;
+          }
           if (!base.startsWith('section.')) return;
           const parts = base.split('.');
-          if (parts.length < 3) return;
-          const workId = `${parts[1]}.${parts.slice(2).join('.')}`;
+          if (parts.length < 2) return;
+          const page = parts[1];
+          let workId = null;
+          if (page === 'temel_bilgiler') {
+            workId = 'temel_bilgiler';
+          } else if (page === 'kapasite') {
+            workId = 'kapasite';
+          } else if (page === 'discounts') {
+            // Discounts live under the Giderler module in the workflow
+            workId = 'giderler.isletme';
+          } else if (parts.length >= 3) {
+            workId = `${page}.${parts.slice(2).join('.')}`;
+          } else {
+            workId = page;
+          }
+          if (!workId) return;
           workEntries.push({ resource: base, workId });
         };
         if (resourcesList) {
@@ -1402,10 +1469,7 @@ router.post("/schools/:schoolId/scenarios/:scenarioId/calculate", async (req, re
     );
     if (!inputsRow) return res.status(404).json({ error: "Inputs not found" });
 
-    const [[normRow]] = await pool.query(
-      "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
-      { id: schoolId }
-    );
+    const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
     if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
 
     const normConfig = normalizeNormConfigRow(normRow);
@@ -1464,10 +1528,7 @@ async function submitScenarioToManager(req, res) {
     );
 
     let results = cached?.results_json || null;
-    const [[normRow]] = await pool.query(
-      "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
-      { id: schoolId }
-    );
+    const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
     const normConfig = normRow ? normalizeNormConfigRow(normRow) : null;
     if (!results) {
       if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
@@ -1989,10 +2050,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
       );
       if (!inputsRow) return res.status(404).json({ error: "Inputs not found" });
 
-      const [[normRow]] = await pool.query(
-        "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
-        { id: schoolId }
-      );
+      const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
       if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
 
       const normConfig = normalizeNormConfigRow(normRow);
@@ -2083,15 +2141,20 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
       { id: scenarioId }
     );
-    const [[normRow]] = await pool.query(
-      "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
-      { id: schoolId }
-    );
+    const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
+    if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
 
     const inputs = parseInputsJson(inputsRow?.inputs_json);
     const programType = normalizeProgramType(scenario.program_type || inputs?.temelBilgiler?.programType);
 
     const normConfig = normalizeNormConfigRow(normRow);
+    let prevNormConfig = normConfig;
+    if (prevScenarioBundle?.scenarioRow?.id) {
+      const prevNormRow = await getNormConfigRowForScenario(pool, schoolId, prevScenarioBundle.scenarioRow.id);
+      if (prevNormRow) {
+        prevNormConfig = normalizeNormConfigRow(prevNormRow);
+      }
+    }
     const inputsForCalc = normalizeInputsToUsd(inputsRow?.inputs_json, scenario);
     const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
 
@@ -2100,7 +2163,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     if (prevScenarioBundle?.scenarioRow && prevScenarioBundle?.inputsJson) {
       try {
         const prevInputsForCalc = normalizeInputsToUsd(prevScenarioBundle.inputsJson, prevScenarioBundle.scenarioRow);
-        prevReport = calculateSchoolFeasibility(prevInputsForCalc, normConfig);
+        prevReport = calculateSchoolFeasibility(prevInputsForCalc, prevNormConfig);
       } catch (err) {
         console.warn("[export-xlsx] prevReport compute failed", err);
       }

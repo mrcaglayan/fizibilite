@@ -55,7 +55,7 @@ export default function SchoolsPage() {
 
     const [inputsData, normData] = await Promise.all([
       api.getScenarioInputs(schoolId, latest.id),
-      api.getNormConfig(schoolId).catch(() => null),
+      api.getNormConfig(schoolId, latest.id).catch(() => null),
     ]);
 
     const progress = computeScenarioProgress({
