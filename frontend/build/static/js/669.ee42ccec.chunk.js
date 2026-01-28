@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkfrontend=self.webpackChunkfrontend||[]).push([[669],{8669(e,n,r){r.r(n),r.d(n,{default:()=>f});r(5043);var t=r(613),u=r(579);function f(){return(0,u.jsx)(t.A,{forcedTab:"countries"})}}}]);
+//# sourceMappingURL=669.ee42ccec.chunk.js.map

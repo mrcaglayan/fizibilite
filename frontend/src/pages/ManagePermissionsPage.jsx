@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useOutletContext } from "react-router-dom";
 import { toast } from "react-toastify";
 import { api } from "../api";
+import { useListSchools, useManagerUsers } from "../hooks/useListQueries";
 
 const REQUIRED_MODULES = [
   "Temel Bilgiler",
@@ -78,8 +79,6 @@ export default function ManagePermissionsPage() {
   const assignmentsBySchoolRef = useRef({});
 
   // Loading/saving flags
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [schoolsLoading, setSchoolsLoading] = useState(false);
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
   const [savingSchoolIds, setSavingSchoolIds] = useState({});
 
@@ -106,6 +105,22 @@ export default function ManagePermissionsPage() {
   const [resettingUserIds, setResettingUserIds] = useState({});
   const [temporaryPasswords, setTemporaryPasswords] = useState({});
 
+  const usersQuery = useManagerUsers({
+    limit: 50,
+    offset: 0,
+    fields: "brief",
+    order: "full_name:asc",
+  });
+  const usersLoading = usersQuery.isFetching;
+
+  const schoolsQuery = useListSchools({
+    limit: 50,
+    offset: 0,
+    fields: "brief",
+    order: "name:asc",
+  });
+  const schoolsLoading = schoolsQuery.isFetching;
+
   useEffect(() => {
     // Set a generic title and subtitle for the access management hub.  When
     // this page mounts the header will reflect that users can manage
@@ -127,31 +142,41 @@ export default function ManagePermissionsPage() {
   }, []);
 
   const loadUsers = useCallback(async () => {
-    setUsersLoading(true);
-    try {
-      const list = await api.managerListUsers();
-      setUsers(Array.isArray(list) ? list : []);
-    } catch (err) {
-      console.error(err);
-      toast.error(err?.message || "Failed to load users");
-    } finally {
-      setUsersLoading(false);
+    const result = await usersQuery.refetch();
+    if (result?.error) {
+      console.error(result.error);
+      toast.error(result.error?.message || "Failed to load users");
     }
-  }, []);
+  }, [usersQuery]);
 
   const loadSchools = useCallback(async () => {
-    setSchoolsLoading(true);
-    try {
-      const list = await api.listSchools();
-      setSchools(normalizeSchoolsList(list));
-    } catch (err) {
-      console.error(err);
-      toast.error(err?.message || "Failed to load schools");
-      setSchools([]);
-    } finally {
-      setSchoolsLoading(false);
+    const result = await schoolsQuery.refetch();
+    if (result?.error) {
+      console.error(result.error);
+      toast.error(result.error?.message || "Failed to load schools");
     }
-  }, [normalizeSchoolsList]);
+  }, [schoolsQuery]);
+
+  useEffect(() => {
+    const rows = usersQuery.data?.items;
+    setUsers(Array.isArray(rows) ? rows : []);
+  }, [usersQuery.data]);
+
+  useEffect(() => {
+    setSchools(normalizeSchoolsList(schoolsQuery.data));
+  }, [schoolsQuery.data, normalizeSchoolsList]);
+
+  useEffect(() => {
+    if (!usersQuery.isError) return;
+    console.error(usersQuery.error);
+    toast.error(usersQuery.error?.message || "Failed to load users");
+  }, [usersQuery.isError, usersQuery.error]);
+
+  useEffect(() => {
+    if (!schoolsQuery.isError) return;
+    console.error(schoolsQuery.error);
+    toast.error(schoolsQuery.error?.message || "Failed to load schools");
+  }, [schoolsQuery.isError, schoolsQuery.error]);
 
   const loadAssignmentsForSchools = useCallback(async (schoolsList) => {
     if (!Array.isArray(schoolsList) || schoolsList.length === 0) {
@@ -187,11 +212,6 @@ export default function ManagePermissionsPage() {
       setAssignmentsLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    loadUsers();
-    loadSchools();
-  }, [loadUsers, loadSchools]);
 
   useEffect(() => {
     assignmentsBySchoolRef.current = assignmentsBySchool;

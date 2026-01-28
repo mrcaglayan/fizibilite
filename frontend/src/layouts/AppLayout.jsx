@@ -30,6 +30,10 @@ import {
 // Permission helper to determine visibility of navigation items based on user permissions.
 import { can } from "../utils/permissions";
 
+function RouteFallback() {
+  return <div className="card">Loading...</div>;
+}
+
 
 function useLocalStorageState(key, defaultValue) {
   const [state, setState] = React.useState(() => {
@@ -554,7 +558,9 @@ export default function AppLayout() {
 
 
         <div className="app-content">
-          <Outlet context={outletContext} />
+          <React.Suspense fallback={<RouteFallback />}>
+            <Outlet context={outletContext} />
+          </React.Suspense>
         </div>
         </section>
         {confirmNav ? (

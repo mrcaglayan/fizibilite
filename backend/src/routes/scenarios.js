@@ -38,6 +38,14 @@ const { buildGelirlerAoa } = require("../utils/excel/gelirlerAoa");
 const { buildGiderlerAoa } = require("../utils/excel/giderlerAoa");
 const { buildNormAoa } = require("../utils/excel/normAoa");
 const { buildMaliTablolarAoa } = require("../utils/excel/maliTablolarAoa");
+const { parseListParams } = require("../utils/listParams");
+const {
+  DEFAULT_NORM_MAX_HOURS,
+  buildEmptyNormYears,
+  normalizeNormConfigRow,
+  getNormConfigRowForScenario,
+} = require("../utils/normConfig");
+const { getScenarioProgressSnapshot, invalidateScenarioProgress } = require("../utils/scenarioProgressCache");
 const { getUserPermissions, hasPermission } = require("../utils/permissionService");
 const fs = require("fs");
 const path = require("path");
@@ -114,78 +122,6 @@ function normalizeKademeConfig(input) {
     };
   }
   return out;
-}
-
-const NORM_YEAR_KEYS = ["y1", "y2", "y3"];
-const DEFAULT_NORM_MAX_HOURS = 24;
-const NORM_GRADE_KEYS = ["KG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
-
-function buildEmptyNormCurriculum() {
-  const empty = {};
-  NORM_GRADE_KEYS.forEach((g) => (empty[g] = {}));
-  return empty;
-}
-
-function buildEmptyNormYears(maxHours = DEFAULT_NORM_MAX_HOURS) {
-  return {
-    y1: { teacherWeeklyMaxHours: maxHours, curriculumWeeklyHours: buildEmptyNormCurriculum() },
-    y2: { teacherWeeklyMaxHours: maxHours, curriculumWeeklyHours: buildEmptyNormCurriculum() },
-    y3: { teacherWeeklyMaxHours: maxHours, curriculumWeeklyHours: buildEmptyNormCurriculum() },
-  };
-}
-
-function normalizeNormConfigRow(row) {
-  const maxHoursRaw = Number(row?.teacher_weekly_max_hours);
-  const baseHours = Number.isFinite(maxHoursRaw) && maxHoursRaw > 0 ? maxHoursRaw : DEFAULT_NORM_MAX_HOURS;
-  const raw = row?.curriculum_weekly_hours_json;
-  const yearSource =
-    raw && typeof raw === "object" && raw.years && typeof raw.years === "object"
-      ? raw.years
-      : raw && typeof raw === "object" && NORM_YEAR_KEYS.some((y) => y in raw)
-        ? raw
-        : null;
-
-  if (!yearSource) {
-    const curriculum = raw && typeof raw === "object" ? raw : {};
-    return { teacherWeeklyMaxHours: baseHours, curriculumWeeklyHours: curriculum };
-  }
-
-  const years = {};
-  for (const y of NORM_YEAR_KEYS) {
-    const src = yearSource?.[y] || {};
-    const hoursRaw = Number(src?.teacherWeeklyMaxHours ?? baseHours);
-    const hours = Number.isFinite(hoursRaw) && hoursRaw > 0 ? hoursRaw : baseHours;
-    const curr =
-      src?.curriculumWeeklyHours && typeof src.curriculumWeeklyHours === "object"
-        ? src.curriculumWeeklyHours
-        : src && typeof src === "object"
-          ? src
-          : {};
-    years[y] = { teacherWeeklyMaxHours: hours, curriculumWeeklyHours: curr };
-  }
-
-  return {
-    years,
-    teacherWeeklyMaxHours: years.y1.teacherWeeklyMaxHours,
-    curriculumWeeklyHours: years.y1.curriculumWeeklyHours,
-  };
-}
-
-async function getNormConfigRowForScenario(pool, schoolId, scenarioId) {
-  if (!pool) throw new Error("getNormConfigRowForScenario requires pool");
-  const sid = Number(schoolId);
-  const scid = Number(scenarioId);
-  if (!Number.isFinite(sid) || !Number.isFinite(scid)) return null;
-  const [[scenarioRow]] = await pool.query(
-    "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM scenario_norm_configs WHERE scenario_id=:id",
-    { id: scid }
-  );
-  if (scenarioRow) return scenarioRow;
-  const [[schoolRow]] = await pool.query(
-    "SELECT teacher_weekly_max_hours, curriculum_weekly_hours_json FROM school_norm_configs WHERE school_id=:id",
-    { id: sid }
-  );
-  return schoolRow || null;
 }
 
 const KPI_YEAR_KEYS = ["y1", "y2", "y3"];
@@ -459,9 +395,29 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
     const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
     if (!school) return res.status(404).json({ error: "School not found" });
 
-    const limitValue = Number(req.query?.limit);
-    const offsetValue = Number(req.query?.offset);
-    const fieldsParam = String(req.query?.fields || "all").toLowerCase();
+    let listParams;
+    try {
+      listParams = parseListParams(req.query, {
+        defaultLimit: 50,
+        maxLimit: 200,
+        defaultOffset: 0,
+        allowedOrderColumns: {
+          created_at: "created_at",
+          id: "id",
+          academic_year: "academic_year",
+          status: "status",
+        },
+        defaultOrder: { column: "created_at", direction: "desc" },
+        applyDefaultLimit: false,
+      });
+    } catch (err) {
+      if (err?.status === 400) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+
+    const { limit, offset, fields, order, orderBy, isPagedOrSelective, hasOffsetParam } = listParams;
     // Include checked_at and checked_by in both brief and default column sets so
     // clients can distinguish between manager-level approval and admin-level
     // approval.  The brief set is used when a compact payload is requested.
@@ -475,6 +431,10 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       "sent_at",
       "checked_at",
       "checked_by",
+      "input_currency",
+      "local_currency_code",
+      "fx_usd_to_local",
+      "program_type",
     ];
     const defaultColumns = [
       "id",
@@ -494,15 +454,14 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       "fx_usd_to_local",
       "program_type",
     ];
-    const columns = fieldsParam === "brief" ? briefColumns : defaultColumns;
+    const columns = fields === "brief" ? briefColumns : defaultColumns;
 
     const queryParams = { school_id: schoolId };
-    const hasLimit = Number.isFinite(limitValue) && limitValue > 0;
-    const hasOffset = Number.isFinite(offsetValue) && offsetValue >= 0;
-    const limitClause = hasLimit ? ` LIMIT :limit` : "";
-    if (hasLimit) queryParams.limit = limitValue;
-    const offsetClause = hasOffset ? ` OFFSET :offset` : "";
-    if (hasOffset) queryParams.offset = offsetValue;
+    const limitClause = limit != null ? ` LIMIT :limit` : "";
+    if (limit != null) queryParams.limit = limit;
+    const useOffset = hasOffsetParam || (limit != null && offset != null);
+    const offsetClause = useOffset ? ` OFFSET :offset` : "";
+    if (useOffset) queryParams.offset = offset;
 
     const [countRows] = await pool.query(
       "SELECT COUNT(*) AS total FROM school_scenarios WHERE school_id=:school_id",
@@ -514,21 +473,22 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       SELECT ${columns.join(", ")}
       FROM school_scenarios
       WHERE school_id=:school_id
-      ORDER BY created_at DESC${limitClause}${offsetClause}
+      ORDER BY ${orderBy || "created_at DESC"}${limitClause}${offsetClause}
     `;
     const [rows] = await pool.query(sql, queryParams);
 
     res.setHeader("X-Total-Scenarios", total);
-    if (!hasLimit && !hasOffset && fieldsParam === "all") {
+    if (!isPagedOrSelective && fields === "all") {
       return res.json(rows);
     }
 
     return res.json({
       scenarios: rows,
       total,
-      limit: hasLimit ? queryParams.limit : null,
-      offset: hasOffset ? queryParams.offset : 0,
-      fields: fieldsParam,
+      limit: limit ?? null,
+      offset: offset ?? 0,
+      fields,
+      order: order ? `${order.column}:${order.direction}` : null,
     });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
@@ -827,7 +787,6 @@ router.post(
         { name: "KURUM İNDİRİMİ", mode: "percent", value: 0, ratio: 0 },
         { name: "İSTİSNAİ İNDİRİM", mode: "percent", value: 0, ratio: 0 },
         { name: "YEREL MEVZUATIN ŞART KOŞTUĞU İNDİRİM", mode: "percent", value: 0, ratio: 0 },
-        { name: "Paylaşılan Burs/İndirim (Dağıtım)", mode: "percent", value: 0, ratio: 0 },
       ],
 
       // Excel "Giderler" yapısına uygun (tek yıl)
@@ -844,7 +803,6 @@ router.post(
             yerelPersonelMaas: 0,
             yerelDestekPersonelMaas: 0,
             internationalPersonelMaas: 0,
-            sharedPayrollAllocation: 0,
             disaridanHizmet: 0,
             egitimAracGerec: 0,
             finansalGiderler: 0,
@@ -1166,6 +1124,135 @@ router.get(
 });
 
 /**
+ * GET /schools/:schoolId/scenarios/:scenarioId/context
+ *
+ * Returns scenario inputs and (if permitted) norm config in a single call.
+ */
+router.get(
+  "/schools/:schoolId/scenarios/:scenarioId/context",
+  requireAnySchoolRead("schoolId"),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: "School not found" });
+
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+
+      const [[row]] = await pool.query(
+        "SELECT inputs_json, updated_at FROM scenario_inputs WHERE scenario_id=:id",
+        { id: scenarioId }
+      );
+      if (!row) return res.status(404).json({ error: "Inputs not found" });
+
+      const inputs = parseInputsJson(row.inputs_json);
+
+      let norm = null;
+      let normUpdatedAt = null;
+      let canReadNorm = String(req.user.role) === "admin";
+      if (!canReadNorm) {
+        if (!req._permissions) {
+          req._permissions = await getUserPermissions(pool, req.user.id);
+        }
+        canReadNorm = hasPermission(req._permissions, {
+          resource: "page.norm",
+          action: "read",
+          countryId: req.user.country_id,
+          schoolId,
+        });
+      }
+      if (canReadNorm) {
+        const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
+        if (normRow) {
+          norm = normalizeNormConfigRow(normRow);
+          normUpdatedAt = normRow.updated_at ?? null;
+        }
+      }
+
+      return res.json({
+        scenario,
+        inputs,
+        inputsUpdatedAt: row.updated_at,
+        norm,
+        normUpdatedAt,
+      });
+    } catch (e) {
+      if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
+      return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
+ * GET /schools/:schoolId/scenarios/:scenarioId/progress
+ */
+router.get(
+  "/schools/:schoolId/scenarios/:scenarioId/progress",
+  requireAnySchoolRead("schoolId"),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: "School not found" });
+
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+
+      const snapshot = await getScenarioProgressSnapshot(pool, {
+        schoolId,
+        scenarioId,
+        countryId: req.user.country_id,
+      });
+
+      const inputsMs = snapshot.inputsUpdatedAt ? new Date(snapshot.inputsUpdatedAt).getTime() : 0;
+      const normMs = snapshot.normUpdatedAt ? new Date(snapshot.normUpdatedAt).getTime() : 0;
+      const configMs = snapshot.configUpdatedAt ? new Date(snapshot.configUpdatedAt).getTime() : 0;
+      const calcMs = snapshot.calculatedAt ? new Date(snapshot.calculatedAt).getTime() : 0;
+      const lastModifiedMs = Math.max(inputsMs, normMs, configMs, calcMs, 0);
+      const lastModified = new Date(lastModifiedMs || Date.now()).toUTCString();
+      const pct = snapshot.progress ? snapshot.progress.pct : "";
+      const etagValue = crypto
+        .createHash("sha1")
+        .update(`${scenarioId}:${schoolId}:${inputsMs}:${normMs}:${configMs}:${calcMs}:${pct}`)
+        .digest("hex");
+      const etag = `"${etagValue}"`;
+
+      // Progress should update immediately after inputs are saved.
+      // `no-cache` forces revalidation on each request, while ETag/Last-Modified
+      // still make it fast via 304 responses when nothing changed.
+      res.setHeader("Cache-Control", "private, no-cache, must-revalidate");
+      // Ensure any shared/proxy caches treat the response as user-specific.
+      res.setHeader("Vary", "Authorization");
+      res.setHeader("Vary", "Authorization");
+      res.setHeader("Last-Modified", lastModified);
+      res.setHeader("ETag", etag);
+
+      if (req.headers["if-none-match"] === etag) {
+        return res.status(304).end();
+      }
+
+      return res.json({
+        scenarioId,
+        schoolId,
+        progress: snapshot.progress,
+        cached: snapshot.cached,
+        calculatedAt: snapshot.calculatedAt,
+      });
+    } catch (e) {
+      if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
+      return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    }
+  }
+);
+
+/**
  * PUT /schools/:schoolId/scenarios/:scenarioId/inputs
  *
  * Body: { inputs, modifiedPaths }
@@ -1445,6 +1532,12 @@ router.put(
             // ignore errors
           }
         }
+      }
+
+      try {
+        await invalidateScenarioProgress(pool, scenarioId);
+      } catch (_) {
+        // ignore cache invalidation failures
       }
 
       return res.json({ ok: true });

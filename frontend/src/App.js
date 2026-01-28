@@ -1,30 +1,39 @@
 //frontend/src/App.js
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
-import LoginPage from "./pages/LoginPage";
-import SchoolsPage from "./pages/SchoolsPage";
-import SchoolPage from "./pages/SchoolPage";
-import SelectPage from "./pages/SelectPage";
-import ProfilePage from "./pages/ProfilePage";
-import AdminRedirect from "./pages/AdminRedirect";
-import AdminUsersPage from "./pages/AdminUsersPage";
-import AdminCountriesPage from "./pages/AdminCountriesPage";
-import AdminProgressPage from "./pages/AdminProgressPage";
-import AdminApprovalsPage from "./pages/AdminApprovalsPage";
-import AdminReportsPage from "./pages/AdminReportsPage";
-import ManagePermissionsPage from "./pages/ManagePermissionsPage";
-import AdminPermissionsPage from "./pages/AdminPermissionsPage";
-import ManagerReviewQueuePage from "./pages/ManagerReviewQueuePage";
 import AppLayout from "./layouts/AppLayout";
-import TemelBilgilerPage from "./pages/school/TemelBilgilerPage";
-import KapasitePage from "./pages/school/KapasitePage";
-import NormPage from "./pages/school/NormPage";
-import IKPage from "./pages/school/IKPage";
-import GelirlerPage from "./pages/school/GelirlerPage";
-import GiderlerPage from "./pages/school/GiderlerPage";
-import DetayliRaporPage from "./pages/school/DetayliRaporPage";
-import RaporPage from "./pages/school/RaporPage";
+
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const SchoolsPage = lazy(() => import("./pages/SchoolsPage"));
+const SchoolPage = lazy(() => import("./pages/SchoolPage"));
+const SelectPage = lazy(() => import("./pages/SelectPage"));
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
+const AdminRedirect = lazy(() => import("./pages/AdminRedirect"));
+const AdminUsersPage = lazy(() => import("./pages/AdminUsersPage"));
+const AdminCountriesPage = lazy(() => import("./pages/AdminCountriesPage"));
+const AdminProgressPage = lazy(() => import("./pages/AdminProgressPage"));
+const AdminApprovalsPage = lazy(() => import("./pages/AdminApprovalsPage"));
+const AdminReportsPage = lazy(() => import("./pages/AdminReportsPage"));
+const ManagePermissionsPage = lazy(() => import("./pages/ManagePermissionsPage"));
+const AdminPermissionsPage = lazy(() => import("./pages/AdminPermissionsPage"));
+const ManagerReviewQueuePage = lazy(() => import("./pages/ManagerReviewQueuePage"));
+const TemelBilgilerPage = lazy(() => import("./pages/school/TemelBilgilerPage"));
+const KapasitePage = lazy(() => import("./pages/school/KapasitePage"));
+const NormPage = lazy(() => import("./pages/school/NormPage"));
+const IKPage = lazy(() => import("./pages/school/IKPage"));
+const GelirlerPage = lazy(() => import("./pages/school/GelirlerPage"));
+const GiderlerPage = lazy(() => import("./pages/school/GiderlerPage"));
+const DetayliRaporPage = lazy(() => import("./pages/school/DetayliRaporPage"));
+const RaporPage = lazy(() => import("./pages/school/RaporPage"));
+
+function RouteFallback() {
+  return (
+    <div className="container">
+      <div className="card">Loading...</div>
+    </div>
+  );
+}
 
 function PrivateRoute({ children, allowReset = false }) {
   const auth = useAuth();
@@ -46,7 +55,18 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/login" element={auth.token ? <Navigate to={postLoginPath} replace /> : <LoginPage />} />
+      <Route
+        path="/login"
+        element={
+          auth.token ? (
+            <Navigate to={postLoginPath} replace />
+          ) : (
+            <Suspense fallback={<RouteFallback />}>
+              <LoginPage />
+            </Suspense>
+          )
+        }
+      />
       <Route
         element={
           <PrivateRoute>

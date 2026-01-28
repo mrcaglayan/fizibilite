@@ -146,7 +146,6 @@ const OPERATING_ITEMS = [
         code: 622,
         label: "Eğitim Amaçlı Hizmet Alımları (İzinler ve lisanslama, Cambridge Lisanslamaları vb.)",
     },
-    { key: "sharedPayrollAllocation", no: 15, code: 622, label: "Paylaşılan Bordro (Dağıtım)" },
 
     {
         key: "temsilAgirlama",
@@ -662,12 +661,14 @@ function buildGiderlerModel({ scenario, inputs, report, programType, currencyMet
     };
 
     const getSalaryAmount = (key, yearKey) => {
-        const base1 = Math.max(toNum(g.isletme?.items?.[key]) * scale, toNum(salaryByYear?.y1?.[key]));
-        if (toNum(salaryByYear?.y1?.[key]) > 0) {
-            return toNum(salaryByYear?.[yearKey]?.[key]);
-        }
-        if (yearKey === "y1") return base1;
-        return base1 * (factors?.[yearKey] ?? 1);
+        const baseIsletmeVal = toNum(g.isletme?.items?.[key]) * scale;
+        const ikBaseY1 = toNum(salaryByYear?.y1?.[key]);
+        const extraY1 = ikBaseY1 > 0 ? Math.max(0, baseIsletmeVal - ikBaseY1) : 0;
+        const base = ikBaseY1 > 0 ? ikBaseY1 : baseIsletmeVal;
+        const fromIk = toNum(salaryByYear?.[yearKey]?.[key]);
+        const baseYearVal = fromIk > 0 ? fromIk : yearKey === "y1" ? base : base * (factors?.[yearKey] ?? 1);
+        const extraYearVal = yearKey === "y1" ? extraY1 : extraY1 * (factors?.[yearKey] ?? 1);
+        return baseYearVal + extraYearVal;
     };
 
     const getOperatingAmount = (key, yearKey) => {
@@ -780,7 +781,6 @@ function buildGiderlerModel({ scenario, inputs, report, programType, currencyMet
                 "egitimAracGerec",
                 "finansalGiderler",
                 "egitimAmacliHizmet",
-                "sharedPayrollAllocation",
             ],
         },
         { label: null, keys: ["temsilAgirlama"] },

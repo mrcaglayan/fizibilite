@@ -4,14 +4,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
 import { api } from "../api";
 
-const IK_AUTO_KEYS = new Set([
-  "turkPersonelMaas",
-  "turkDestekPersonelMaas",
-  "yerelPersonelMaas",
-  "yerelDestekPersonelMaas",
-  "internationalPersonelMaas",
-]);
-
 const OPERATING_ITEMS = [
   { key: "ulkeTemsilciligi", label: "Ülke Temsilciligi Giderleri" },
   { key: "genelYonetim", label: "Genel Yönetim Giderleri" },
@@ -23,7 +15,6 @@ const OPERATING_ITEMS = [
   { key: "yerelPersonelMaas", label: "Yurt disi YEREL Personel Maas Giderleri" },
   { key: "yerelDestekPersonelMaas", label: "Yurt disi YEREL DESTEK Personel Maas Giderleri" },
   { key: "internationalPersonelMaas", label: "Yurt disi INTERNATIONAL Personel Maas Giderleri" },
-  { key: "sharedPayrollAllocation", label: "Paylaşılan Bordro (Dağıtım)" },
   { key: "disaridanHizmet", label: "Disaridan Saglanan Mal ve Hizmet Alimlari" },
   { key: "egitimAracGerec", label: "Egitim Araç ve Gereçleri" },
   { key: "finansalGiderler", label: "Finansal Giderler" },
@@ -56,12 +47,7 @@ const DISCOUNT_ITEMS = [
   { key: "discountsTotal", label: "Burs ve İndirimler (Toplam)" },
 ];
 
-const EXPENSE_ITEMS = [
-  ...OPERATING_ITEMS.filter((it) => !IK_AUTO_KEYS.has(it.key)),
-  ...SERVICE_ITEMS,
-  ...DORM_ITEMS,
-  ...DISCOUNT_ITEMS,
-];
+const EXPENSE_ITEMS = [...OPERATING_ITEMS, ...SERVICE_ITEMS, ...DORM_ITEMS, ...DISCOUNT_ITEMS];
 const EXPENSE_KEYS = EXPENSE_ITEMS.map((it) => it.key);
 const EXPENSE_ITEM_MAP = new Map(EXPENSE_ITEMS.map((it) => [it.key, it]));
 const EXPENSE_LABELS = new Map(EXPENSE_ITEMS.map((it) => [it.key, it.label]));
@@ -99,7 +85,6 @@ const EXPENSE_SECTIONS = [
           "yerelPersonelMaas",
           "yerelDestekPersonelMaas",
           "internationalPersonelMaas",
-          "sharedPayrollAllocation",
           "disaridanHizmet",
           "egitimAracGerec",
           "finansalGiderler",
@@ -125,18 +110,13 @@ const EXPENSE_SECTIONS = [
   },
 ].map((section) => {
   if (Array.isArray(section.groups)) {
-    const groups = section.groups
-      .map((group) => ({
-        ...group,
-        keys: group.keys.filter((key) => !IK_AUTO_KEYS.has(key)),
-      }))
-      .filter((group) => group.keys.length);
+    const groups = section.groups.filter((group) => group.keys.length);
     const keys = groups.flatMap((group) => group.keys);
     return { ...section, groups, keys };
   }
   return {
     ...section,
-    keys: section.keys.filter((key) => !IK_AUTO_KEYS.has(key)),
+    keys: section.keys,
   };
 }).filter((section) => section.keys.length);
 

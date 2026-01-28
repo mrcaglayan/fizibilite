@@ -7,6 +7,7 @@ const { getPool } = require("../db");
 const { ensurePermissions } = require("../utils/ensurePermissions");
 const { PERMISSIONS_CATALOG } = require("../utils/permissionsCatalog");
 const { getUserPermissions } = require("../utils/permissionService");
+const { parseListParams } = require("../utils/listParams");
 const { requireAuth, requireAssignedCountry, requirePermission } = require("../middleware/auth");
 
 /**
@@ -331,19 +332,83 @@ router.get("/users", requirePermission("page.manage_permissions", "write"), asyn
     if (!countryId) {
       return res.status(400).json({ error: "Manager must be assigned to a country" });
     }
+    let listParams;
+    try {
+      listParams = parseListParams(req.query, {
+        defaultLimit: 50,
+        maxLimit: 200,
+        defaultOffset: 0,
+        allowedOrderColumns: {
+          id: "id",
+          full_name: "full_name",
+          email: "email",
+          role: "role",
+          created_at: "created_at",
+        },
+        defaultOrder: { column: "full_name", direction: "asc" },
+      });
+    } catch (err) {
+      if (err?.status === 400) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+
+    const { limit, offset, fields, order, orderBy, isPagedOrSelective, hasOffsetParam } = listParams;
     const pool = getPool();
     // Fetch only available columns from the users table.  Managers operate
     // within a single country, so we do not need to return country_name or
     // code here.  Should you require country details, join with the
     // countries table.
-    const [rows] = await pool.query(
-      `SELECT id, full_name, email, role, country_id
+    const columnsBrief = ["id", "full_name", "email", "role", "country_id"];
+    const columnsAll = ["id", "full_name", "email", "role", "country_id"];
+    const columns = fields === "brief" ? columnsBrief : columnsAll;
+    const params = { cid: countryId };
+    const whereClause = "WHERE country_id = :cid";
+    const orderClause = `ORDER BY ${orderBy || "full_name ASC"}`;
+
+    if (!isPagedOrSelective && fields === "all") {
+      const [rows] = await pool.query(
+        `SELECT ${columns.join(", ")}
+         FROM users
+         ${whereClause}
+         ${orderClause}`,
+        params
+      );
+      return res.json(Array.isArray(rows) ? rows : []);
+    }
+
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) AS total
        FROM users
-       WHERE country_id = :cid
-       ORDER BY full_name ASC`,
-      { cid: countryId }
+       ${whereClause}`,
+      params
     );
-    return res.json(Array.isArray(rows) ? rows : []);
+    const total = Number(countRows?.[0]?.total ?? 0);
+
+    const queryParams = { ...params };
+    const limitClause = limit != null ? " LIMIT :limit" : "";
+    if (limit != null) queryParams.limit = limit;
+    const useOffset = hasOffsetParam || (limit != null && offset != null);
+    const offsetClause = useOffset ? " OFFSET :offset" : "";
+    if (useOffset) queryParams.offset = offset;
+
+    const [rows] = await pool.query(
+      `SELECT ${columns.join(", ")}
+       FROM users
+       ${whereClause}
+       ${orderClause}${limitClause}${offsetClause}`,
+      queryParams
+    );
+
+    return res.json({
+      users: Array.isArray(rows) ? rows : [],
+      total,
+      limit: limit ?? null,
+      offset: offset ?? 0,
+      fields,
+      order: order ? `${order.column}:${order.direction}` : null,
+    });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }

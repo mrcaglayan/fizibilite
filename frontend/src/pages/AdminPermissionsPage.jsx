@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { api } from "../api";
+import { useAdminUsers, useListCountries } from "../hooks/useListQueries";
 import { toast } from "react-toastify";
 import { useOutletContext } from "react-router-dom";
 import PermissionsTable from "../components/permissions/PermissionsTable";
@@ -75,7 +76,13 @@ export default function AdminPermissionsPage() {
   // countriesLoading is unused; removed to avoid ESLint warning
   // Users data and filters
   const [users, setUsers] = useState([]);
-  const [usersLoading, setUsersLoading] = useState(false);
+  const usersQuery = useAdminUsers({
+    limit: 50,
+    offset: 0,
+    fields: "brief",
+    order: "full_name:asc",
+  });
+  const usersLoading = usersQuery.isFetching;
   const [searchUser, setSearchUser] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
   const [countryFilter, setCountryFilter] = useState("all");
@@ -116,6 +123,8 @@ export default function AdminPermissionsPage() {
   const [searchSchool, setSearchSchool] = useState("");
   const [selectedSchoolId, setSelectedSchoolId] = useState(null);
 
+  const countriesQuery = useListCountries();
+
   // Set header meta on mount/unmount
   useEffect(() => {
     outlet?.setHeaderMeta?.({
@@ -130,31 +139,43 @@ export default function AdminPermissionsPage() {
 
   // Load list of countries
   const loadCountries = useCallback(async () => {
-    // optional: could track loading state here
-    try {
-      const rows = await api.listCountries();
-      setCountries(Array.isArray(rows) ? rows : []);
-    } catch (err) {
-      console.error(err);
-      toast.error(err?.message || "Failed to load countries");
-    } finally {
-      // no loading state for countries
+    const result = await countriesQuery.refetch();
+    if (result?.error) {
+      console.error(result.error);
+      toast.error(result.error?.message || "Failed to load countries");
     }
-  }, []);
+  }, [countriesQuery]);
 
   // Load list of users
   const loadUsers = useCallback(async () => {
-    setUsersLoading(true);
-    try {
-      const list = await api.listUsers();
-      setUsers(Array.isArray(list) ? list : []);
-    } catch (err) {
-      console.error(err);
-      toast.error(err?.message || "Failed to load users");
-    } finally {
-      setUsersLoading(false);
+    const result = await usersQuery.refetch();
+    if (result?.error) {
+      console.error(result.error);
+      toast.error(result.error?.message || "Failed to load users");
     }
-  }, []);
+  }, [usersQuery]);
+
+  useEffect(() => {
+    const rows = countriesQuery.data;
+    setCountries(Array.isArray(rows) ? rows : []);
+  }, [countriesQuery.data]);
+
+  useEffect(() => {
+    const rows = usersQuery.data?.items;
+    setUsers(Array.isArray(rows) ? rows : []);
+  }, [usersQuery.data]);
+
+  useEffect(() => {
+    if (!countriesQuery.isError) return;
+    console.error(countriesQuery.error);
+    toast.error(countriesQuery.error?.message || "Failed to load countries");
+  }, [countriesQuery.isError, countriesQuery.error]);
+
+  useEffect(() => {
+    if (!usersQuery.isError) return;
+    console.error(usersQuery.error);
+    toast.error(usersQuery.error?.message || "Failed to load users");
+  }, [usersQuery.isError, usersQuery.error]);
 
   // Load schools for selected country in Schools tab
   const loadSchoolsForCountry = useCallback(async (countryId) => {
@@ -238,12 +259,6 @@ export default function AdminPermissionsPage() {
       setPermissionsLoading(false);
     }
   }, []);
-
-  // On mount: load countries and users
-  useEffect(() => {
-    loadCountries();
-    loadUsers();
-  }, [loadCountries, loadUsers]);
 
   useEffect(() => {
     permissionsByUserIdRef.current = permissionsByUserId;

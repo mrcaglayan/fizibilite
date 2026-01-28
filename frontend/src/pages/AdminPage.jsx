@@ -642,9 +642,12 @@ export default function AdminPage({ forcedTab = null } = {}) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [countriesRows, userRows] = await Promise.all([api.listCountries(), api.listUsers()]);
+      const [countriesRows, userData] = await Promise.all([
+        api.listCountries(),
+        api.listUsers({ limit: 50, offset: 0, fields: "brief", order: "id:desc" }),
+      ]);
       setCountries(countriesRows);
-      setUsers(userRows);
+      setUsers(Array.isArray(userData?.items) ? userData.items : []);
     } catch (e) {
       toast.error(e.message || "Failed to load admin data");
     } finally {

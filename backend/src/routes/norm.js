@@ -4,6 +4,7 @@
 const express = require("express");
 const { getPool } = require("../db");
 const { requireAuth, requireAssignedCountry, requireSchoolPermission } = require("../middleware/auth");
+const { invalidateScenarioProgress } = require("../utils/scenarioProgressCache");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -212,6 +213,12 @@ router.put(
         }
       );
 
+      try {
+        await invalidateScenarioProgress(pool, scenarioId);
+      } catch (_) {
+        // ignore cache invalidation failures
+      }
+
       return res.json({ ok: true });
     }
 
@@ -228,6 +235,20 @@ router.put(
         id: schoolId,
       }
     );
+
+    try {
+      const [rows] = await pool.query(
+        "SELECT id FROM school_scenarios WHERE school_id=:school_id",
+        { school_id: schoolId }
+      );
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          await invalidateScenarioProgress(pool, row.id);
+        }
+      }
+    } catch (_) {
+      // ignore cache invalidation failures
+    }
 
     return res.json({ ok: true });
   } catch (e) {

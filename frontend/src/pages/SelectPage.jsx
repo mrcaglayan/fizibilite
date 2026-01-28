@@ -16,7 +16,6 @@ import {
   normalizeKademeConfig,
 } from "../utils/kademe";
 import { PROGRAM_TYPES, normalizeProgramType } from "../utils/programType";
-import { computeScenarioProgress } from "../utils/scenarioProgress";
 import {
   readSelectedScenarioId,
   writeSelectedScenarioId,
@@ -763,6 +762,7 @@ export default function SelectPage() {
 
   const [schools, setSchools] = useState([]);
   const [scenarios, setScenarios] = useState([]);
+  const [scenariosSchoolId, setScenariosSchoolId] = useState(null);
   const [selectedSchoolId, setSelectedSchoolId] = useState(null);
   const [selectedScenarioIdLocal, setSelectedScenarioIdLocal] = useState(null);
   const [selectedScenario, setSelectedScenario] = useState(null);
@@ -771,7 +771,6 @@ export default function SelectPage() {
   const [err, setErr] = useState("");
   const [loadingSchools, setLoadingSchools] = useState(false);
   const [loadingScenarios, setLoadingScenarios] = useState(false);
-  const [progressConfig, setProgressConfig] = useState(null);
   const [schoolProgress, setSchoolProgress] = useState({});
   const [schoolProgressLoading, setSchoolProgressLoading] = useState(false);
   const [scenarioProgressMap, setScenarioProgressMap] = useState({});
@@ -827,8 +826,13 @@ export default function SelectPage() {
     setErr("");
     setLoadingSchools(true);
     try {
-      const rows = await api.listSchools();
-      setSchools(Array.isArray(rows) ? rows : []);
+      const data = await api.listSchools({
+        limit: 50,
+        offset: 0,
+        fields: "brief",
+        order: "name:asc",
+      });
+      setSchools(Array.isArray(data?.items) ? data.items : []);
     } catch (e) {
       setErr(e.message || "Okullar yuklenemedi.");
     } finally {
@@ -840,87 +844,29 @@ export default function SelectPage() {
     loadSchools();
   }, [loadSchools]);
 
-  useEffect(() => {
-    let active = true;
-    async function loadProgressConfig() {
-      try {
-        const data = await api.getProgressRequirements();
-        if (!active) return;
-        setProgressConfig(data?.config || data || null);
-      } catch (_) {
-        if (!active) return;
-        setProgressConfig(null);
-      }
+  const loadSchoolProgress = useCallback(async (rows) => {
+    if (!Array.isArray(rows) || !rows.length) {
+      setSchoolProgress({});
+      return;
     }
-    loadProgressConfig();
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const computeSchoolProgressForSchool = useCallback(
-    async (schoolId) => {
-      const scenarios = await api.listScenarios(schoolId);
-      const list = Array.isArray(scenarios) ? scenarios : [];
-      const active = list.filter((s) => s.status !== "approved");
-      if (!list.length) {
-        return { state: "empty", label: "Senaryo yok" };
-      }
-      if (!active.length) {
-        return { state: "approved", label: "Tüm senaryolar onaylı" };
-      }
-
-      const latest = active
-        .slice()
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-
-      const [inputsData, normData] = await Promise.all([
-        api.getScenarioInputs(schoolId, latest.id),
-        api.getNormConfig(schoolId, latest.id).catch(() => null),
-      ]);
-
-      const progress = computeScenarioProgress({
-        inputs: inputsData?.inputs,
-        norm: normData,
-        config: progressConfig,
-        scenario: latest,
+    setSchoolProgressLoading(true);
+    try {
+      const ids = rows.map((s) => s.id);
+      const data = await api.getSchoolsProgressBulk(ids);
+      const map = data?.progressBySchoolId && typeof data.progressBySchoolId === "object"
+        ? data.progressBySchoolId
+        : {};
+      setSchoolProgress(map);
+    } catch (_) {
+      const fallback = {};
+      rows.forEach((s) => {
+        fallback[s.id] = { state: "error", label: "İlerleme hesaplanamadı" };
       });
-      const tooltipLines = progress.missingDetailsLines.length
-        ? ["Eksik:", ...progress.missingDetailsLines]
-        : ["Tüm tablolar tamamlandı"];
-      return { state: "active", pct: progress.pct, tooltipLines };
-    },
-    [progressConfig]
-  );
-
-  const loadSchoolProgress = useCallback(
-    async (rows) => {
-      if (!Array.isArray(rows) || !rows.length) {
-        setSchoolProgress({});
-        return;
-      }
-      setSchoolProgressLoading(true);
-      try {
-        const progressRows = await Promise.all(
-          rows.map(async (s) => {
-            try {
-              return await computeSchoolProgressForSchool(s.id);
-            } catch (_) {
-              return { state: "error", label: "İlerleme hesaplanamadı" };
-            }
-          })
-        );
-        const map = {};
-        rows.forEach((s, idx) => {
-          map[s.id] = progressRows[idx];
-        });
-        setSchoolProgress(map);
-      } finally {
-        setSchoolProgressLoading(false);
-      }
-    },
-    [computeSchoolProgressForSchool]
-  );
+      setSchoolProgress(fallback);
+    } finally {
+      setSchoolProgressLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!schools.length) {
@@ -929,7 +875,7 @@ export default function SelectPage() {
       return;
     }
     loadSchoolProgress(schools);
-  }, [schools, progressConfig, loadSchoolProgress]);
+  }, [schools, loadSchoolProgress]);
 
   useEffect(() => {
     const raw = searchParams.get("schoolId");
@@ -937,7 +883,14 @@ export default function SelectPage() {
     if (!raw || !Number.isFinite(paramId)) return;
     if (!schools.length) return;
     if (!schools.some((s) => String(s.id) === String(paramId))) return;
-    setSelectedSchoolId((prev) => (String(prev) === String(paramId) ? prev : paramId));
+    setSelectedSchoolId((prev) => {
+      if (String(prev) === String(paramId)) return prev;
+      setScenarios([]);
+      setScenariosSchoolId(null);
+      setScenarioProgressMap({});
+      setScenarioProgressLoading(false);
+      return paramId;
+    });
   }, [searchParams, schools]);
 
   const handleSelectSchool = useCallback(
@@ -948,6 +901,10 @@ export default function SelectPage() {
         setSelectedScenario(null);
         setInputs(null);
         setReport(null);
+        setScenarios([]);
+        setScenariosSchoolId(null);
+        setScenarioProgressMap({});
+        setScenarioProgressLoading(false);
       }
       setSelectedSchoolId(schoolId);
       if (isDifferent) {
@@ -968,6 +925,7 @@ export default function SelectPage() {
     setInputs(null);
     setReport(null);
     setScenarios([]);
+    setScenariosSchoolId(null);
     setScenarioProgressMap({});
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -986,10 +944,14 @@ export default function SelectPage() {
   useEffect(() => {
     if (!selectedSchoolId) {
       setScenarios([]);
+      setScenariosSchoolId(null);
       setSelectedScenarioIdLocal(null);
       setSelectedScenario(null);
       setInputs(null);
       setReport(null);
+      setScenarioProgressMap({});
+      setScenarioProgressLoading(false);
+      setLoadingScenarios(false);
       return;
     }
 
@@ -997,16 +959,26 @@ export default function SelectPage() {
     setSelectedScenario(null);
     setInputs(null);
     setReport(null);
+    setScenarios([]);
+    setScenariosSchoolId(null);
+    setScenarioProgressMap({});
+    setScenarioProgressLoading(false);
 
     let active = true;
     setErr("");
     setLoadingScenarios(true);
     async function loadScenarios() {
       try {
-        const sc = await api.listScenarios(selectedSchoolId);
+        const sc = await api.listScenarios(selectedSchoolId, {
+          limit: 50,
+          offset: 0,
+          fields: "brief",
+          order: "created_at:desc",
+        });
         if (!active) return;
-        const rows = Array.isArray(sc) ? sc : [];
+        const rows = Array.isArray(sc?.items) ? sc.items : [];
         setScenarios(rows);
+        setScenariosSchoolId(selectedSchoolId);
         setSelectedScenarioIdLocal((prev) => {
           const exists = rows.some((s) => String(s.id) === String(prev));
           if (exists) return prev;
@@ -1035,6 +1007,11 @@ export default function SelectPage() {
       setScenarioProgressLoading(false);
       return;
     }
+    if (scenariosSchoolId != null && String(scenariosSchoolId) !== String(selectedSchoolId)) {
+      setScenarioProgressMap({});
+      setScenarioProgressLoading(false);
+      return;
+    }
     if (!scenarios.length) {
       setScenarioProgressMap({});
       setScenarioProgressLoading(false);
@@ -1047,20 +1024,16 @@ export default function SelectPage() {
         const results = await Promise.all(
           scenarios.map(async (scenario) => {
             try {
-              const [inputsData, normData] = await Promise.all([
-                api.getScenarioInputs(selectedSchoolId, scenario.id),
-                api.getNormConfig(selectedSchoolId, scenario.id).catch(() => null),
-              ]);
-              const progress = computeScenarioProgress({
-                inputs: inputsData?.inputs,
-                norm: normData,
-                config: progressConfig,
-                scenario,
-              });
-              const tooltipLines = progress.missingDetailsLines.length
-                ? ["Eksik:", ...progress.missingDetailsLines]
+              const data = await api.getScenarioProgress(selectedSchoolId, scenario.id);
+              const progress = data?.progress;
+              if (!progress) return { id: scenario.id, error: true };
+              const missingLines = Array.isArray(progress.missingDetailsLines)
+                ? progress.missingDetailsLines
+                : [];
+              const tooltipLines = missingLines.length
+                ? ["Eksik:", ...missingLines]
                 : ["Tüm tablolar tamamlandı"];
-              return { id: scenario.id, pct: progress.pct, tooltipLines };
+              return { id: scenario.id, pct: progress.pct ?? 0, tooltipLines };
             } catch (_) {
               return { id: scenario.id, error: true };
             }
@@ -1080,7 +1053,7 @@ export default function SelectPage() {
     return () => {
       active = false;
     };
-  }, [selectedSchoolId, scenarios, progressConfig]);
+  }, [selectedSchoolId, scenarios, scenariosSchoolId]);
 
   useEffect(() => {
     if (!selectedSchoolId || !selectedScenarioIdLocal) {
@@ -1119,9 +1092,15 @@ export default function SelectPage() {
   const refreshScenarios = useCallback(async () => {
     if (!selectedSchoolId) return null;
     try {
-      const sc = await api.listScenarios(selectedSchoolId);
-      const rows = Array.isArray(sc) ? sc : [];
+      const sc = await api.listScenarios(selectedSchoolId, {
+        limit: 50,
+        offset: 0,
+        fields: "brief",
+        order: "created_at:desc",
+      });
+      const rows = Array.isArray(sc?.items) ? sc.items : [];
       setScenarios(rows);
+      setScenariosSchoolId(selectedSchoolId);
       return rows;
     } catch (_) {
       return null;

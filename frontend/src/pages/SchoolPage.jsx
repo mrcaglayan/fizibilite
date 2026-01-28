@@ -328,8 +328,13 @@ export default function SchoolPage() {
     if (!schoolId) return;
     setScenarioMetaLoaded(false);
     try {
-      const data = await api.listScenarios(schoolId);
-      const list = Array.isArray(data) ? data : Array.isArray(data?.scenarios) ? data.scenarios : [];
+      const data = await api.listScenarios(schoolId, {
+        limit: 50,
+        offset: 0,
+        fields: "brief",
+        order: "created_at:desc",
+      });
+      const list = Array.isArray(data?.items) ? data.items : [];
       setScenarios(list);
       const scenarioId = selectedScenarioId ?? selectedScenario?.id;
       if (scenarioId != null) {
@@ -967,10 +972,16 @@ export default function SchoolPage() {
       }
 
       setBootLoadingLabel("Senaryolar kontrol ediliyor...");
-      const sc = await api.listScenarios(schoolId);
-      setScenarios(sc);
+      const sc = await api.listScenarios(schoolId, {
+        limit: 50,
+        offset: 0,
+        fields: "brief",
+        order: "created_at:desc",
+      });
+      const rows = Array.isArray(sc?.items) ? sc.items : [];
+      setScenarios(rows);
       if (selectedScenarioId != null) {
-        const exists = sc.some((x) => String(x.id) === String(selectedScenarioId));
+        const exists = rows.some((x) => String(x.id) === String(selectedScenarioId));
         if (!exists) {
           writeSelectedScenarioId(schoolId, null);
           setSelectedScenarioId(null);
@@ -1026,7 +1037,7 @@ export default function SchoolPage() {
       setLastSavedAt(null);
       setLastCalculatedAt(null);
       try {
-        const data = await api.getScenarioInputs(schoolId, selectedScenarioId);
+        const data = await api.getScenarioContext(schoolId, selectedScenarioId);
 
         // IMPORTANT FIX:
         setSelectedScenario(data?.scenario || null);
@@ -1042,17 +1053,10 @@ export default function SchoolPage() {
         setBaselineInputs(normalized && typeof normalized === "object" ? structuredClone(normalized) : normalized);
         clearDirtyPrefix("inputs.");
 
-        // Load scenario-scoped norm configuration. If missing permission, keep null.
-        try {
-          const n = await api.getNormConfig(schoolId, selectedScenarioId);
-          setNorm(n);
-          setBaselineNorm(n ? structuredClone(n) : null);
-          clearDirtyPrefix("norm.");
-        } catch (_) {
-          setNorm(null);
-          setBaselineNorm(null);
-          clearDirtyPrefix("norm.");
-        }
+        const n = data?.norm ?? null;
+        setNorm(n);
+        setBaselineNorm(n ? structuredClone(n) : null);
+        clearDirtyPrefix("norm.");
       } catch (e) {
         setErr(e.message || "Failed to load scenario inputs");
       }

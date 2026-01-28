@@ -1,23 +1,31 @@
 //frontend/src/pages/SchoolsPage.jsx
 
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { Link, useOutletContext } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import Button from "../components/ui/Button";
 import { FaFolderOpen as FaOpen } from "react-icons/fa";
 import ProgressBar from "../components/ui/ProgressBar";
-import { computeScenarioProgress } from "../utils/scenarioProgress";
+
+const SCENARIO_PREFETCH_PARAMS = {
+  limit: 50,
+  offset: 0,
+  fields: "brief",
+  order: "created_at:desc",
+};
 
 export default function SchoolsPage() {
   const auth = useAuth();
   const outlet = useOutletContext();
+  const queryClient = useQueryClient();
+  const prefetchedFirstRef = useRef(false);
   const [schools, setSchools] = useState([]);
   const [err, setErr] = useState("");
   const [schoolProgress, setSchoolProgress] = useState({});
   const [progressLoading, setProgressLoading] = useState(false);
-  const [progressConfig, setProgressConfig] = useState(null);
   const isAssigned = auth.user?.country_id != null;
 
   useEffect(() => {
@@ -38,38 +46,6 @@ export default function SchoolsPage() {
     return () => outlet.clearHeaderMeta?.();
   }, [outlet]);
 
-  const computeSchoolProgressForSchool = useCallback(async (schoolId) => {
-    const scenarios = await api.listScenarios(schoolId);
-    const list = Array.isArray(scenarios) ? scenarios : [];
-    const active = list.filter((s) => s.status !== "approved");
-    if (!list.length) {
-      return { state: "empty", label: "Senaryo yok" };
-    }
-    if (!active.length) {
-      return { state: "approved", label: "Tum senaryolar onayli" };
-    }
-
-    const latest = active
-      .slice()
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-
-    const [inputsData, normData] = await Promise.all([
-      api.getScenarioInputs(schoolId, latest.id),
-      api.getNormConfig(schoolId, latest.id).catch(() => null),
-    ]);
-
-    const progress = computeScenarioProgress({
-      inputs: inputsData?.inputs,
-      norm: normData,
-      config: progressConfig,
-      scenario: latest,
-    });
-    const tooltipLines = progress.missingDetailsLines.length
-      ? ["Eksik:", ...progress.missingDetailsLines]
-      : ["Tum tablar tamamlandi"];
-    return { state: "active", pct: progress.pct, tooltipLines };
-  }, [progressConfig]);
-
   const loadProgress = useCallback(async (rows) => {
     if (!Array.isArray(rows) || !rows.length) {
       setSchoolProgress({});
@@ -77,35 +53,50 @@ export default function SchoolsPage() {
     }
     setProgressLoading(true);
     try {
-      const progressRows = await Promise.all(
-        rows.map(async (s) => {
-          try {
-            return await computeSchoolProgressForSchool(s.id);
-          } catch (_) {
-            return { state: "error", label: "Ilerleme hesaplanamadi" };
-          }
-        })
-      );
-      const map = {};
-      rows.forEach((s, idx) => {
-        map[s.id] = progressRows[idx];
-      });
+      const ids = rows.map((s) => s.id);
+      const data = await api.getSchoolsProgressBulk(ids);
+      const map = data?.progressBySchoolId && typeof data.progressBySchoolId === "object"
+        ? data.progressBySchoolId
+        : {};
       setSchoolProgress(map);
+    } catch (_) {
+      const fallback = {};
+      rows.forEach((s) => {
+        fallback[s.id] = { state: "error", label: "İlerleme hesaplanamadı" };
+      });
+      setSchoolProgress(fallback);
     } finally {
       setProgressLoading(false);
     }
-  }, [computeSchoolProgressForSchool]);
+  }, []);
+
+  const prefetchScenarios = useCallback(
+    (schoolId) => {
+      if (!schoolId) return;
+      queryClient.prefetchQuery({
+        queryKey: ["scenarios", schoolId, SCENARIO_PREFETCH_PARAMS],
+        queryFn: () => api.listScenarios(schoolId, SCENARIO_PREFETCH_PARAMS),
+        staleTime: 60_000,
+      });
+    },
+    [queryClient]
+  );
 
   const load = useCallback(async () => {
     setErr("");
     try {
-      const rows = await api.listSchools();
+      const data = await api.listSchools({
+        limit: 50,
+        offset: 0,
+        fields: "brief",
+        order: "name:asc",
+      });
+      const rows = Array.isArray(data?.items) ? data.items : [];
       setSchools(rows);
-      await loadProgress(rows);
     } catch (e) {
       setErr(e.message || "Failed to load schools");
     }
-  }, [loadProgress]);
+  }, []);
 
   useEffect(() => {
     if (!auth.user) return;
@@ -114,36 +105,21 @@ export default function SchoolsPage() {
       setErr("");
       setSchoolProgress({});
       setProgressLoading(false);
-      setProgressConfig(null);
       return;
     }
     load();
   }, [auth.user, isAssigned, load]);
 
   useEffect(() => {
-    let active = true;
-    if (!auth.user || !isAssigned) return () => { };
-    async function loadConfig() {
-      try {
-        const data = await api.getProgressRequirements();
-        if (!active) return;
-        setProgressConfig(data?.config || data || null);
-      } catch (_) {
-        if (!active) return;
-        setProgressConfig(null);
-      }
-    }
-    loadConfig();
-    return () => {
-      active = false;
-    };
-  }, [auth.user, isAssigned]);
+    if (!schools.length) return;
+    loadProgress(schools);
+  }, [schools, loadProgress]);
 
   useEffect(() => {
-    if (!schools.length) return;
-    if (!progressConfig) return;
-    loadProgress(schools);
-  }, [progressConfig, schools, loadProgress]);
+    if (!schools.length || prefetchedFirstRef.current) return;
+    prefetchScenarios(schools[0]?.id);
+    prefetchedFirstRef.current = true;
+  }, [schools, prefetchScenarios]);
 
   return (
     <div className="container">
@@ -195,7 +171,13 @@ export default function SchoolsPage() {
                   <td className="small">{new Date(s.updated_at || s.created_at).toLocaleString()}</td>
                   <td>
                     <div className="row">
-                      <Button as={Link} variant="primary" size="sm" to={`/select?schoolId=${s.id}`}>
+                      <Button
+                        as={Link}
+                        variant="primary"
+                        size="sm"
+                        to={`/select?schoolId=${s.id}`}
+                        onMouseEnter={() => prefetchScenarios(s.id)}
+                      >
                         <FaOpen /> Aç
                       </Button>
                     </div>

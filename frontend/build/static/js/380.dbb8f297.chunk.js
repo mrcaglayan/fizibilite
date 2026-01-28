@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkfrontend=self.webpackChunkfrontend||[]).push([[380],{5380(e,r,n){n.r(r),n.d(r,{default:()=>t});n(5043);var s=n(613),f=n(579);function t(){return(0,f.jsx)(s.A,{forcedTab:"progress"})}}}]);
+//# sourceMappingURL=380.dbb8f297.chunk.js.map

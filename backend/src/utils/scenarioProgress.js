@@ -1,5 +1,9 @@
 const YEAR_KEYS = ["y1", "y2", "y3"];
 
+// Bump this whenever the progress calculation rules change.
+// Used to invalidate cached progress_json/progress_pct without requiring a DB migration.
+const PROGRESS_ENGINE_VERSION = 2;
+
 const KADEME_DEFS = [
   { key: "okulOncesi", label: "Okul Oncesi", defaultFrom: "KG", defaultTo: "KG" },
   { key: "ilkokul", label: "Ilkokul", defaultFrom: "1", defaultTo: "5" },
@@ -576,7 +580,9 @@ function buildProgressCatalog({ inputs, norm } = {}) {
 
 function isFilled(value, type) {
   if (type === "string") return isNonEmptyString(value);
-  if (type === "boolean") return value === true;
+  // For boolean fields (e.g. kademe enabled toggles) we consider both true/false as "filled".
+  // Only null/undefined should count as missing.
+  if (type === "boolean") return typeof value === "boolean";
   const n = toNum(value);
   return n > 0;
 }
@@ -769,6 +775,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
   const totalCount = tabs.length;
 
   return {
+    engineVersion: PROGRESS_ENGINE_VERSION,
     pct,
     completedCount,
     totalCount,
@@ -778,6 +785,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
 }
 
 module.exports = {
+  PROGRESS_ENGINE_VERSION,
   DEFAULT_PROGRESS_CONFIG,
   buildProgressCatalog,
   computeScenarioProgress,

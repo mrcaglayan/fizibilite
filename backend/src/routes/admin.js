@@ -10,6 +10,7 @@ const { PERMISSIONS_CATALOG } = require("../utils/permissionsCatalog");
 const { getUserPermissions } = require("../utils/permissionService");
 const { getProgressConfig, parseJsonValue } = require("../utils/progressConfig");
 const { REQUIRED_WORK_IDS } = require("../utils/scenarioWorkflow");
+const { parseListParams } = require("../utils/listParams");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -346,17 +347,107 @@ router.put("/progress-requirements/bulk", async (req, res) => {
 router.get("/users", async (req, res) => {
   try {
     const unassigned = String(req.query?.unassigned || "") === "1";
+    let listParams;
+    try {
+      listParams = parseListParams(req.query, {
+        defaultLimit: 50,
+        maxLimit: 200,
+        defaultOffset: 0,
+        allowedOrderColumns: {
+          id: "u.id",
+          full_name: "u.full_name",
+          email: "u.email",
+          role: "u.role",
+          created_at: "u.created_at",
+        },
+        defaultOrder: { column: "id", direction: "desc" },
+      });
+    } catch (err) {
+      if (err?.status === 400) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+
+    const { limit, offset, fields, order, orderBy, isPagedOrSelective, hasOffsetParam } = listParams;
     const pool = getPool();
-    const where = unassigned ? "WHERE u.country_id IS NULL" : "";
-    const [rows] = await pool.query(
-      `SELECT u.id, u.full_name, u.email, u.role, u.country_id, u.region, u.must_reset_password,
-              c.name AS country_name, c.code AS country_code, c.region AS country_region
+    const where = [];
+    const params = {};
+    if (unassigned) {
+      where.push("u.country_id IS NULL");
+    }
+
+    const columnsBrief = [
+      "u.id",
+      "u.full_name",
+      "u.email",
+      "u.role",
+      "u.country_id",
+      "u.region",
+      "u.must_reset_password",
+      "c.name AS country_name",
+      "c.code AS country_code",
+    ];
+    const columnsAll = [
+      "u.id",
+      "u.full_name",
+      "u.email",
+      "u.role",
+      "u.country_id",
+      "u.region",
+      "u.must_reset_password",
+      "c.name AS country_name",
+      "c.code AS country_code",
+      "c.region AS country_region",
+    ];
+    const columns = fields === "brief" ? columnsBrief : columnsAll;
+
+    const fromClause = "FROM users u LEFT JOIN countries c ON c.id = u.country_id";
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const orderClause = `ORDER BY ${orderBy || "u.id DESC"}`;
+
+    if (!isPagedOrSelective && fields === "all") {
+      const [rows] = await pool.query(
+        `SELECT ${columns.join(", ")}
+         ${fromClause}
+         ${whereClause}
+         ${orderClause}`,
+        params
+      );
+      return res.json(rows);
+    }
+
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) AS total
        FROM users u
-       LEFT JOIN countries c ON c.id = u.country_id
-       ${where}
-       ORDER BY u.id DESC`
+       ${whereClause}`,
+      params
     );
-    return res.json(rows);
+    const total = Number(countRows?.[0]?.total ?? 0);
+
+    const queryParams = { ...params };
+    const limitClause = limit != null ? " LIMIT :limit" : "";
+    if (limit != null) queryParams.limit = limit;
+    const useOffset = hasOffsetParam || (limit != null && offset != null);
+    const offsetClause = useOffset ? " OFFSET :offset" : "";
+    if (useOffset) queryParams.offset = offset;
+
+    const [rows] = await pool.query(
+      `SELECT ${columns.join(", ")}
+       ${fromClause}
+       ${whereClause}
+       ${orderClause}${limitClause}${offsetClause}`,
+      queryParams
+    );
+
+    return res.json({
+      users: rows,
+      total,
+      limit: limit ?? null,
+      offset: offset ?? 0,
+      fields,
+      order: order ? `${order.column}:${order.direction}` : null,
+    });
   } catch (e) {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }

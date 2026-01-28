@@ -39,8 +39,46 @@ function toQuery(params = {}) {
   return str ? `?${str}` : "";
 }
 
-async function request(path, { method = "GET", body, token } = {}) {
+function normalizeListResponse(payload, key) {
+  if (Array.isArray(payload)) {
+    return {
+      items: payload,
+      total: payload.length,
+      limit: null,
+      offset: 0,
+      fields: "all",
+      order: null,
+    };
+  }
+
+  if (payload && typeof payload === "object") {
+    const items = Array.isArray(payload[key])
+      ? payload[key]
+      : Array.isArray(payload.items)
+        ? payload.items
+        : [];
+    const total = Number(payload.total ?? (Array.isArray(items) ? items.length : 0));
+    return {
+      items,
+      total,
+      limit: payload.limit ?? null,
+      offset: payload.offset ?? 0,
+      fields: payload.fields ?? "all",
+      order: payload.order ?? null,
+    };
+  }
+
+  return { items: [], total: 0, limit: null, offset: 0, fields: "all", order: null };
+}
+
+async function request(path, { method = "GET", body, token, noCache = false } = {}) {
   const headers = { "Content-Type": "application/json", ...getAuthHeaders(token) };
+  // Progress endpoints are intentionally dynamic; bypass browser HTTP caching.
+  // This still allows fast 304 responses via ETag/Last-Modified when unchanged.
+  if (noCache) {
+    headers["Cache-Control"] = "no-cache";
+    headers["Pragma"] = "no-cache";
+  }
 
   try {
     const res = await axios.request({
@@ -148,9 +186,12 @@ export const api = {
       method: "PUT",
       body: { countryIds, config },
     }),
-  listUsers: (opts = {}) => {
-    const qs = opts.unassigned ? "?unassigned=1" : "";
-    return request(`/admin/users${qs}`);
+  listUsers: async (opts = {}) => {
+    const { unassigned, ...rest } = opts || {};
+    const params = { ...rest };
+    if (unassigned) params.unassigned = 1;
+    const res = await request(`/admin/users${toQuery(params)}`);
+    return normalizeListResponse(res, "users");
   },
   createUser: (payload) => request("/admin/users", { method: "POST", body: payload }),
   assignUserCountry: (userId, payload) => request(`/admin/users/${userId}/country`, { method: "PATCH", body: payload }),
@@ -158,7 +199,10 @@ export const api = {
 
   changePassword: (payload) => request("/auth/change-password", { method: "POST", body: payload }),
 
-  listSchools: () => request("/schools"),
+  listSchools: async (opts = {}) => {
+    const res = await request(`/schools${toQuery(opts)}`);
+    return normalizeListResponse(res, "schools");
+  },
   createSchool: (payload) => request("/schools", { method: "POST", body: payload }),
   deleteSchool: (id) => request(`/schools/${id}`, { method: "DELETE" }),
   getSchool: (id) => request(`/schools/${id}`),
@@ -172,13 +216,21 @@ export const api = {
     return request(`/schools/${schoolId}/norm-config${qs}`, { method: "PUT", body: payload });
   },
 
-  listScenarios: (schoolId) => request(`/schools/${schoolId}/scenarios`),
+  listScenarios: async (schoolId, opts = {}) => {
+    const res = await request(`/schools/${schoolId}/scenarios${toQuery(opts)}`);
+    return normalizeListResponse(res, "scenarios");
+  },
   createScenario: (schoolId, payload) => request(`/schools/${schoolId}/scenarios`, { method: "POST", body: payload }),
   updateScenario: (schoolId, scenarioId, payload) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}`, { method: "PATCH", body: payload }),
   deleteScenario: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}`, { method: "DELETE" }),
   getScenarioInputs: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/inputs`),
+  getScenarioContext: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/context`),
+  getScenarioProgress: (schoolId, scenarioId) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/progress`, { noCache: true }),
+  getSchoolsProgressBulk: (schoolIds = []) =>
+    request(`/schools/progress?schoolIds=${encodeURIComponent(schoolIds.join(","))}`, { noCache: true }),
   /**
    * Save scenario inputs. Optionally accept a list of modifiedPaths for non‑admin enforcement.
    *
@@ -337,7 +389,10 @@ export const api = {
   /**
    * List users in the manager's country.  Requires manage_permissions permission.
    */
-  managerListUsers: () => request("/manager/users"),
+  managerListUsers: async (opts = {}) => {
+    const res = await request(`/manager/users${toQuery(opts)}`);
+    return normalizeListResponse(res, "users");
+  },
   /**
    * Create a new user (principal or HR) within the caller's country.
    * Requires user.create permission.

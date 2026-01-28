@@ -24,7 +24,8 @@ app.use(cors({
   credentials: false
 }));
 
-app.use(compression());
+app.set("etag", "weak");
+app.use(compression({ threshold: 1024 }));
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -56,6 +57,8 @@ const isProduction = process.env.NODE_ENV === "production";
 const staticCacheOptions = {
   maxAge: isProduction ? 30 * 24 * 60 * 60 * 1000 : 0,
   immutable: isProduction,
+  etag: true,
+  lastModified: true,
   setHeaders(res, filePath) {
     if (filePath.endsWith(".html")) {
       res.setHeader("Cache-Control", "no-cache");

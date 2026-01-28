@@ -3,6 +3,7 @@
 const {
   computeIncomeFromGelirler,
   computeStudentsFromGrades,
+  calculateDiscounts,
 } = require("../engine/feasibilityEngine");
 
 function safeNum(value) {
@@ -27,7 +28,6 @@ const OPERATING_KEYS = new Set([
   "yerelPersonelMaas",
   "yerelDestekPersonelMaas",
   "internationalPersonelMaas",
-  "sharedPayrollAllocation",
   "disaridanHizmet",
   "egitimAracGerec",
   "finansalGiderler",
@@ -57,7 +57,6 @@ const DORM_TO_INCOME_KEY = {
   digerYurt: "yazOkulu",
 };
 const DISCOUNT_TOTAL_KEY = "discountsTotal";
-const DISTRIBUTED_DISCOUNT_NAME = "Paylaşılan Burs/İndirim (Dağıtım)";
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -70,14 +69,18 @@ function pickGradesForY1(inputs) {
   return [];
 }
 
-function computeGrossTuitionY1(inputs) {
+function computeDiscountBaseY1(inputs) {
   const grades = pickGradesForY1(inputs);
-  const totalStudents = computeStudentsFromGrades(grades).total;
+  const totalStudents = computeStudentsFromGrades(grades).totalStudents;
   const incomeBase = computeIncomeFromGelirler({
     totalStudents,
     gelirler: inputs?.gelirler || {},
   });
-  return safeNum(incomeBase?.grossTuition);
+  return {
+    tuitionStudents: safeNum(incomeBase?.tuitionStudents),
+    grossTuition: safeNum(incomeBase?.grossTuition),
+    tuitionAvgFee: safeNum(incomeBase?.tuitionAvgFee),
+  };
 }
 
 function applyDistributionOverlay(inputs, allocations) {
@@ -132,27 +135,72 @@ function applyDistributionOverlay(inputs, allocations) {
     }
 
     if (key === DISCOUNT_TOTAL_KEY) {
-      const grossTuition = computeGrossTuitionY1(next);
-      if (grossTuition <= 0) continue;
+      const { tuitionStudents, grossTuition, tuitionAvgFee } = computeDiscountBaseY1(next);
+      if (grossTuition <= 0 || tuitionStudents <= 0) continue;
       const deltaPct = add / grossTuition;
       if (!Number.isFinite(deltaPct) || deltaPct <= 0) continue;
 
       const list = Array.isArray(next.discounts) ? [...next.discounts] : [];
-      const idx = list.findIndex(
-        (d) => String(d?.name || "") === DISTRIBUTED_DISCOUNT_NAME
-      );
-      const prev = idx >= 0 ? list[idx] : { name: DISTRIBUTED_DISCOUNT_NAME };
-      const nextValue = clamp(safeNum(prev.value) + deltaPct, 0, 1);
-      const updated = {
-        ...prev,
-        name: DISTRIBUTED_DISCOUNT_NAME,
-        mode: "percent",
-        ratio: 1,
-        value: nextValue,
+      if (!list.length) continue;
+
+      const normalizeDiscount = (d) => {
+        if (!d || typeof d !== "object") return null;
+        const countRaw = d.studentCount != null && d.studentCount !== "" ? safeNum(d.studentCount) : null;
+        const ratioFromCount =
+          countRaw != null && tuitionStudents > 0 ? clamp(countRaw / tuitionStudents, 0, 1) : null;
+        const ratio = ratioFromCount != null ? ratioFromCount : clamp(safeNum(d.ratio), 0, 1);
+        return {
+          ...d,
+          ratio,
+          value: safeNum(d.value),
+          mode: String(d.mode || "percent").toLowerCase(),
+        };
       };
-      if (idx >= 0) list[idx] = updated;
-      else list.push(updated);
-      next.discounts = list;
+
+      const normalized = list.map(normalizeDiscount);
+      const disc = calculateDiscounts({
+        tuitionStudents,
+        grossTuition,
+        tuitionAvgFee,
+        discountCategories: normalized.filter(Boolean),
+      });
+      const currentTotal = safeNum(disc?.totalDiscounts);
+
+      if (currentTotal > 0) {
+        const scale = (currentTotal + add) / currentTotal;
+        const nextList = list.map((d) => {
+          if (!d || typeof d !== "object") return d;
+          const mode = String(d.mode || "percent").toLowerCase();
+          const value = safeNum(d.value);
+          if (mode === "fixed") {
+            return { ...d, value: value * scale };
+          }
+          return { ...d, value: clamp(value * scale, 0, 1) };
+        });
+        next.discounts = nextList;
+        continue;
+      }
+
+      const ratios = normalized
+        .map((d) => (d && Number.isFinite(Number(d.ratio)) ? Number(d.ratio) : 0))
+        .map((r) => clamp(r, 0, 1));
+      const sumRatio = ratios.reduce((s, r) => s + r, 0);
+      if (sumRatio <= 0) continue;
+
+      const deltaPctPerRatio = deltaPct / sumRatio;
+      const deltaFixedPerRatio = add / (tuitionStudents * sumRatio);
+      const nextList = list.map((d, idx) => {
+        if (!d || typeof d !== "object") return d;
+        const ratio = ratios[idx] || 0;
+        if (!(ratio > 0)) return d;
+        const mode = String(d.mode || "percent").toLowerCase();
+        const value = safeNum(d.value);
+        if (mode === "fixed") {
+          return { ...d, value: value + deltaFixedPerRatio };
+        }
+        return { ...d, value: clamp(value + deltaPctPerRatio, 0, 1) };
+      });
+      next.discounts = nextList;
     }
   }
 

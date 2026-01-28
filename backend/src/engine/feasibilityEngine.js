@@ -400,7 +400,6 @@ const OPERATING_KEYS = [
   "yerelPersonelMaas",
   "yerelDestekPersonelMaas",
   "internationalPersonelMaas",
-  "sharedPayrollAllocation",
   "disaridanHizmet",
   "egitimAracGerec",
   "finansalGiderler",
@@ -433,7 +432,6 @@ const ISLETME_KEY_TO_CODE = {
   yerelPersonelMaas: 622,
   yerelDestekPersonelMaas: 622,
   internationalPersonelMaas: 622,
-  sharedPayrollAllocation: 622,
 
   disaridanHizmet: 632,
   egitimAracGerec: 622,
@@ -1143,10 +1141,14 @@ function deriveInputForYear(baseInput, yearKey, factors, salaryByYear) {
   const ikY = salaryByYear?.[yearKey] || {};
 
   for (const k of salaryKeys) {
-    const base = safeNum(ikY1?.[k]) > 0 ? safeNum(ikY1[k]) : safeNum(baseIsletmeY1?.[k]);
+    const baseIsletmeVal = safeNum(baseIsletmeY1?.[k]);
+    const ikBaseY1 = safeNum(ikY1?.[k]);
+    const extraY1 = ikBaseY1 > 0 ? Math.max(0, baseIsletmeVal - ikBaseY1) : 0;
+    const base = ikBaseY1 > 0 ? ikBaseY1 : baseIsletmeVal;
     const fromIk = safeNum(ikY?.[k]);
-    const val = fromIk > 0 ? fromIk : base * f;
-    out.giderler.isletme.items[k] = val;
+    const baseYearVal = fromIk > 0 ? fromIk : yearKey === "y1" ? base : base * f;
+    const extraYearVal = yearKey === "y1" ? extraY1 : extraY1 * f;
+    out.giderler.isletme.items[k] = baseYearVal + extraYearVal;
   }
 
   return out;

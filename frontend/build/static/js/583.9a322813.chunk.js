@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkfrontend=self.webpackChunkfrontend||[]).push([[583],{5583(e,n,r){r.r(n),r.d(n,{default:()=>s});r(5043);var a=r(613),f=r(579);function s(){return(0,f.jsx)(a.A,{forcedTab:"approvals"})}}}]);
+//# sourceMappingURL=583.9a322813.chunk.js.map

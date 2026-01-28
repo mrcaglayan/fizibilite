@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo, useCallback, useId, useRef } from 
 import { AnimatePresence, motion } from 'motion/react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { toast } from 'react-toastify';
+import { FaCheck, FaCheckCircle, FaExclamationTriangle, FaPaperPlane, FaSearch, FaStar, FaThLarge } from 'react-icons/fa';
 import { api } from '../api';
 import { useOutsideClick } from '../hooks/useOutsideClick';
 import { useAuth } from '../auth/AuthContext';
@@ -12,7 +13,7 @@ import { writeGlobalLastRouteSegment, writeLastVisitedPath, writeSelectedScenari
 /**
  * ManagerReviewQueuePage
  *
- * Displays a list of scenarios grouped by school for manager review.  Managers,
+ * Displays a list of scenarios for manager review.  Managers,
  * accountants, admins, or users granted the manage_permissions permission can
  * access this page.  The page lists each scenario's required modules and
  * allows the reviewer to approve or request revision for submitted modules.
@@ -50,14 +51,25 @@ const WORK_ID_TO_ROUTE = {
 };
 
 const FILTER_TABS = [
-  { key: 'all', label: 'TÃ¼mÃ¼' },
-  { key: 'ready', label: 'Merkeze Ä°letmeye HazÄ±r' },
-  { key: 'in_review', label: 'Ä°ncelemede' },
-  { key: 'revision', label: 'Revize Ä°stendi' },
+  { key: 'all', label: 'Tümü' },
+  { key: 'ready', label: 'Merkeze İletilmeye Hazır' },
+  { key: 'in_review', label: 'İncelemede' },
+  { key: 'revision', label: 'Revize İstendi' },
   { key: 'approved', label: 'Kontrol Edildi' },
-  { key: 'sent', label: 'Merkeze Ä°letildi' },
-  { key: 'approved_final', label: 'OnaylandÄ±' },
+  { key: 'sent', label: 'Merkeze İletildi' },
+  { key: 'approved_final', label: 'Onaylandı' },
 ];
+
+const FILTER_TAB_ICONS = {
+  all: FaThLarge,
+  ready: FaCheckCircle,
+  in_review: FaSearch,
+  revision: FaExclamationTriangle,
+  approved: FaCheck,
+  sent: FaPaperPlane,
+  approved_final: FaStar,
+};
+
 
 // Map scenario status and sent_at to visual badge metadata.  A scenario
 // that is approved but has not yet been forwarded to administrators
@@ -111,6 +123,7 @@ export default function ManagerReviewQueuePage() {
   const [activeCard, setActiveCard] = useState(null);
   const modalRef = useRef(null);
   const motionId = useId();
+  const tabsId = useId();
 
   const closeModal = useCallback(() => setActiveCard(null), []);
   useOutsideClick(modalRef, closeModal, Boolean(activeCard));
@@ -224,6 +237,11 @@ export default function ManagerReviewQueuePage() {
     return queueData.filter((entry) => matchFilter(entry, activeFilter));
   }, [queueData, activeFilter, matchFilter]);
 
+  const activeTabIndex = Math.max(
+    0,
+    FILTER_TABS.findIndex((tab) => tab.key === activeFilter)
+  );
+
   const handleNavigateToModule = useCallback(
     (schoolId, scenarioId, workId) => {
       const segment = WORK_ID_TO_ROUTE[workId];
@@ -235,6 +253,13 @@ export default function ManagerReviewQueuePage() {
     },
     [navigate]
   );
+
+  const handleTabKeyDown = useCallback((event, tabKey) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setActiveFilter(tabKey);
+    }
+  }, []);
 
   // Handlers for approving or revising a work item
   const handleApprove = async (schoolId, scenarioId, workId) => {
@@ -281,17 +306,6 @@ export default function ManagerReviewQueuePage() {
       toast.error(e?.message || 'Failed to send for approval');
     }
   };
-
-  // Group results by school for rendering
-  const grouped = useMemo(() => {
-    const bySchool = {};
-    for (const entry of filteredRows) {
-      const sid = String(entry.school.id);
-      if (!bySchool[sid]) bySchool[sid] = { school: entry.school, scenarios: [] };
-      bySchool[sid].scenarios.push(entry);
-    }
-    return Object.values(bySchool);
-  }, [filteredRows]);
 
   if (!canView) {
     return (
@@ -477,111 +491,136 @@ export default function ManagerReviewQueuePage() {
         ) : null}
       </AnimatePresence>
 
-      <div className="review-queue-tabs" role="tablist" aria-label="Senaryo filtresi">
-        {FILTER_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            aria-selected={activeFilter === tab.key}
-            className={`review-queue-tab ${activeFilter === tab.key ? 'is-active' : ''}`}
-            onClick={() => setActiveFilter(tab.key)}
-          >
-            <span>{tab.label}</span>
-            <span className="review-queue-count">{filterCounts[tab.key] ?? 0}</span>
-          </button>
-        ))}
-      </div>
+      <section
+        className="review-queue-tabs"
+        style={{
+          '--rq-tab-count': FILTER_TABS.length,
+          '--rq-active-index': activeTabIndex,
+        }}
+      >
+        {FILTER_TABS.map((tab) => {
+          const inputId = `${tabsId}-${tab.key}`;
+          return (
+            <input
+              key={inputId}
+              id={inputId}
+              type="radio"
+              name={`review-queue-filter-${tabsId}`}
+              className="rq-tab-input"
+              checked={activeFilter === tab.key}
+              onChange={() => setActiveFilter(tab.key)}
+            />
+          );
+        })}
+
+        <nav className="rq-tab-nav" role="tablist" aria-label="Senaryo filtresi">
+          {FILTER_TABS.map((tab) => {
+            const inputId = `${tabsId}-${tab.key}`;
+            const isActive = activeFilter === tab.key;
+            const Icon = FILTER_TAB_ICONS[tab.key];
+            return (
+              <label
+                key={tab.key}
+                htmlFor={inputId}
+                role="tab"
+                aria-selected={isActive}
+                tabIndex={0}
+                className={`review-queue-tab ${isActive ? 'is-active' : ''}`}
+                onKeyDown={(event) => handleTabKeyDown(event, tab.key)}
+              >
+                <span className="rq-tab-icon">{Icon ? <Icon aria-hidden="true" /> : null}</span>
+                <span className="rq-tab-text">{tab.label}</span>
+                <span className="review-queue-count">{filterCounts[tab.key] ?? 0}</span>
+              </label>
+            );
+          })}
+        </nav>
+      </section>
 
       {loading ? (
         <div className="card">Loading...</div>
-      ) : grouped.length === 0 ? (
+      ) : filteredRows.length === 0 ? (
         <div className="card">
           <div>No scenarios to review</div>
         </div>
       ) : (
-        grouped.map(({ school, scenarios }) => (
-          <div key={school.id} style={{ marginBottom: 24 }}>
-            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>{school.name}</div>
+        <div className="review-queue-cards">
+          {filteredRows.map(({ school, scenario, requiredItems, approvedCount }) => {
+            const statusMeta = getScenarioStatusMeta(scenario);
+            const allApproved = approvedCount === REQUIRED_WORK_IDS.length;
 
-            <div className="review-queue-cards">
-              {scenarios.map(({ scenario, requiredItems, approvedCount }) => {
-                const statusMeta = getScenarioStatusMeta(scenario);
-                const allApproved = approvedCount === REQUIRED_WORK_IDS.length;
+            const cardPayload = { school, scenario, requiredItems, approvedCount };
 
-                const cardPayload = { school, scenario, requiredItems, approvedCount };
+            return (
+              <motion.div
+                key={scenario.id}
+                layoutId={`rq-card-${scenario.id}-${motionId}`}
+                className="card rq-card-compact"
+                onClick={() => setActiveCard(cardPayload)}
+              >
+                <div className="rq-compact-row">
+                  <div className="rq-compact-left">
+                    <motion.div
+                      layoutId={`rq-thumb-${scenario.id}-${motionId}`}
+                      className="rq-thumb"
+                    >
+                      {getScenarioInitials(scenario)}
+                    </motion.div>
 
-                return (
-                  <motion.div
-                    key={scenario.id}
-                    layoutId={`rq-card-${scenario.id}-${motionId}`}
-                    className="card rq-card-compact"
-                    onClick={() => setActiveCard(cardPayload)}
-                  >
-                    <div className="rq-compact-row">
-                      <div className="rq-compact-left">
-                        <motion.div
-                          layoutId={`rq-thumb-${scenario.id}-${motionId}`}
-                          className="rq-thumb"
-                        >
-                          {getScenarioInitials(scenario)}
-                        </motion.div>
+                    <div>
+                      <div className="rq-kicker">{school?.name}</div>
+                      <motion.div
+                        layoutId={`rq-title-${scenario.id}-${motionId}`}
+                        className="rq-title"
+                      >
+                        {scenario.name} ({scenario.academic_year})
+                      </motion.div>
 
-                        <div>
-                          <motion.div
-                            layoutId={`rq-title-${scenario.id}-${motionId}`}
-                            className="rq-title"
-                          >
-                            {scenario.name} ({scenario.academic_year})
-                          </motion.div>
-
-                          <div className="rq-subtitle">
-                            <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
-                            <span className="small is-muted" style={{ marginLeft: 8 }}>
-                              {approvedCount}/{REQUIRED_WORK_IDS.length} onaylandı
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rq-actions">
-                        <button
-                          type="button"
-                          className="rq-open-pill"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveCard(cardPayload);
-                          }}
-                        >
-                          İncele
-                        </button>
-
-                        <button
-                          className="btn sm primary"
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSendForApproval(school.id, scenario.id);
-                          }}
-                          disabled={!allApproved || scenario.status !== 'approved' || scenario.sent_at != null}
-                          title={
-                            !allApproved
-                              ? 'Tüm modüller tamamlanmalı'
-                              : scenario.status !== 'approved' || scenario.sent_at
-                              ? 'Durum izin vermiyor'
-                              : undefined
-                          }
-                        >
-                          Merkeze ilet
-                        </button>
+                      <div className="rq-subtitle">
+                        <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
+                        <span className="small is-muted" style={{ marginLeft: 8 }}>
+                          {approvedCount}/{REQUIRED_WORK_IDS.length} onaylandı
+                        </span>
                       </div>
                     </div>
-                  </motion.div>
-                );
-              })}
-            </div>
-          </div>
-        ))
+                  </div>
+
+                  <div className="rq-actions">
+                    <button
+                      type="button"
+                      className="rq-open-pill"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveCard(cardPayload);
+                      }}
+                    >
+                      İncele
+                    </button>
+
+                    <button
+                      className="btn sm primary"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSendForApproval(school.id, scenario.id);
+                      }}
+                      disabled={!allApproved || scenario.status !== 'approved' || scenario.sent_at != null}
+                      title={
+                        !allApproved
+                          ? 'Tüm modüller tamamlanmalı'
+                          : scenario.status !== 'approved' || scenario.sent_at
+                          ? 'Durum izin vermiyor'
+                          : undefined
+                      }
+                    >
+                      Merkeze ilet
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

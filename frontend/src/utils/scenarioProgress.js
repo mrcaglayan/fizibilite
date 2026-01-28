@@ -8,7 +8,9 @@ import {
 
 function isFilled(value, type) {
   if (type === "string") return isNonEmptyString(value);
-  if (type === "boolean") return value === true;
+  // For boolean fields we accept both true/false as "filled".
+  // Only null/undefined should be treated as missing.
+  if (type === "boolean") return typeof value === "boolean";
   const n = toNum(value);
   return n > 0;
 }

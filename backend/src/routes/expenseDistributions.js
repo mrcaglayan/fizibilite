@@ -19,14 +19,6 @@ router.use(requireAuth);
 router.use(requireAssignedCountry);
 router.use("/schools/:schoolId", requireSchoolContextAccess("schoolId"));
 
-const IK_AUTO_KEYS = new Set([
-  "turkPersonelMaas",
-  "turkDestekPersonelMaas",
-  "yerelPersonelMaas",
-  "yerelDestekPersonelMaas",
-  "internationalPersonelMaas",
-]);
-
 const OPERATING_KEYS = new Set([
   "ulkeTemsilciligi",
   "genelYonetim",
@@ -38,7 +30,6 @@ const OPERATING_KEYS = new Set([
   "yerelPersonelMaas",
   "yerelDestekPersonelMaas",
   "internationalPersonelMaas",
-  "sharedPayrollAllocation",
   "disaridanHizmet",
   "egitimAracGerec",
   "finansalGiderler",
@@ -102,7 +93,7 @@ function pickGradesForY1(inputs) {
 
 function computeDiscountTotalY1(inputs, warnings) {
   const grades = pickGradesForY1(inputs);
-  const totalStudents = computeStudentsFromGrades(grades).total;
+  const totalStudents = computeStudentsFromGrades(grades).totalStudents;
   const incomeBase = computeIncomeFromGelirler({
     totalStudents,
     gelirler: inputs?.gelirler || {},
@@ -218,10 +209,6 @@ function filterExpenseKeys(keys, warnings) {
     seen.add(key);
     if (!SPLITTABLE_KEYS.has(key)) {
       warnings.push(`Gider anahtari desteklenmiyor: ${key}`);
-      continue;
-    }
-    if (IK_AUTO_KEYS.has(key)) {
-      warnings.push(`IK otomatik gider anahtari seçilemez: ${key}`);
       continue;
     }
     valid.push(key);

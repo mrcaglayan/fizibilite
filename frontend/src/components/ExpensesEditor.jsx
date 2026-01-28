@@ -76,7 +76,6 @@ const OPERATING_ITEMS = [
   { key: "egitimAracGerec", no: 12, code: 622, label: "Eğitim Araç ve Gereçleri (Okul ve Sınıflar için Kırtasiye Malzemeleri, Kitaplar, vb.) - (Öğrencilere dönem başı verilen)" },
   { key: "finansalGiderler", no: 13, code: 632, label: "Finansal Giderler (Prim ödemeleri, Komisyon ve Kredi Giderleri, Teminat Mektupları)" },
   { key: "egitimAmacliHizmet", no: 14, code: 622, label: "Eğitim Amaçlı Hizmet Alımları (İzinler ve lisanslama, Cambridge Lisanslamaları vb.)" },
-  { key: "sharedPayrollAllocation", no: 15, code: 622, label: "Paylaşılan Bordro (Dağıtım)" },
 
   { key: "temsilAgirlama", no: 16, code: 632, label: "Temsil ve Ağırlama - Kampüs bazında (Öğlen Yemeği Giderleri Hariç) mutfak giderleri vs.)" },
   { key: "ulkeIciUlasim", no: 17, code: 622, label: "Ülke İçi Ulaşım ve Konaklama / Uçak Bileti Dahil / PERSONEL ULAŞIM" },
@@ -144,7 +143,6 @@ const BURS_DEFAULTS = [
   { name: "KURUM İNDİRİMİ" },
   { name: "İSTİSNAİ İNDİRİM" },
   { name: "YEREL MEVZUATIN ŞART KOŞTUĞU İNDİRİM" },
-  { name: "Paylaşılan Burs/İndirim (Dağıtım)" },
 ];
 
 function deepMerge(target, source) {
@@ -374,11 +372,14 @@ export default function ExpensesEditor({
   };
 
   const getSalaryAmount = (key, yearKey) => {
-    const base1 = Math.max(toNum(g?.isletme?.items?.[key]), toNum(salaryByYear?.y1?.[key]));
+    const baseIsletmeVal = toNum(g?.isletme?.items?.[key]);
+    const ikBaseY1 = toNum(salaryByYear?.y1?.[key]);
+    const extraY1 = ikBaseY1 > 0 ? Math.max(0, baseIsletmeVal - ikBaseY1) : 0;
+    const base = ikBaseY1 > 0 ? ikBaseY1 : baseIsletmeVal;
     const fromIk = toNum(salaryByYear?.[yearKey]?.[key]);
-    if (fromIk > 0) return fromIk;
-    if (yearKey === "y1") return base1;
-    return base1 * (factors?.[yearKey] ?? 1);
+    const baseYearVal = fromIk > 0 ? fromIk : yearKey === "y1" ? base : base * (factors?.[yearKey] ?? 1);
+    const extraYearVal = yearKey === "y1" ? extraY1 : extraY1 * (factors?.[yearKey] ?? 1);
+    return baseYearVal + extraYearVal;
   };
 
   const getOperatingAmount = (key, yearKey) => {

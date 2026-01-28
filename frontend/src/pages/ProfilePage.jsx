@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { api } from "../api";
+import { useListSchools } from "../hooks/useListQueries";
 import { useAuth } from "../auth/AuthContext";
 import Button from "../components/ui/Button";
 
@@ -22,6 +23,12 @@ export default function ProfilePage() {
   // the schools they have been assigned to; for other roles, it lists
   // all schools they can access (typically all schools in their country).
   const [assignedSchools, setAssignedSchools] = useState([]);
+  const schoolsQuery = useListSchools({
+    limit: 50,
+    offset: 0,
+    fields: "brief",
+    order: "name:asc",
+  });
 
   // Compute the list of schools to display.  Principals should see only
   // the schools they have been assigned to (via principalSchoolIds).  Other
@@ -95,26 +102,13 @@ export default function ProfilePage() {
     return () => outlet.clearHeaderMeta?.();
   }, [outlet]);
 
-  // Fetch the list of schools accessible to the user.  This is used to
-  // display which schools the user is responsible for.  Errors are
-  // ignored silently.
+  // Keep assigned schools in sync with the cached query.
   useEffect(() => {
-    let cancelled = false;
-    async function loadSchools() {
-      try {
-        const rows = await api.listSchools();
-        if (!cancelled && Array.isArray(rows)) {
-          setAssignedSchools(rows);
-        }
-      } catch (_) {
-        // ignore errors to avoid blocking the profile page
-      }
+    const rows = schoolsQuery.data?.items;
+    if (Array.isArray(rows)) {
+      setAssignedSchools(rows);
     }
-    loadSchools();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [schoolsQuery.data]);
 
   const mustReset = useMemo(() => Boolean(auth.user?.must_reset_password), [auth.user?.must_reset_password]);
 
