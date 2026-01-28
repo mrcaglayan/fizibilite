@@ -14,6 +14,7 @@ const managerRoutes = require("./routes/manager");
 const schoolsRoutes = require("./routes/schools");
 const normRoutes = require("./routes/norm");
 const scenariosRoutes = require("./routes/scenarios");
+const expenseDistributionsRoutes = require("./routes/expenseDistributions");
 const metaRoutes = require("./routes/meta");
 
 const app = express();
@@ -41,6 +42,9 @@ app.use("/api", normRoutes);
 
 // scenarios routes include /schools/:schoolId/scenarios/...
 app.use("/api", scenariosRoutes);
+
+// expense distribution routes
+app.use("/api", expenseDistributionsRoutes);
 
 // meta routes include /meta/...
 app.use("/api/meta", metaRoutes);

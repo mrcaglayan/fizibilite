@@ -441,6 +441,8 @@ export default function SchoolPage() {
   );
   const [reportCurrency, setReportCurrency] = useScenarioUiState("report.currency", "usd", { scope: uiScopeKey });
   const reportCurrencyDefaultedForRef = useRef(null);
+  const [reportMode, setReportMode] = useScenarioUiState("report.mode", "original", { scope: uiScopeKey });
+  const [reportModeLoading, setReportModeLoading] = useState(false);
   const [detailedReportMode, setDetailedReportMode] = useScenarioUiString("school.detailedReportMode", "detailed", { scope: uiScopeKey });
   const activeRouteSegment = useMemo(() => {
     const base = `/schools/${schoolId}/`;
@@ -590,6 +592,34 @@ export default function SchoolPage() {
   const expensesMissingLines = useMemo(
     () => mergeMissingLines(progMap.giderler?.missingLines, progMap.discounts?.missingLines),
     [progMap]
+  );
+
+  const fetchScenarioReport = useCallback(
+    async (mode) => {
+      if (!selectedScenarioId) return;
+      const nextMode = String(mode || "original");
+      setReportModeLoading(true);
+      setErr("");
+      try {
+        const data = await api.getScenarioReport(schoolId, selectedScenarioId, nextMode);
+        setReport(data?.results || null);
+      } catch (e) {
+        setErr(e.message || "Report fetch failed");
+      } finally {
+        setReportModeLoading(false);
+      }
+    },
+    [schoolId, selectedScenarioId]
+  );
+
+  const handleReportModeChange = useCallback(
+    async (mode) => {
+      const nextMode = String(mode || "original");
+      if (nextMode === reportMode && report) return;
+      setReportMode(nextMode);
+      await fetchScenarioReport(nextMode);
+    },
+    [fetchScenarioReport, reportMode, report, setReportMode]
   );
   useEffect(() => {
     if (!outlet?.setHeaderMeta) return;
@@ -1284,7 +1314,11 @@ export default function SchoolPage() {
     let ok = false;
     try {
       const data = await api.calculateScenario(schoolId, selectedScenarioId);
-      setReport(data.results);
+      if (reportMode === "distributed") {
+        await fetchScenarioReport("distributed");
+      } else {
+        setReport(data.results);
+      }
       if (!options.keepTab) setTab("report");
       setLastCalculatedAt(Date.now());
       if (typeof window !== "undefined") {
@@ -1313,7 +1347,7 @@ export default function SchoolPage() {
     if (!selectedScenarioId) return;
     setErr("");
     try {
-      await api.downloadXlsx(schoolId, selectedScenarioId, reportCurrency);
+      await api.downloadXlsx(schoolId, selectedScenarioId, reportCurrency, reportMode);
     } catch (e) {
       setErr(e.message || "Download failed");
     }
@@ -1324,7 +1358,7 @@ export default function SchoolPage() {
     setErr("");
     setExportingPdf(true);
     try {
-      await api.downloadPdf(schoolId, selectedScenarioId, reportCurrency);
+      await api.downloadPdf(schoolId, selectedScenarioId, reportCurrency, reportMode);
     } catch (e) {
       setErr(e.message || "PDF export failed");
     } finally {
@@ -2437,6 +2471,9 @@ export default function SchoolPage() {
     report,
     reportCurrency,
     setReportCurrency,
+    reportMode,
+    reportModeLoading,
+    handleReportModeChange,
     detailedReportMode,
     setDetailedReportMode,
     reportExportRef,

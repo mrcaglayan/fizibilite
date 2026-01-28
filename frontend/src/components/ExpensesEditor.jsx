@@ -76,6 +76,7 @@ const OPERATING_ITEMS = [
   { key: "egitimAracGerec", no: 12, code: 622, label: "Eğitim Araç ve Gereçleri (Okul ve Sınıflar için Kırtasiye Malzemeleri, Kitaplar, vb.) - (Öğrencilere dönem başı verilen)" },
   { key: "finansalGiderler", no: 13, code: 632, label: "Finansal Giderler (Prim ödemeleri, Komisyon ve Kredi Giderleri, Teminat Mektupları)" },
   { key: "egitimAmacliHizmet", no: 14, code: 622, label: "Eğitim Amaçlı Hizmet Alımları (İzinler ve lisanslama, Cambridge Lisanslamaları vb.)" },
+  { key: "sharedPayrollAllocation", no: 15, code: 622, label: "Paylaşılan Bordro (Dağıtım)" },
 
   { key: "temsilAgirlama", no: 16, code: 632, label: "Temsil ve Ağırlama - Kampüs bazında (Öğlen Yemeği Giderleri Hariç) mutfak giderleri vs.)" },
   { key: "ulkeIciUlasim", no: 17, code: 622, label: "Ülke İçi Ulaşım ve Konaklama / Uçak Bileti Dahil / PERSONEL ULAŞIM" },
@@ -594,7 +595,9 @@ export default function ExpensesEditor({
       </div>
 
       {/* SECTION 1 */}
-      <div style={{ marginTop: 14, fontWeight: 800 }}>{`GİDERLER (İŞLETME) / YIL (${currencyCode})`}</div>
+      <div className="section-head">
+        <div className="section-title">{`GİDERLER (İŞLETME) / YIL (${currencyCode})`}</div>
+      </div>
       <div className="table-scroll no-vert-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y expenses-3block expenses-main">
           <thead>
@@ -722,8 +725,10 @@ export default function ExpensesEditor({
       </div>
 
       {/* SECTION 2 */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>
-        GİDERLER (ÖĞRENİM DIŞI HİZMETLERE YÖNELİK SATILAN MAL VE HİZMETLER) / YIL
+      <div className="section-head">
+        <div className="section-title">
+          GİDERLER (ÖĞRENİM DIŞI HİZMETLERE YÖNELİK SATILAN MAL VE HİZMETLER) / YIL
+        </div>
       </div>
 
       <div className="table-scroll no-vert-scroll" style={{ marginTop: 8 }}>
@@ -885,7 +890,9 @@ export default function ExpensesEditor({
 
 
       {/* SECTION 3 */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>GİDERLER (YURT, KONAKLAMA) / YIL</div>
+      <div className="section-head">
+        <div className="section-title">GİDERLER (YURT, KONAKLAMA) / YIL</div>
+      </div>
 
       <div className="table-scroll no-vert-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table">
@@ -1039,8 +1046,8 @@ export default function ExpensesEditor({
 
 
       {/* SECTION 4 */}
-      <div className="row" style={{ marginTop: 18, justifyContent: "space-between" }}>
-        <div style={{ fontWeight: 800 }}>BURS VE İNDİRİMLER / YIL</div>
+      <div className="section-head">
+        <div className="section-title">BURS VE İNDİRİMLER / YIL</div>
       </div>
 
       <div className="table-scroll no-vert-scroll" style={{ marginTop: 8 }}>
@@ -1326,7 +1333,9 @@ export default function ExpensesEditor({
 
 
       {/* SUMMARY */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>ÖZET</div>
+      <div className="section-head">
+        <div className="section-title">ÖZET</div>
+      </div>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table">
           <thead>

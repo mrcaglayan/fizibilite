@@ -400,6 +400,7 @@ const OPERATING_KEYS = [
   "yerelPersonelMaas",
   "yerelDestekPersonelMaas",
   "internationalPersonelMaas",
+  "sharedPayrollAllocation",
   "disaridanHizmet",
   "egitimAracGerec",
   "finansalGiderler",
@@ -432,6 +433,7 @@ const ISLETME_KEY_TO_CODE = {
   yerelPersonelMaas: 622,
   yerelDestekPersonelMaas: 622,
   internationalPersonelMaas: 622,
+  sharedPayrollAllocation: 622,
 
   disaridanHizmet: 632,
   egitimAracGerec: 622,

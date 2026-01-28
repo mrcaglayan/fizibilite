@@ -496,11 +496,14 @@ export default function IncomeEditor({
 
     const isTuitionSection = sectionKey === "tuition";
 
+    const isTuition = sectionKey === "tuition";
     return (
       <>
-        <div style={{ marginTop: 16, fontWeight: 800 }}>{title}</div>
-        <div className="table-scroll" style={{ marginTop: 8 }}>
-          <table className="table data-table table-3y income-3block">
+        <div className={`section-head ${isTuition ? "is-tuition" : ""}`}>
+          <div className="section-title">{title}</div>
+        </div>
+        <div className="table-scroll income-section-table" style={{ marginTop: 8 }}>
+          <table className={`table data-table table-3y income-3block ${isTuition ? "is-tuition" : ""}`}>
             <thead>
               <tr className="group">
                 <th rowSpan={2}>Kalem</th>
@@ -665,8 +668,10 @@ export default function IncomeEditor({
       {sectionTable(`YURT / KONAKLAMA GELİRLERİ / YIL (${currencyCode})`, dormRows, "dormitory")}
 
       {/* Other institutional income */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>
-        {`ÖĞRENCİ ÜCRETLERİ HARİÇ KURUMUN DİĞER GELİRLERİ (BRÜT) / YIL (${currencyCode})`}
+      <div className="section-head">
+        <div className="section-title">
+          {`ÖĞRENCİ ÜCRETLERİ HARİÇ KURUMUN DİĞER GELİRLERİ (BRÜT) / YIL (${currencyCode})`}
+        </div>
       </div>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y">
@@ -721,7 +726,9 @@ export default function IncomeEditor({
       </div>
 
       {/* Government incentives */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>{`DEVLET TEŞVİKLERİ / YIL (${currencyCode})`}</div>
+      <div className="section-head">
+        <div className="section-title">{`DEVLET TEŞVİKLERİ / YIL (${currencyCode})`}</div>
+      </div>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y">
           <thead>
@@ -766,7 +773,9 @@ export default function IncomeEditor({
       </div>
 
       {/* Summary */}
-      <div style={{ marginTop: 18, fontWeight: 800 }}>ÖZET</div>
+      <div className="section-head">
+        <div className="section-title">ÖZET</div>
+      </div>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table table-3y">
           <thead>

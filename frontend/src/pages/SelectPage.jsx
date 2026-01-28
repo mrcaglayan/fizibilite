@@ -8,6 +8,7 @@ import { FaCheckCircle, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icon
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import ProgressBar from "../components/ui/ProgressBar";
+import ExpenseSplitModal from "../components/ExpenseSplitModal";
 import {
   getDefaultKademeConfig,
   getKademeDefinitions,
@@ -798,6 +799,7 @@ export default function SelectPage() {
   const [deletingScenarioId, setDeletingScenarioId] = useState(null);
   const [deleteConfirmScenarioId, setDeleteConfirmScenarioId] = useState(null);
   const [copyModalOpen, setCopyModalOpen] = useState(false);
+  const [expenseSplitOpen, setExpenseSplitOpen] = useState(false);
   const [copyModalError, setCopyModalError] = useState("");
   const [copySelection, setCopySelection] = useState(null);
   const [copySelectionMsg, setCopySelectionMsg] = useState("");
@@ -1320,6 +1322,7 @@ export default function SelectPage() {
   const canCreateScenario = can(auth.user, "scenario.create", "write", permissionScope);
   const canEditScenarioPlan = can(auth.user, "scenario.plan_edit", "write", permissionScope);
   const canCopyScenario = can(auth.user, "scenario.copy", "write", permissionScope);
+  const canExpenseSplit = can(auth.user, "scenario.expense_split", "write", permissionScope);
   const canSubmitScenario = can(auth.user, "scenario.submit", "write", permissionScope);
   const canDeleteScenario = can(auth.user, "scenario.delete", "write", permissionScope);
 
@@ -2376,6 +2379,15 @@ export default function SelectPage() {
         </div>
       ) : null}
 
+      {expenseSplitOpen ? (
+        <ExpenseSplitModal
+          open={expenseSplitOpen}
+          onClose={() => setExpenseSplitOpen(false)}
+          sourceScenario={selectedRowScenario}
+          sourceSchoolId={selectedSchoolId}
+        />
+      ) : null}
+
       {scenarioWizardOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="modal scenario-wizard-modal">
@@ -2851,6 +2863,19 @@ export default function SelectPage() {
                     <span className="btn-inner">
                       {toolbarIsCopying ? <InlineSpinner /> : null}
                       <span>Kopyala</span>
+                    </span>
+                  </button>
+                ) : null}
+                {canExpenseSplit ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setExpenseSplitOpen(true)}
+                    disabled={!selectedRowScenario || scenarioOpsBusy}
+                    title="Gider Paylaştır"
+                  >
+                    <span className="btn-inner">
+                      <span>Gider Paylaştır</span>
                     </span>
                   </button>
                 ) : null}

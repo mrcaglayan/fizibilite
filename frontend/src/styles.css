@@ -849,6 +849,9 @@ input[type="number"]::-webkit-inner-spin-button {
   top: 0;
   z-index: 3;
   background: #f9fafb;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 2px rgba(15, 23, 42, 0.12);
 }
 .data-table th:first-child,
 .data-table td:first-child {
@@ -3273,6 +3276,100 @@ hr {
 .income-table {
   padding-left: 150px;
   padding-right: 150px;
+}
+.section-head {
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+.section-head.is-tuition {
+  border-color: #bae6fd;
+  background: linear-gradient(135deg, #ecfeff 0%, #e0f2fe 100%);
+}
+.section-title {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+.income-table .income-section-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+.income-table .income-3block {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  table-layout: fixed;
+}
+.income-table .income-3block thead th {
+  background: #f1f5f9;
+}
+.income-table .income-3block.is-tuition thead th {
+  background: #dbeafe;
+}
+.income-table .income-3block th:first-child,
+.income-table .income-3block td:first-child {
+  background: #fff;
+}
+.income-table .income-3block.is-tuition th:first-child,
+.income-table .income-3block.is-tuition td:first-child {
+  background: #f8fafc;
+}
+.income-table .income-3block th,
+.income-table .income-3block td {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.income-table .income-3block th:first-child,
+.income-table .income-3block td:first-child {
+  width: 220px;
+  min-width: 220px;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.income-table .income-3block td {
+  vertical-align: middle;
+}
+.income-table .input.xs {
+  width: 86px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+/* Compact numeric inputs inside data tables */
+.data-table .input.xs {
+  width: 90px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 2px rgba(15, 23, 42, 0.12),
+    0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.data-table .input.xxs {
+  width: 70px;
+  padding: 3px 5px;
+  border-radius: 8px;
+  font-size: 11px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 2px rgba(15, 23, 42, 0.12),
+    0 1px 2px rgba(15, 23, 42, 0.08);
+}
+@media (max-width: 1200px) {
+  .income-table .income-3block th:first-child,
+  .income-table .income-3block td:first-child {
+    width: 180px;
+    min-width: 180px;
+    max-width: 220px;
+  }
+  .income-table .input.xs {
+    width: 78px;
+  }
 }
 .income-table td.cell-num {
   text-align: right !important;

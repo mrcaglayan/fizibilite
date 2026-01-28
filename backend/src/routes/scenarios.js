@@ -25,6 +25,11 @@ const { buildGelirlerModel } = require("../utils/report/buildGelirlerModel");
 const { buildGiderlerModel } = require("../utils/report/buildGiderlerModel");
 const { buildNormModel } = require("../utils/report/buildNormModel");
 const { buildMaliTablolarModel } = require("../utils/report/buildMaliTablolarModel");
+const {
+  applyDistributionOverlay,
+  getLatestDistributionForScenario,
+  getDistributionAllocationsForTarget,
+} = require("../utils/expenseDistributions");
 const { buildRaporAoa } = require("../utils/excel/raporAoa");
 const { buildTemelBilgilerAoa } = require("../utils/excel/temelBilgilerAoa");
 const { buildKapasiteAoa } = require("../utils/excel/kapasiteAoa");
@@ -838,6 +843,7 @@ router.post(
             yerelPersonelMaas: 0,
             yerelDestekPersonelMaas: 0,
             internationalPersonelMaas: 0,
+            sharedPayrollAllocation: 0,
             disaridanHizmet: 0,
             egitimAracGerec: 0,
             finansalGiderler: 0,
@@ -2021,6 +2027,10 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
   try {
     const schoolId = Number(req.params.schoolId);
     const scenarioId = Number(req.params.scenarioId);
+    const mode = String(req.query?.mode || "original").toLowerCase();
+    if (!["original", "distributed"].includes(mode)) {
+      return res.status(400).json({ error: "Invalid mode. Use original or distributed." });
+    }
 
     const pool = getPool();
     const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
@@ -2029,21 +2039,13 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
     const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
     if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
-    const [[cache]] = await pool.query(
-      "SELECT results_json, calculated_at FROM scenario_results WHERE scenario_id=:id",
-      { id: scenarioId }
-    );
-
     let resultsPayload = null;
     let resultsString = null;
-    let calculatedAt = cache?.calculated_at ?? null;
+    let calculatedAt = null;
     let servedFromCache = false;
+    let distributionMeta = null;
 
-    if (cache && cache.results_json) {
-      resultsPayload = cache.results_json;
-      resultsString = cache.results_json;
-      servedFromCache = true;
-    } else {
+    if (mode === "distributed") {
       const [[inputsRow]] = await pool.query(
         "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
         { id: scenarioId }
@@ -2054,12 +2056,56 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
       if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
 
       const normConfig = normalizeNormConfigRow(normRow);
-      const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
+      const rawInputs = parseInputsJson(inputsRow.inputs_json);
+
+      const latest = await getLatestDistributionForScenario(pool, scenarioId, scenario.academic_year);
+      let inputsForOverlay = rawInputs;
+      if (latest?.id) {
+        const allocRows = await getDistributionAllocationsForTarget(pool, latest.id, scenarioId);
+        inputsForOverlay = applyDistributionOverlay(rawInputs, allocRows);
+        distributionMeta = {
+          distributionId: latest.id,
+          basis: latest.basis,
+          basisYearKey: latest.basis_year_key,
+          createdAt: latest.created_at,
+        };
+      }
+
+      const inputsForCalc = normalizeInputsToUsd(inputsForOverlay, scenario);
       const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
       const serialized = JSON.stringify(results);
       resultsPayload = results;
       resultsString = serialized;
-      calculatedAt = null;
+    } else {
+      const [[cache]] = await pool.query(
+        "SELECT results_json, calculated_at FROM scenario_results WHERE scenario_id=:id",
+        { id: scenarioId }
+      );
+
+      calculatedAt = cache?.calculated_at ?? null;
+
+      if (cache && cache.results_json) {
+        resultsPayload = cache.results_json;
+        resultsString = cache.results_json;
+        servedFromCache = true;
+      } else {
+        const [[inputsRow]] = await pool.query(
+          "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
+          { id: scenarioId }
+        );
+        if (!inputsRow) return res.status(404).json({ error: "Inputs not found" });
+
+        const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
+        if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
+
+        const normConfig = normalizeNormConfigRow(normRow);
+        const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenario);
+        const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
+        const serialized = JSON.stringify(results);
+        resultsPayload = results;
+        resultsString = serialized;
+        calculatedAt = null;
+      }
     }
 
     const etag = crypto.createHash("sha1").update(resultsString).digest("hex");
@@ -2070,11 +2116,15 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/report", async (req, res) =
 
     res.setHeader("ETag", etag);
     res.setHeader("Cache-Control", "private, max-age=60");
-    return res.json({
+    const payload = {
       results: resultsPayload,
       cached: servedFromCache,
       calculatedAt,
-    });
+    };
+    if (mode === "distributed" && distributionMeta) {
+      payload.distributionMeta = distributionMeta;
+    }
+    return res.json(payload);
   } catch (e) {
     if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid inputs" });
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
@@ -2120,6 +2170,11 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       return res.status(400).json({ error: "Invalid reportCurrency" });
     }
 
+    const mode = String(req.query?.mode || "original").toLowerCase();
+    if (!["original", "distributed"].includes(mode)) {
+      return res.status(400).json({ error: "Invalid mode. Use original or distributed." });
+    }
+
     const exportFormat = String(req.query?.format || "xlsx").toLowerCase();
     if (!["xlsx", "pdf"].includes(exportFormat)) {
       return res.status(400).json({ error: "Invalid format. Use xlsx or pdf." });
@@ -2144,8 +2199,16 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
     if (!normRow) return res.status(400).json({ error: "Norm config missing for school" });
 
-    const inputs = parseInputsJson(inputsRow?.inputs_json);
+    let inputs = parseInputsJson(inputsRow?.inputs_json);
     const programType = normalizeProgramType(scenario.program_type || inputs?.temelBilgiler?.programType);
+
+    if (mode === "distributed") {
+      const latest = await getLatestDistributionForScenario(pool, scenarioId, scenario.academic_year);
+      if (latest?.id) {
+        const allocRows = await getDistributionAllocationsForTarget(pool, latest.id, scenarioId);
+        inputs = applyDistributionOverlay(inputs, allocRows);
+      }
+    }
 
     const normConfig = normalizeNormConfigRow(normRow);
     let prevNormConfig = normConfig;
@@ -2155,7 +2218,7 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
         prevNormConfig = normalizeNormConfigRow(prevNormRow);
       }
     }
-    const inputsForCalc = normalizeInputsToUsd(inputsRow?.inputs_json, scenario);
+    const inputsForCalc = normalizeInputsToUsd(inputs, scenario);
     const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
 
     // --- prevReport (previous year feasibility) ---

@@ -73,6 +73,7 @@ const BASE_RESOURCES = [
   { resource: "scenario.create", label: "Yeni Senaryo", group: "Senaryo Islemleri" },
   { resource: "scenario.plan_edit", label: "Planlamayi Duzenle", group: "Senaryo Islemleri" },
   { resource: "scenario.copy", label: "Senaryo Kopyala", group: "Senaryo Islemleri" },
+  { resource: "scenario.expense_split", label: "Gider Paylaştır", group: "Senaryo Islemleri" },
   { resource: "scenario.submit", label: "Onaya Gonder", group: "Senaryo Islemleri" },
   { resource: "scenario.delete", label: "Senaryo Sil", group: "Senaryo Islemleri" },
 

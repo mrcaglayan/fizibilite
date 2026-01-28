@@ -61,8 +61,8 @@ async function request(path, { method = "GET", body, token } = {}) {
   }
 }
 
-async function downloadXlsx(schoolId, scenarioId, reportCurrency = "usd") {
-  const qs = toQuery({ reportCurrency });
+async function downloadXlsx(schoolId, scenarioId, reportCurrency = "usd", mode = "original") {
+  const qs = toQuery({ reportCurrency, mode });
   const res = await fetch(
     `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx${qs}`,
     { method: "GET", headers: getAuthHeaders() }
@@ -90,8 +90,8 @@ async function downloadXlsx(schoolId, scenarioId, reportCurrency = "usd") {
   window.URL.revokeObjectURL(url);
 }
 
-async function downloadPdf(schoolId, scenarioId, reportCurrency = "usd") {
-  const qs = toQuery({ reportCurrency, format: "pdf" });
+async function downloadPdf(schoolId, scenarioId, reportCurrency = "usd", mode = "original") {
+  const qs = toQuery({ reportCurrency, mode, format: "pdf" });
   const res = await fetch(
     `${API_BASE}/schools/${schoolId}/scenarios/${scenarioId}/export-xlsx${qs}`,
     { method: "GET", headers: getAuthHeaders() }
@@ -214,10 +214,26 @@ export const api = {
       body,
     });
   },
-  calculateScenario: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/calculate`, { method: "POST" }),
-  getReport: (schoolId, scenarioId) => request(`/schools/${schoolId}/scenarios/${scenarioId}/report`),
+  calculateScenario: (schoolId, scenarioId) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/calculate`, { method: "POST" }),
+  getReport: (schoolId, scenarioId, mode = "original") =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/report${toQuery({ mode })}`),
+  getScenarioReport: (schoolId, scenarioId, mode = "original") =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/report${toQuery({ mode })}`),
   submitScenario: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}/submit`, { method: "POST" }),
+  expenseSplitTargets: (academicYear) =>
+    request(`/expense-distributions/targets${toQuery({ academicYear })}`),
+  previewExpenseSplit: (schoolId, scenarioId, payload) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/expense-split/preview`, {
+      method: "POST",
+      body: payload,
+    }),
+  applyExpenseSplit: (schoolId, scenarioId, payload) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/expense-split/apply`, {
+      method: "POST",
+      body: payload,
+    }),
 
   // Work item API
   /**

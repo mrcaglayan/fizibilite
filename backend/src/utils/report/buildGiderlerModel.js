@@ -146,6 +146,7 @@ const OPERATING_ITEMS = [
         code: 622,
         label: "Eğitim Amaçlı Hizmet Alımları (İzinler ve lisanslama, Cambridge Lisanslamaları vb.)",
     },
+    { key: "sharedPayrollAllocation", no: 15, code: 622, label: "Paylaşılan Bordro (Dağıtım)" },
 
     {
         key: "temsilAgirlama",
@@ -779,6 +780,7 @@ function buildGiderlerModel({ scenario, inputs, report, programType, currencyMet
                 "egitimAracGerec",
                 "finansalGiderler",
                 "egitimAmacliHizmet",
+                "sharedPayrollAllocation",
             ],
         },
         { label: null, keys: ["temsilAgirlama"] },

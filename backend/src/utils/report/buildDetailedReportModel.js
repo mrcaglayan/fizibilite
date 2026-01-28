@@ -692,6 +692,7 @@ function buildDetailedReportModel({
     "yerelPersonelMaas",
     "yerelDestekPersonelMaas",
     "internationalPersonelMaas",
+    "sharedPayrollAllocation",
     "disaridanHizmet",
     "egitimAracGerec",
     "finansalGiderler",
