@@ -274,6 +274,16 @@ input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
+/* Re-enable number spinners for specific inputs (e.g., scenario year fields). */
+input.num-spin[type="number"] {
+  appearance: auto;
+  -moz-appearance: number-input;
+}
+input.num-spin[type="number"]::-webkit-outer-spin-button,
+input.num-spin[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: auto;
+  margin: 0;
+}
 .table {
   width: 100%;
   border-collapse: collapse;

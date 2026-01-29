@@ -2,7 +2,7 @@ const YEAR_KEYS = ["y1", "y2", "y3"];
 
 // Bump this whenever the progress calculation rules change.
 // Used to invalidate cached progress_json/progress_pct without requiring a DB migration.
-const PROGRESS_ENGINE_VERSION = 3;
+const PROGRESS_ENGINE_VERSION = 4;
 
 const KADEME_DEFS = [
   { key: "okulOncesi", label: "Okul Oncesi", defaultFrom: "KG", defaultTo: "KG" },
@@ -13,12 +13,6 @@ const KADEME_DEFS = [
 
 const KADEME_BASE_KEYS = KADEME_DEFS.map((d) => d.key);
 
-const KADEME_ROWS = [
-  { key: "okulOncesi", label: "Okul Oncesi" },
-  { key: "ilkokul", label: "Ilkokul" },
-  { key: "ortaokul", label: "Ortaokul" },
-  { key: "lise", label: "Lise" },
-];
 
 const KADEME_BASE_BY_ROW = {
   okulOncesi: "okulOncesi",
@@ -108,7 +102,6 @@ const TAB_DEFS = [
     label: "Temel Bilgiler",
     sectionIds: [
       "temel.okulEgitim",
-      "temel.kademeler",
       "temel.inflation",
       "temel.ikMevcut",
       "temel.bursOgr",
@@ -128,7 +121,6 @@ const TAB_DEFS = [
 
 const SECTION_DEFS = [
   { id: "temel.okulEgitim", tabKey: "temelBilgiler", label: "Okul Egitim Bilgileri", modeDefault: "ALL", minDefault: null },
-  { id: "temel.kademeler", tabKey: "temelBilgiler", label: "Kademeler", modeDefault: "ALL", minDefault: null },
   { id: "temel.inflation", tabKey: "temelBilgiler", label: "Enflasyon ve Parametreler", modeDefault: "ALL", minDefault: null },
   { id: "temel.ikMevcut", tabKey: "temelBilgiler", label: "IK Mevcut", modeDefault: "ALL", minDefault: null },
   { id: "temel.bursOgr", tabKey: "temelBilgiler", label: "Burs ve Indirimler (Ogrenci)", modeDefault: "MIN", minDefault: 1 },
@@ -366,21 +358,6 @@ function buildProgressCatalog({ inputs, norm } = {}) {
         () => true
       )
     );
-  });
-
-  KADEME_ROWS.forEach((row) => {
-    ["enabled", "from", "to"].forEach((k) => {
-      addField(
-        "temel.kademeler",
-        makeField(
-          `temel.kademeler.${row.key}.${k}`,
-          `${row.label} ${k}`,
-          k === "enabled" ? "boolean" : "string",
-          (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "kademeler", row.key, k], null),
-          () => true
-        )
-      );
-    });
   });
 
   INFLATION_FIELDS.forEach((f) => {

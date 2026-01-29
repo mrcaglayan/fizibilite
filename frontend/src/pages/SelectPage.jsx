@@ -1337,6 +1337,20 @@ export default function SelectPage() {
       setNewScenarioFxUsdToLocal("");
     }
   };
+  const handleScenarioPeriodChange = (nextPeriod) => {
+    setNewScenarioPeriod(nextPeriod);
+    if (nextPeriod === "split") {
+      const start = normalizeYearInput(newScenarioStartYear);
+      if (start != null) setNewScenarioEndYear(String(start + 1));
+    }
+  };
+  const handleScenarioStartYearChange = (value) => {
+    setNewScenarioStartYear(value);
+    if (newScenarioPeriod === "split") {
+      const start = normalizeYearInput(value);
+      if (start != null) setNewScenarioEndYear(String(start + 1));
+    }
+  };
 
   function getScenarioStepError(step) {
     if (step === 1) {
@@ -2453,7 +2467,7 @@ export default function SelectPage() {
                             type="radio"
                             name="scenario-period"
                             checked={newScenarioPeriod === "full"}
-                            onChange={() => setNewScenarioPeriod("full")}
+                            onChange={() => handleScenarioPeriodChange("full")}
                           />
                           <span>Tam Yil (tek yil)</span>
                         </label>
@@ -2462,7 +2476,7 @@ export default function SelectPage() {
                             type="radio"
                             name="scenario-period"
                             checked={newScenarioPeriod === "split"}
-                            onChange={() => setNewScenarioPeriod("split")}
+                            onChange={() => handleScenarioPeriodChange("split")}
                           />
                           <span>Yil ortasinda baslar, sonraki yil biter</span>
                         </label>
@@ -2582,25 +2596,31 @@ export default function SelectPage() {
                       <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Yil</div>
                       {newScenarioPeriod === "full" ? (
                         <input
-                          className="input sm"
+                          className="input sm num-spin"
+                          type="number"
+                          step="1"
                           placeholder={DEFAULT_START_YEAR}
                           value={newScenarioStartYear}
-                          onChange={(e) => setNewScenarioStartYear(e.target.value)}
+                          onChange={(e) => handleScenarioStartYearChange(e.target.value)}
                         />
                       ) : (
                         <div className="row" style={{ gap: 8, alignItems: "center" }}>
                           <input
-                            className="input sm"
+                            className="input sm num-spin"
+                            type="number"
+                            step="1"
                             placeholder={DEFAULT_START_YEAR}
                             value={newScenarioStartYear}
-                            onChange={(e) => setNewScenarioStartYear(e.target.value)}
+                            onChange={(e) => handleScenarioStartYearChange(e.target.value)}
                           />
                           <span className="muted">-</span>
                           <input
-                            className="input sm"
+                            className="input sm num-spin"
+                            type="number"
+                            step="1"
                             placeholder={DEFAULT_END_YEAR}
                             value={newScenarioEndYear}
-                            onChange={(e) => setNewScenarioEndYear(e.target.value)}
+                            readOnly
                           />
                         </div>
                       )}
