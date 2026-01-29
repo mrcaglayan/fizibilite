@@ -781,15 +781,6 @@ function normalizeNormYearConfig(normConfig, yearKey) {
 }
 
 // IK (HR) -> salary rows mapping (same mapping as frontend HREditorIK)
-const IK_LEVELS = [
-  "okulOncesi",
-  "ilkokulYerel",
-  "ilkokulInt",
-  "ortaokulYerel",
-  "ortaokulInt",
-  "liseYerel",
-  "liseInt",
-];
 
 const IK_ROLES = [
   "turk_mudur",
@@ -811,7 +802,8 @@ function computeIkSalaryMappingForYear(yearIK) {
 
   for (const role of IK_ROLES) {
     let totalCount = 0;
-    for (const lvl of IK_LEVELS) {
+    const levelKeys = Object.keys(hc || {});
+    for (const lvl of levelKeys) {
       totalCount += safeNum(hc?.[lvl]?.[role]);
     }
     roleTotals[role] = totalCount;

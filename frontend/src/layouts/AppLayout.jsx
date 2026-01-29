@@ -7,6 +7,7 @@ import {
   readLastVisitedPath,
   writeLastActiveSchoolId,
   readLastActiveSchoolId,
+  readScenarioFlags,
 } from "../utils/schoolNavStorage";
 import {
   FaChevronRight,
@@ -29,6 +30,8 @@ import {
 
 // Permission helper to determine visibility of navigation items based on user permissions.
 import { can } from "../utils/permissions";
+
+const HQ_SIDEBAR_MODE = "badge"; // "hide"
 
 function RouteFallback() {
   return <div className="card">Loading...</div>;
@@ -95,6 +98,8 @@ export default function AppLayout() {
     if (lastActive) schoolId = lastActive;
   }
   const selectedScenarioId = schoolId ? readSelectedScenarioId(schoolId) : null;
+  const scenarioFlags = schoolId && selectedScenarioId ? readScenarioFlags(schoolId, selectedScenarioId) : null;
+  const isHQ = Boolean(scenarioFlags?.isHeadquarter);
   // Determine if the school navigation sidebar should be shown.  When
   // `auth.user` is null (e.g. during initial load), we still want to
   // display the schools menu for non-admin users.  Only hide the menu
@@ -380,6 +385,10 @@ export default function AppLayout() {
       });
     });
   }
+  const optionalNavIds = new Set(["temel-bilgiler", "kapasite", "norm"]);
+  if (isHQ && HQ_SIDEBAR_MODE === "hide") {
+    permittedNavItems = permittedNavItems.filter((item) => !optionalNavIds.has(item.id));
+  }
 
   return (
     <div className={"app-shell " + (sidebarCollapsed ? "is-collapsed" : "")}>
@@ -462,6 +471,10 @@ export default function AppLayout() {
               if (location.pathname.startsWith("/manage-permissions") || location.pathname.startsWith("/profile")) {
                 isActive = false;
               }
+              const rightNode =
+                isHQ && HQ_SIDEBAR_MODE === "badge" && optionalNavIds.has(item.id)
+                  ? <span className="app-optional-badge">Opsiyonel</span>
+                  : null;
               return (
                 <li key={item.id}>
                   {renderButtonItem({
@@ -476,6 +489,7 @@ export default function AppLayout() {
                     },
                     active: isActive,
                     blocked: isBlocked,
+                    rightNode,
                   })}
                 </li>
               );

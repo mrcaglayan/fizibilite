@@ -1,6 +1,7 @@
 // frontend/src/components/ExpenseSplitModal.jsx
 
 import React, { useEffect, useMemo, useState } from "react";
+import { FaChevronDown, FaChevronRight } from "react-icons/fa";
 import { toast } from "react-toastify";
 import { api } from "../api";
 
@@ -128,7 +129,13 @@ const fmtNum = (v, fractionDigits = 2) =>
 const fmtPct = (v) =>
   Number.isFinite(Number(v)) ? `${(Number(v) * 100).toFixed(2)}%` : "-";
 
-export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourceSchoolId }) {
+export default function ExpenseSplitModal({
+  open,
+  onClose,
+  sourceScenario,
+  sourceSchoolId,
+  sourceSchoolName,
+}) {
   const [targets, setTargets] = useState([]);
   const [loadingTargets, setLoadingTargets] = useState(false);
   const [targetSearch, setTargetSearch] = useState("");
@@ -139,6 +146,10 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
+  const [showPools, setShowPools] = useState(false);
+  const [expandedTargets, setExpandedTargets] = useState(new Set());
+  const [showTargets, setShowTargets] = useState(true);
+  const [showExpenses, setShowExpenses] = useState(true);
   const compactControlStyle = {
     fontSize: 12,
     height: 30,
@@ -168,6 +179,10 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
 
   useEffect(() => {
     setPreview(null);
+    setShowPools(false);
+    setExpandedTargets(new Set());
+    setShowTargets(true);
+    setShowExpenses(true);
   }, [basis, basisYearKey, selectedTargetsKey, selectedExpenseKeyStr]);
 
   useEffect(() => {
@@ -246,6 +261,8 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
       basisYearKey,
       expenseKeys: Array.from(selectedExpenseKeys),
     };
+    setShowTargets(false);
+    setShowExpenses(false);
     setPreviewLoading(true);
     try {
       const data = await api.previewExpenseSplit(sourceSchoolId, sourceScenario.id, payload);
@@ -294,24 +311,25 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
     [preview]
   );
 
-  const targetById = useMemo(() => {
-    const m = new Map();
-    previewTargets.forEach((t) => m.set(String(t.targetScenarioId), t));
-    return m;
-  }, [previewTargets]);
+  const sourceLabel =
+    sourceSchoolName ||
+    sourceScenario?.schoolName ||
+    sourceScenario?.school?.name ||
+    "";
 
-  const allocationRows = useMemo(() => {
-    return previewAllocations.map((row) => {
-      const target = targetById.get(String(row.targetScenarioId));
-      return {
-        targetLabel: target
-          ? `${target.schoolName || ""} • ${target.scenarioName || ""}`
-          : String(row.targetScenarioId),
+  const allocationsByTarget = useMemo(() => {
+    const map = new Map();
+    previewAllocations.forEach((row) => {
+      const key = String(row.targetScenarioId);
+      const list = map.get(key) || [];
+      list.push({
         expenseLabel: EXPENSE_LABELS.get(row.expenseKey) || row.expenseKey,
         amount: row.allocatedAmount,
-      };
+      });
+      map.set(key, list);
     });
-  }, [previewAllocations, targetById]);
+    return map;
+  }, [previewAllocations]);
 
   const totalExpenseCount = EXPENSE_KEYS.length;
   const selectedExpenseCount = selectedExpenseKeys.size;
@@ -424,6 +442,16 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
     );
   };
 
+  const toggleTargetAllocations = (scenarioId) => {
+    setExpandedTargets((prev) => {
+      const next = new Set(prev);
+      const key = String(scenarioId);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   if (!open) return null;
 
   return (
@@ -488,66 +516,95 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
             </div>
 
             <div style={{ marginTop: 5 }}>
-              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Hedef Senaryolar</div>
-              {loadingTargets ? (
-                <div className="small">Yükleniyor...</div>
-              ) : (
-                <div className="table-scroll" style={{ maxHeight: 260 }}>
-                  <table className="table" style={{ fontSize: 12 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: 40 }}></th>
-                        <th style={{ fontSize: 12, padding: "6px 8px" }}>Okul</th>
-                        <th style={{ fontSize: 12, padding: "6px 8px" }}>Senaryo</th>
-                        <th style={{ fontSize: 12, padding: "6px 8px" }}>Yil</th>
-                        <th style={{ fontSize: 12, padding: "6px 8px" }}>Para Birimi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredTargets.length === 0 ? (
-                        <tr>
-                          <td colSpan="5" className="small" style={{ padding: "6px 8px" }}>Hedef bulunamadi.</td>
-                        </tr>
-                      ) : (
-                        filteredTargets.map((row) => {
-                          const id = String(row.scenarioId);
-                          const checked = selectedTargets.has(id);
-                          const currencyLabel =
-                            String(row.input_currency || "USD") === "LOCAL"
-                              ? `${row.input_currency}/${row.local_currency_code || "LOCAL"}`
-                              : row.input_currency || "USD";
-                          return (
-                            <tr key={row.scenarioId}>
-                              <td style={{ padding: "6px 8px" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleTarget(id)}
-                                />
-                              </td>
-                              <td style={{ padding: "6px 8px" }}>{row.schoolName}</td>
-                              <td style={{ padding: "6px 8px" }}>{row.scenarioName}</td>
-                              <td style={{ padding: "6px 8px" }}>{row.academic_year}</td>
-                              <td style={{ padding: "6px 8px" }}>{currencyLabel}</td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
+              <div
+                className="row"
+                style={{ justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+                onClick={() => setShowTargets((prev) => !prev)}
+              >
+                <div className="row" style={{ gap: 6, alignItems: "center" }}>
+                  {showTargets ? <FaChevronDown aria-hidden="true" /> : <FaChevronRight aria-hidden="true" />}
+                  <div className="small" style={{ fontWeight: 700 }}>Hedef Senaryolar</div>
                 </div>
-              )}
+              </div>
+              {showTargets ? (
+                loadingTargets ? (
+                  <div className="small">Yukleniyor...</div>
+                ) : (
+                  <div className="table-scroll" style={{ maxHeight: 260 }}>
+                    <table className="table" style={{ fontSize: 12 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: 40 }}></th>
+                          <th style={{ fontSize: 12, padding: "6px 8px" }}>Okul</th>
+                          <th style={{ fontSize: 12, padding: "6px 8px" }}>Senaryo</th>
+                          <th style={{ fontSize: 12, padding: "6px 8px" }}>Yil</th>
+                          <th style={{ fontSize: 12, padding: "6px 8px" }}>Para Birimi</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredTargets.length === 0 ? (
+                          <tr>
+                            <td colSpan="5" className="small" style={{ padding: "6px 8px" }}>Hedef bulunamadi.</td>
+                          </tr>
+                        ) : (
+                          filteredTargets.map((row) => {
+                            const id = String(row.scenarioId);
+                            const checked = selectedTargets.has(id);
+                            const currencyLabel =
+                              String(row.input_currency || "USD") === "LOCAL"
+                                ? `${row.input_currency}/${row.local_currency_code || "LOCAL"}`
+                                : row.input_currency || "USD";
+                            return (
+                              <tr
+                                key={row.scenarioId}
+                                onClick={() => toggleTarget(id)}
+                                style={{
+                                  cursor: "pointer",
+                                  ...(checked ? { background: "#eef2ff" } : {}),
+                                }}
+                              >
+                                <td style={{ padding: "6px 8px" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={() => toggleTarget(id)}
+                                  />
+                                </td>
+                                <td style={{ padding: "6px 8px" }}>{row.schoolName}</td>
+                                <td style={{ padding: "6px 8px" }}>{row.scenarioName}</td>
+                                <td style={{ padding: "6px 8px" }}>{row.academic_year}</td>
+                                <td style={{ padding: "6px 8px" }}>{currencyLabel}</td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : null}
             </div>
 
             <div style={{ marginTop: 16 }}>
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-                <div className="small" style={{ fontWeight: 700 }}>Gider Kalemleri</div>
+              <div
+                className="row"
+                style={{ justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+                onClick={() => setShowExpenses((prev) => !prev)}
+              >
+                <div className="row" style={{ gap: 6, alignItems: "center" }}>
+                  {showExpenses ? <FaChevronDown aria-hidden="true" /> : <FaChevronRight aria-hidden="true" />}
+                  <div className="small" style={{ fontWeight: 700 }}>Gider Kalemleri</div>
+                </div>
                 <div className="row" style={{ gap: 6 }}>
                   <button
                     className="btn"
                     type="button"
                     style={{ padding: "4px 10px" }}
-                    onClick={() => setExpenseKeys(EXPENSE_KEYS, true)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpenseKeys(EXPENSE_KEYS, true);
+                    }}
                     disabled={!totalExpenseCount}
                   >
                     Tumunu Sec
@@ -556,35 +613,42 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
                     className="btn"
                     type="button"
                     style={{ padding: "4px 10px" }}
-                    onClick={() => setExpenseKeys(EXPENSE_KEYS, false)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpenseKeys(EXPENSE_KEYS, false);
+                    }}
                     disabled={!selectedExpenseCount}
                   >
                     Temizle
                   </button>
                 </div>
               </div>
-              <div className="row" style={{ gap: 10, alignItems: "center", marginTop: 8 }}>
-                <label className="row small" style={{ gap: 6, alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={allExpensesSelected}
-                    ref={(el) => {
-                      if (el) el.indeterminate = someExpensesSelected;
-                    }}
-                    onChange={(e) => setExpenseKeys(EXPENSE_KEYS, e.target.checked)}
-                  />
-                  <span>Toplam Secili: {selectedExpenseCount}/{totalExpenseCount}</span>
-                </label>
-              </div>
+              {showExpenses ? (
+                <>
+                  <div className="row" style={{ gap: 10, alignItems: "center", marginTop: 8 }}>
+                    <label className="row small" style={{ gap: 6, alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={allExpensesSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someExpensesSelected;
+                        }}
+                        onChange={(e) => setExpenseKeys(EXPENSE_KEYS, e.target.checked)}
+                      />
+                      <span>Toplam Secili: {selectedExpenseCount}/{totalExpenseCount}</span>
+                    </label>
+                  </div>
 
-              <div className="row" style={{ alignItems: "flex-start", gap: 12, marginTop: 10 }}>
-                <div style={{ flex: "1 1 0", minWidth: 320 }}>
-                  {renderSectionCard(isletmeSection)}
-                </div>
-                <div style={{ flex: "1 1 0", minWidth: 320, display: "grid", gap: 12 }}>
-                  {otherSections.map((section) => renderSectionCard(section))}
-                </div>
-              </div>
+                  <div className="row" style={{ alignItems: "flex-start", gap: 12, marginTop: 10 }}>
+                    <div style={{ flex: "1 1 0", minWidth: 320 }}>
+                      {renderSectionCard(isletmeSection)}
+                    </div>
+                    <div style={{ flex: "1 1 0", minWidth: 320, display: "grid", gap: 12 }}>
+                      {otherSections.map((section) => renderSectionCard(section))}
+                    </div>
+                  </div>
+                </>
+              ) : null}
             </div>
 
             <div className="row" style={{ justifyContent: "flex-end", marginTop: 16, gap: 8 }}>
@@ -618,35 +682,56 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
               <div style={{ marginTop: 16 }}>
                 {previewPools.length > 0 ? (
                   <>
-                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Havuz Tutarlari</div>
-                    <div className="table-scroll">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Gider</th>
-                            <th>Havuz Tutari</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {previewPools.map((p) => (
-                            <tr key={p.expenseKey}>
-                              <td>{EXPENSE_LABELS.get(p.expenseKey) || p.expenseKey}</td>
-                              <td>{fmtNum(p.poolAmount)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div
+                      className="row"
+                      style={{
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginBottom: 6,
+                        cursor: "pointer",
+                      }}
+                      onClick={() => setShowPools((prev) => !prev)}
+                    >
+                      <div className="row" style={{ gap: 6, alignItems: "center" }}>
+                        {showPools ? <FaChevronDown aria-hidden="true" /> : <FaChevronRight aria-hidden="true" />}
+                        <div className="small" style={{ fontWeight: 700 }}>
+                          Havuz Tutarlari{sourceLabel ? ` (${sourceLabel})` : ""}
+                        </div>
+                      </div>
                     </div>
+                    {showPools ? (
+                      <div className="table-scroll">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Gider</th>
+                              <th>Havuz Tutari</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {previewPools.map((p) => (
+                              <tr key={p.expenseKey}>
+                                <td>{EXPENSE_LABELS.get(p.expenseKey) || p.expenseKey}</td>
+                                <td>{fmtNum(p.poolAmount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
                   </>
                 ) : null}
 
                 {previewTargets.length > 0 ? (
                   <>
-                    <div className="small" style={{ fontWeight: 700, margin: "12px 0 6px" }}>Agirliklar</div>
+                    <div className="small" style={{ fontWeight: 700, margin: "12px 0 6px" }}>
+                      Agirliklar (satira tiklayin)
+                    </div>
                     <div className="table-scroll">
                       <table className="table">
                         <thead>
                           <tr>
+                            <th style={{ width: 28 }} />
                             <th>Okul</th>
                             <th>Senaryo</th>
                             <th>Basis</th>
@@ -654,40 +739,57 @@ export default function ExpenseSplitModal({ open, onClose, sourceScenario, sourc
                           </tr>
                         </thead>
                         <tbody>
-                          {previewTargets.map((t) => (
-                            <tr key={t.targetScenarioId}>
-                              <td>{t.schoolName}</td>
-                              <td>{t.scenarioName}</td>
-                              <td>{fmtNum(t.basisValue)}</td>
-                              <td>{fmtPct(t.weight)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                ) : null}
-
-                {allocationRows.length > 0 ? (
-                  <>
-                    <div className="small" style={{ fontWeight: 700, margin: "12px 0 6px" }}>Dagitimlar</div>
-                    <div className="table-scroll">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Hedef</th>
-                            <th>Gider</th>
-                            <th>Tutar</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {allocationRows.map((row, idx) => (
-                            <tr key={`${row.targetLabel}-${row.expenseLabel}-${idx}`}>
-                              <td>{row.targetLabel}</td>
-                              <td>{row.expenseLabel}</td>
-                              <td>{fmtNum(row.amount)}</td>
-                            </tr>
-                          ))}
+                          {previewTargets.map((t) => {
+                            const targetKey = String(t.targetScenarioId);
+                            const isExpanded = expandedTargets.has(targetKey);
+                            const allocRows = allocationsByTarget.get(targetKey) || [];
+                            return (
+                              <React.Fragment key={t.targetScenarioId}>
+                                <tr
+                                  onClick={() => toggleTargetAllocations(t.targetScenarioId)}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  <td style={{ textAlign: "center" }}>
+                                    {isExpanded ? (
+                                      <FaChevronDown aria-hidden="true" />
+                                    ) : (
+                                      <FaChevronRight aria-hidden="true" />
+                                    )}
+                                  </td>
+                                  <td>{t.schoolName}</td>
+                                  <td>{t.scenarioName}</td>
+                                  <td>{fmtNum(t.basisValue)}</td>
+                                  <td>{fmtPct(t.weight)}</td>
+                                </tr>
+                                {isExpanded ? (
+                                  <tr>
+                                    <td colSpan={5}>
+                                      {allocRows.length ? (
+                                        <table className="table" style={{ margin: 0 }}>
+                                          <thead>
+                                            <tr>
+                                              <th>Gider</th>
+                                              <th>Tutar</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {allocRows.map((row, idx) => (
+                                              <tr key={`${targetKey}-${row.expenseLabel}-${idx}`}>
+                                                <td>{row.expenseLabel}</td>
+                                                <td>{fmtNum(row.amount)}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      ) : (
+                                        <div className="small is-muted">Dagitim bulunamadi.</div>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ) : null}
+                              </React.Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>

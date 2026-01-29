@@ -61,6 +61,13 @@ const DORM_TO_INCOME_KEY = {
 };
 
 const DISCOUNT_TOTAL_KEY = "discountsTotal";
+const SALARY_KEYS = new Set([
+  "turkPersonelMaas",
+  "turkDestekPersonelMaas",
+  "yerelPersonelMaas",
+  "yerelDestekPersonelMaas",
+  "internationalPersonelMaas",
+]);
 const SPLITTABLE_KEYS = new Set([
   ...OPERATING_KEYS,
   ...SERVICE_KEYS,
@@ -71,6 +78,44 @@ const SPLITTABLE_KEYS = new Set([
 function safeNum(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function computeSalaryFromIkY1(ik) {
+  const yearIK = ik?.years?.y1 ? ik.years.y1 : ik || {};
+  const unitCosts = yearIK?.unitCosts || {};
+  const headcountsByLevel = yearIK?.headcountsByLevel || {};
+  const levelKeys = Object.keys(headcountsByLevel || {});
+  const roles = [
+    "turk_mudur",
+    "turk_mdyard",
+    "turk_egitimci",
+    "turk_temsil",
+    "yerel_yonetici_egitimci",
+    "yerel_destek",
+    "yerel_ulke_temsil_destek",
+    "int_yonetici_egitimci",
+  ];
+
+  const roleAnnual = {};
+  for (const role of roles) {
+    let count = 0;
+    for (const lvl of levelKeys) {
+      count += safeNum(headcountsByLevel?.[lvl]?.[role]);
+    }
+    roleAnnual[role] = safeNum(unitCosts?.[role]) * count;
+  }
+
+  return {
+    turkPersonelMaas:
+      safeNum(roleAnnual.turk_mudur) +
+      safeNum(roleAnnual.turk_mdyard) +
+      safeNum(roleAnnual.turk_egitimci),
+    turkDestekPersonelMaas: safeNum(roleAnnual.turk_temsil),
+    yerelPersonelMaas: safeNum(roleAnnual.yerel_yonetici_egitimci),
+    yerelDestekPersonelMaas:
+      safeNum(roleAnnual.yerel_destek) + safeNum(roleAnnual.yerel_ulke_temsil_destek),
+    internationalPersonelMaas: safeNum(roleAnnual.int_yonetici_egitimci),
+  };
 }
 
 function roundTo(value, decimals) {
@@ -327,10 +372,15 @@ async function buildPreview({
     : [];
   const dormByKey = new Map(dormRows.map((row) => [String(row?.key || ""), row]));
 
+  const salaryPools = computeSalaryFromIkY1(inputs?.ik);
   const pools = cleanExpenseKeys.map((key) => {
     let poolAmount = 0;
     if (OPERATING_KEYS.has(key)) {
-      poolAmount = safeNum(inputs?.giderler?.isletme?.items?.[key]);
+      if (SALARY_KEYS.has(key)) {
+        poolAmount = safeNum(salaryPools?.[key]);
+      } else {
+        poolAmount = safeNum(inputs?.giderler?.isletme?.items?.[key]);
+      }
     } else if (SERVICE_KEYS.has(key)) {
       const incomeKey = SERVICE_TO_INCOME_KEY[key];
       const incRow = incomeKey ? nonEdByKey.get(incomeKey) : null;

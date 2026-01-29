@@ -5,6 +5,7 @@ import {
   safeGet,
   toNum,
 } from "./progressCatalog";
+import { isHeadquarterScenario } from "./scenarioProfile";
 
 function isFilled(value, type) {
   if (type === "string") return isNonEmptyString(value);
@@ -39,11 +40,15 @@ function normalizeConfig(config) {
 export function computeScenarioProgress({ inputs, norm, config, scenario } = {}) {
   const catalog = buildProgressCatalog({ inputs, norm, scenario });
   const normalizedConfig = normalizeConfig(config);
+  const isHQ = isHeadquarterScenario(inputs);
+  const HQ_INCLUDED_TABS = new Set(["ik", "gelirler", "giderler"]);
 
   const sectionsById = new Map(catalog.sections.map((s) => [s.id, s]));
   const sectionResults = new Map();
   let totalUnits = 0;
   let doneUnits = 0;
+  let overallTotalUnits = 0;
+  let overallDoneUnits = 0;
 
   catalog.sections.forEach((section) => {
     const cfg = normalizedConfig.sections[section.id] || {};
@@ -51,6 +56,15 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
       sectionResults.set(section.id, { enabled: false });
       return;
     }
+    const includeInOverall = !isHQ || HQ_INCLUDED_TABS.has(section.tabKey);
+    const addUnits = (total, done) => {
+      totalUnits += total;
+      doneUnits += done;
+      if (includeInOverall) {
+        overallTotalUnits += total;
+        overallDoneUnits += done;
+      }
+    };
 
     const requiresKademe = section.requiresKademe === true;
     const hasKademeSelection = catalog.context?.hasKademeSelection;
@@ -62,7 +76,7 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
         totalUnits: 1,
         missingReasons: ["Kademeler secilmedi"],
       });
-      totalUnits += 1;
+      addUnits(1, 0);
       return;
     }
 
@@ -106,8 +120,12 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
     });
 
     const filledCount = filled.length;
-    const mode = String(cfg.mode || section.modeDefault || "ALL").toUpperCase();
-    const minRequired = Number.isFinite(Number(cfg.min)) ? Number(cfg.min) : section.minDefault;
+    let mode = String(cfg.mode || section.modeDefault || "ALL").toUpperCase();
+    let minRequired = Number.isFinite(Number(cfg.min)) ? Number(cfg.min) : section.minDefault;
+    if (isHQ && section.id === "ik.localStaff") {
+      mode = "MIN";
+      minRequired = 1;
+    }
 
     if (mode === "MIN") {
       const min = Math.max(1, Number.isFinite(minRequired) ? minRequired : 1);
@@ -120,8 +138,7 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
         totalUnits: min,
         missingReasons: done ? [] : [`En az ${min} alan`],
       });
-      totalUnits += min;
-      doneUnits += doneCount;
+      addUnits(min, doneCount);
       return;
     }
 
@@ -135,7 +152,7 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
           totalUnits: 1,
           missingReasons: [section.label || "Eksik"],
         });
-        totalUnits += 1;
+        addUnits(1, 0);
       } else {
         sectionResults.set(section.id, {
           enabled: true,
@@ -160,8 +177,7 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
       totalUnits: total,
       missingReasons,
     });
-    totalUnits += total;
-    doneUnits += filledCount;
+    addUnits(total, filledCount);
   });
 
   const tabs = catalog.tabs.map((tab) => {
@@ -206,16 +222,20 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
     };
   });
 
-  const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 100;
+  const effectiveTotal = isHQ ? overallTotalUnits : totalUnits;
+  const effectiveDone = isHQ ? overallDoneUnits : doneUnits;
+  const pct = effectiveTotal ? Math.round((effectiveDone / effectiveTotal) * 100) : 100;
   const missingDetailsLines = tabs
     .filter((t) => !t.done)
+    .filter((t) => (!isHQ ? true : HQ_INCLUDED_TABS.has(t.key)))
     .map((t) => {
       const reasons = t.missingPreview || "Eksik alanlar";
       return `${t.label}: ${reasons}`;
     });
 
-  const completedCount = tabs.filter((t) => t.done).length;
-  const totalCount = tabs.length;
+  const visibleTabs = isHQ ? tabs.filter((t) => HQ_INCLUDED_TABS.has(t.key)) : tabs;
+  const completedCount = visibleTabs.filter((t) => t.done).length;
+  const totalCount = visibleTabs.length;
 
   return {
     pct,

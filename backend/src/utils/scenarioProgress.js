@@ -2,7 +2,7 @@ const YEAR_KEYS = ["y1", "y2", "y3"];
 
 // Bump this whenever the progress calculation rules change.
 // Used to invalidate cached progress_json/progress_pct without requiring a DB migration.
-const PROGRESS_ENGINE_VERSION = 4;
+const PROGRESS_ENGINE_VERSION = 6;
 
 const KADEME_DEFS = [
   { key: "okulOncesi", label: "Okul Oncesi", defaultFrom: "KG", defaultTo: "KG" },
@@ -60,6 +60,7 @@ const SCHOLAR_KEYS = [
 const COMPETITOR_KEYS = ["okulOncesi", "ilkokul", "ortaokul", "lise"];
 
 const IK_LEVEL_DEFS = [
+  { key: "merkez", label: "Merkez / HQ", kademeKey: null },
   { key: "okulOncesi", label: "Okul Oncesi", kademeKey: "okulOncesi" },
   { key: "ilkokulYerel", label: "Ilkokul-Yerel", kademeKey: "ilkokul" },
   { key: "ilkokulInt", label: "Ilkokul-Int", kademeKey: "ilkokul" },
@@ -137,6 +138,7 @@ const SECTION_DEFS = [
 ];
 
 const { getProgramType, getVariantKeysForProgramType } = require("./programType");
+const { isHeadquarterScenarioFromInputs } = require("./scenarioProfile");
 
 const OKUL_EGITIM_FIELDS = [
   { key: "egitimBaslamaTarihi", label: "Egitim baslama tarihi", type: "string" },
@@ -234,6 +236,7 @@ function buildKademeContext(inputs) {
       enabledKademes: new Set(),
       enabledGrades: new Set(),
       enabledLevels: new Set(),
+      noKademeMode: false,
     };
   }
 
@@ -265,7 +268,10 @@ function buildKademeContext(inputs) {
     ).map((lvl) => lvl.key)
   );
 
-  return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels };
+  const noKademeMode =
+    raw && typeof raw === "object" && Object.keys(raw).length > 0 && enabledKademes.size === 0;
+
+  return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels, noKademeMode };
 }
 
 function collectNormSubjects(norm) {
@@ -482,7 +488,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
             "number",
             (inputsArg) =>
               safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", lvl.key, role.key], null),
-            () => (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true)
+            () => (ctx.noKademeMode ? (lvl.key === "merkez") : (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true))
           )
         );
       });
@@ -503,6 +509,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
         },
         () => {
           const baseKey = KADEME_BASE_BY_ROW[row.key] || row.key;
+          if (ctx.noKademeMode) return true;
           return ctx.hasKademeSelection ? ctx.enabledKademes.has(baseKey) : true;
         }
       )
@@ -588,12 +595,16 @@ function normalizeConfig(config) {
 function computeScenarioProgress({ inputs, norm, config } = {}) {
   const catalog = buildProgressCatalog({ inputs, norm });
   const normalizedConfig = normalizeConfig(config);
+  const isHQ = isHeadquarterScenarioFromInputs(inputs);
+  const HQ_INCLUDED_TABS = new Set(["ik", "gelirler", "giderler"]);
 
   const sectionsById = new Map(catalog.sections.map((s) => [s.id, s]));
 
   const sectionResults = new Map();
   let totalUnits = 0;
   let doneUnits = 0;
+  let overallTotalUnits = 0;
+  let overallDoneUnits = 0;
 
   catalog.sections.forEach((section) => {
     const cfg = normalizedConfig.sections[section.id] || {};
@@ -601,6 +612,15 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
       sectionResults.set(section.id, { enabled: false });
       return;
     }
+    const includeInOverall = !isHQ || HQ_INCLUDED_TABS.has(section.tabKey);
+    const addUnits = (total, done) => {
+      totalUnits += total;
+      doneUnits += done;
+      if (includeInOverall) {
+        overallTotalUnits += total;
+        overallDoneUnits += done;
+      }
+    };
 
     const requiresKademe = section.requiresKademe === true;
     const hasKademeSelection = catalog.context?.hasKademeSelection;
@@ -629,7 +649,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
         totalUnits: 1,
         missingReasons: ["Kademeler secilmedi"],
       });
-      totalUnits += 1;
+      addUnits(1, 0);
       return;
     }
 
@@ -673,8 +693,12 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
     });
 
     const filledCount = filled.length;
-    const mode = String(cfg.mode || section.modeDefault || "ALL").toUpperCase();
-    const minRequired = Number.isFinite(Number(cfg.min)) ? Number(cfg.min) : section.minDefault;
+    let mode = String(cfg.mode || section.modeDefault || "ALL").toUpperCase();
+    let minRequired = Number.isFinite(Number(cfg.min)) ? Number(cfg.min) : section.minDefault;
+    if (isHQ && section.id === "ik.localStaff") {
+      mode = "MIN";
+      minRequired = 1;
+    }
 
     if (mode === "MIN") {
       const min = Math.max(1, Number.isFinite(minRequired) ? minRequired : 1);
@@ -687,8 +711,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
         totalUnits: min,
         missingReasons: done ? [] : [`En az ${min} alan`],
       });
-      totalUnits += min;
-      doneUnits += doneCount;
+      addUnits(min, doneCount);
       return;
     }
 
@@ -702,7 +725,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
           totalUnits: 1,
           missingReasons: [section.label || "Eksik"],
         });
-        totalUnits += 1;
+        addUnits(1, 0);
       } else {
         sectionResults.set(section.id, {
           enabled: true,
@@ -725,8 +748,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
       totalUnits: total,
       missingReasons,
     });
-    totalUnits += total;
-    doneUnits += filledCount;
+    addUnits(total, filledCount);
   });
 
   const tabs = catalog.tabs.map((tab) => {
@@ -771,16 +793,20 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
     };
   });
 
-  const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 100;
+  const effectiveTotal = isHQ ? overallTotalUnits : totalUnits;
+  const effectiveDone = isHQ ? overallDoneUnits : doneUnits;
+  const pct = effectiveTotal ? Math.round((effectiveDone / effectiveTotal) * 100) : 100;
   const missingDetailsLines = tabs
     .filter((t) => !t.done)
+    .filter((t) => (!isHQ ? true : HQ_INCLUDED_TABS.has(t.key)))
     .map((t) => {
       const reasons = t.missingPreview || "Eksik alanlar";
       return `${t.label}: ${reasons}`;
     });
 
-  const completedCount = tabs.filter((t) => t.done).length;
-  const totalCount = tabs.length;
+  const visibleTabs = isHQ ? tabs.filter((t) => HQ_INCLUDED_TABS.has(t.key)) : tabs;
+  const completedCount = visibleTabs.filter((t) => t.done).length;
+  const totalCount = visibleTabs.length;
 
   return {
     engineVersion: PROGRESS_ENGINE_VERSION,
@@ -807,3 +833,4 @@ module.exports = {
   IK_LEVEL_DEFS,
   IK_LOCAL_ROLES,
 };
+

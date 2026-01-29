@@ -143,3 +143,49 @@ export function readLastActiveSchoolId() {
     return null;
   }
 }
+
+function getScenarioFlagsKey(schoolId, scenarioId) {
+  if (schoolId == null || scenarioId == null) return null;
+  return `fs_scenario_flags:${schoolId}:${scenarioId}`;
+}
+
+/**
+ * Persist scenario flags (e.g. HQ/no-kademe) in local storage.
+ *
+ * @param {number|string} schoolId
+ * @param {number|string} scenarioId
+ * @param {object} flags
+ */
+export function writeScenarioFlags(schoolId, scenarioId, flags) {
+  const key = getScenarioFlagsKey(schoolId, scenarioId);
+  if (!key) return;
+  try {
+    if (!flags || typeof flags !== "object") {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, JSON.stringify(flags));
+  } catch (_) {
+    // ignore write failures
+  }
+}
+
+/**
+ * Read scenario flags from local storage.
+ *
+ * @param {number|string} schoolId
+ * @param {number|string} scenarioId
+ * @returns {object|null}
+ */
+export function readScenarioFlags(schoolId, scenarioId) {
+  const key = getScenarioFlagsKey(schoolId, scenarioId);
+  if (!key) return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}

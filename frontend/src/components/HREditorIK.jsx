@@ -36,6 +36,7 @@ function getInflationFactors(temelBilgiler) {
 }
 
 const LEVEL_DEFS = [
+  { key: "merkez", baseLabel: "MERKEZ / HQ", kademeKey: null },
   { key: "okulOncesi", baseLabel: "Okul Öncesi", kademeKey: "okulOncesi" },
   { key: "ilkokulYerel", baseLabel: "İlkokul", kademeKey: "ilkokul", suffix: "-YEREL" },
   { key: "ilkokulInt", baseLabel: "İlkokul", kademeKey: "ilkokul", suffix: "-INT." },
@@ -275,6 +276,8 @@ export default function HREditorIK({
   const inflationFactors = useMemo(() => getInflationFactors(temelBilgiler), [temelBilgiler]);
 
   const kademeler = useMemo(() => normalizeKademeConfig(kademeConfig), [kademeConfig]);
+  const baseKeys = ["okulOncesi", "ilkokul", "ortaokul", "lise"];
+  const noKademeMode = baseKeys.every((k) => kademeler?.[k]?.enabled === false);
 
   const levels = useMemo(
     () =>
@@ -286,13 +289,19 @@ export default function HREditorIK({
   );
 
   const visibleLevels = useMemo(
-    () =>
-      levels.filter(
+    () => {
+      if (noKademeMode) {
+        const hq = levels.find((lvl) => lvl.key === "merkez");
+        return hq ? [hq] : [];
+      }
+      return levels.filter(
         (lvl) =>
+          lvl.key !== "merkez" &&
           kademeler[lvl.kademeKey]?.enabled !== false &&
           isKademeKeyVisible(lvl.key, programType)
-      ),
-    [levels, kademeler, programType]
+      );
+    },
+    [levels, kademeler, programType, noKademeMode]
   );
 
   useEffect(() => {
@@ -400,6 +409,12 @@ export default function HREditorIK({
           </button>
         </div>
       </div>
+
+      {noKademeMode ? (
+        <div className="small" style={{ marginTop: 6, color: "#475569" }}>
+          HQ senaryoda personel say?lar? MERKEZ / HQ sat?r?ndan girilir.
+        </div>
+      ) : null}
 
       <div className="ik-compact-wrap table-scroll" style={{ marginTop: 8 }}>
         <table className="table data-table ik-compact-table">

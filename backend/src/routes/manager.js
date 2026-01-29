@@ -8,6 +8,7 @@ const { ensurePermissions } = require("../utils/ensurePermissions");
 const { PERMISSIONS_CATALOG } = require("../utils/permissionsCatalog");
 const { getUserPermissions } = require("../utils/permissionService");
 const { parseListParams } = require("../utils/listParams");
+const { BASE_REQUIRED_WORK_IDS, getRequiredWorkIdsForInputs } = require("../utils/scenarioWorkflow");
 const { requireAuth, requireAssignedCountry, requirePermission } = require("../middleware/auth");
 
 /**
@@ -31,6 +32,20 @@ function generateTemporaryPassword(length = 12) {
     out += alphabet[bytes[i] % alphabet.length];
   }
   return out;
+}
+
+function safeParseInputsJson(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  return {};
 }
 
 const ASSIGNMENT_ROLES = ["principal", "hr", "accountant"];
@@ -188,18 +203,9 @@ router.get("/review-queue", async (req, res) => {
       return res.status(403).json({ error: "Review access denied" });
     }
 
-    const REQUIRED_WORK_IDS = [
-      "temel_bilgiler",
-      "kapasite",
-      "norm.ders_dagilimi",
-      "ik.local_staff",
-      "gelirler.unit_fee",
-      "giderler.isletme",
-    ];
-
     const pool = getPool();
     const where = [];
-    const params = { workIds: REQUIRED_WORK_IDS };
+    const params = { workIds: BASE_REQUIRED_WORK_IDS };
     if (!allowAll) {
       const countryIds = Array.from(allowedCountryIds);
       const schoolIds = Array.from(allowedSchoolIds);
@@ -233,12 +239,14 @@ router.get("/review-queue", async (req, res) => {
         wi.state AS work_state,
         wi.submitted_at AS work_submitted_at,
         wi.reviewed_at AS work_reviewed_at,
-        wi.manager_comment
+        wi.manager_comment,
+        si.inputs_json AS inputs_json
        FROM schools s
        JOIN school_scenarios sc ON sc.school_id = s.id
        LEFT JOIN scenario_work_items wi
          ON wi.scenario_id = sc.id
         AND wi.work_id IN (:workIds)
+       LEFT JOIN scenario_inputs si ON si.scenario_id = sc.id
        ${whereSql}
        ORDER BY s.name ASC, sc.created_at DESC`,
       params
@@ -260,6 +268,7 @@ router.get("/review-queue", async (req, res) => {
           checked_at: row.scenario_checked_at,
           checked_by: row.scenario_checked_by,
         },
+          inputs_json: row.inputs_json,
           _itemMap: {},
         });
       }
@@ -277,17 +286,22 @@ router.get("/review-queue", async (req, res) => {
     const results = [];
     for (const entry of scenarioMap.values()) {
       const itemMap = entry._itemMap || {};
+      const inputs = safeParseInputsJson(entry.inputs_json);
+      const requiredIds = getRequiredWorkIdsForInputs(inputs);
       let approvedCount = 0;
-      const requiredItems = REQUIRED_WORK_IDS.map((wid) => {
+      const requiredItems = requiredIds.map((wid) => {
         const item = itemMap[wid] || null;
         if (item?.state === "approved") approvedCount += 1;
         return { workId: wid, item };
       });
+      const totalRequired = requiredIds.length;
       results.push({
         school: entry.school,
         scenario: entry.scenario,
         requiredItems,
         approvedCount,
+        totalRequired,
+        requiredIds,
       });
     }
 

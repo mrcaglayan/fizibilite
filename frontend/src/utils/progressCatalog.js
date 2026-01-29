@@ -34,6 +34,7 @@ const SCHOLAR_KEYS = [
 const COMPETITOR_KEYS = ["okulOncesi", "ilkokul", "ortaokul", "lise"];
 
 const IK_LEVEL_DEFS = [
+  { key: "merkez", label: "Merkez / HQ", kademeKey: null, yerelKey: "merkez", intKey: "merkez" },
   { key: "okulOncesi", label: "Okul Oncesi", kademeKey: "okulOncesi", yerelKey: "okulOncesi", intKey: "okulOncesi" },
   { key: "ilkokulYerel", label: "Ilkokul", kademeKey: "ilkokul", yerelKey: "ilkokulYerel", intKey: "ilkokulInt" },
   { key: "ortaokulYerel", label: "Ortaokul", kademeKey: "ortaokul", yerelKey: "ortaokulYerel", intKey: "ortaokulInt" },
@@ -195,6 +196,7 @@ function buildKademeContext(inputs) {
       enabledLevels: new Set(),
       activeGrades: new Set(),
       isGradeActive: () => false,
+      noKademeMode: false,
     };
   }
 
@@ -220,6 +222,8 @@ function buildKademeContext(inputs) {
   const enabledLevels = new Set(
     IK_LEVEL_DEFS.filter((lvl) => enabledKademes.has(lvl.kademeKey)).map((lvl) => lvl.key)
   );
+  const noKademeMode =
+    raw && typeof raw === "object" && Object.keys(raw).length > 0 && enabledKademes.size === 0;
   const activeGrades = new Set(enabledGrades);
   const isGradeActive = (grade) => {
     const key = String(grade ?? "").trim().toUpperCase();
@@ -227,7 +231,7 @@ function buildKademeContext(inputs) {
     return activeGrades.has(key);
   };
 
-  return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels, activeGrades, isGradeActive };
+  return { hasKademeSelection: true, enabledKademes, enabledGrades, enabledLevels, activeGrades, isGradeActive, noKademeMode };
 }
 
 function collectNormSubjects(norm) {
@@ -344,7 +348,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
         f.type || "number",
         (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "performans", f.key], null),
         (_, __, scenarioArg) => {
-          if (!scenarioArg || typeof scenarioArg !== "object") return true;
+          if (!scenarioArg || typeof scenarioArg !== "object") return false;
           return String(scenarioArg.input_currency || "").toUpperCase() === "LOCAL";
         }
       )
@@ -475,7 +479,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
               );
               return pickHeadcountValue(yerelValue, intValue);
             },
-            () => (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true)
+            () => (ctx.noKademeMode ? (lvl.key === "merkez") : (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true))
           )
         );
       });
@@ -494,7 +498,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
           const intVal = getTuitionUnitFee(inputsArg, row.intKey);
           return pickTuitionValue(yerelVal, intVal);
         },
-        () => (ctx.hasKademeSelection ? ctx.enabledKademes.has(row.baseKey) : true)
+        () => (ctx.noKademeMode ? true : (ctx.hasKademeSelection ? ctx.enabledKademes.has(row.baseKey) : true))
       )
     );
   });

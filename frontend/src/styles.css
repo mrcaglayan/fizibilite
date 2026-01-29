@@ -4487,6 +4487,14 @@ li.showMenu > .app-sub-menu {
   overflow: auto;
 }
 
+.rq-modal-footer {
+  padding: 10px 16px 16px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: center;
+  background: #fff;
+}
+
 /* Give the table a little breathing room in the modal */
 .rq-modal .table {
   margin-top: 10px;
@@ -4506,4 +4514,21 @@ li.showMenu > .app-sub-menu {
   .rq-title--lg {
     font-size: 16px;
   }
+}
+
+.app-optional-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  margin-right: 10px;
+  white-space: nowrap;
+}
+
+.app-nav-item.is-active .app-optional-badge,
+.app-nav-item:hover .app-optional-badge {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
 }

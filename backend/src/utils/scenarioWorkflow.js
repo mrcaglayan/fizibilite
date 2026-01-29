@@ -12,14 +12,14 @@
  *     remain in the default 'draft' state; callers may choose to treat
  *     this as 'in_review' for simplicity.
  *
- * The REQUIRED_WORK_IDS constant defines the stable identifiers for the
+ * The BASE_REQUIRED_WORK_IDS constant defines the stable identifiers for the
  * modules that must be completed in order for a scenario to be considered
  * ready.  The order and names here must remain in sync with the frontend
  * and any hard-coded strings elsewhere in the application.  See the
  * README or workflow specification for further details.
  */
 
-const REQUIRED_WORK_IDS = [
+const BASE_REQUIRED_WORK_IDS = [
   'temel_bilgiler',
   'kapasite',
   'norm.ders_dagilimi',
@@ -27,6 +27,39 @@ const REQUIRED_WORK_IDS = [
   'gelirler.unit_fee',
   'giderler.isletme',
 ];
+
+const { isHeadquarterScenarioFromInputs } = require("./scenarioProfile");
+
+function safeParseInputs(inputsRaw) {
+  if (!inputsRaw) return {};
+  if (typeof inputsRaw === "object") return inputsRaw;
+  if (typeof inputsRaw === "string") {
+    try {
+      const parsed = JSON.parse(inputsRaw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  return {};
+}
+
+function getRequiredWorkIdsForInputs(inputsObj) {
+  const inputs = safeParseInputs(inputsObj);
+  if (isHeadquarterScenarioFromInputs(inputs)) {
+    return ['ik.local_staff', 'gelirler.unit_fee', 'giderler.isletme'];
+  }
+  return BASE_REQUIRED_WORK_IDS.slice();
+}
+
+async function getRequiredWorkIdsForScenario(pool, scenarioId) {
+  const [[row]] = await pool.query(
+    "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
+    { id: scenarioId }
+  );
+  const inputs = safeParseInputs(row?.inputs_json);
+  return getRequiredWorkIdsForInputs(inputs);
+}
 
 /**
  * Compute the desired workflow status for the specified scenario.  The
@@ -40,6 +73,7 @@ const REQUIRED_WORK_IDS = [
  * @returns {Promise<string|null>} The newly applied status, or null if unchanged
  */
 async function computeScenarioWorkflowStatus(pool, scenarioId) {
+  const REQUIRED = await getRequiredWorkIdsForScenario(pool, scenarioId);
   // Load all work items for this scenario
   const [rows] = await pool.query(
     `SELECT work_id, state FROM scenario_work_items WHERE scenario_id=:sid`,
@@ -50,7 +84,7 @@ async function computeScenarioWorkflowStatus(pool, scenarioId) {
   if (Array.isArray(rows)) {
     for (const row of rows) {
       const wid = String(row.work_id);
-      if (REQUIRED_WORK_IDS.includes(wid)) {
+      if (REQUIRED.includes(wid)) {
         stateMap.set(wid, String(row.state || ''));
       }
     }
@@ -72,11 +106,11 @@ async function computeScenarioWorkflowStatus(pool, scenarioId) {
   if (newStatus !== 'revision_requested') {
     // Count approved states
     let approvedCount = 0;
-    for (const wid of REQUIRED_WORK_IDS) {
+    for (const wid of REQUIRED) {
       const s = stateMap.get(wid);
       if (s === 'approved') approvedCount++;
     }
-    if (approvedCount === REQUIRED_WORK_IDS.length) {
+    if (approvedCount === REQUIRED.length) {
       newStatus = 'approved';
     } else {
       // At least one item exists: remain in_review
@@ -101,6 +135,8 @@ async function computeScenarioWorkflowStatus(pool, scenarioId) {
 }
 
 module.exports = {
-  REQUIRED_WORK_IDS,
+  BASE_REQUIRED_WORK_IDS,
+  getRequiredWorkIdsForInputs,
+  getRequiredWorkIdsForScenario,
   computeScenarioWorkflowStatus,
 };

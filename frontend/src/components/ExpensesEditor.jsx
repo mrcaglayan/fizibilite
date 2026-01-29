@@ -180,15 +180,6 @@ function computeTotalStudents(grades) {
 }
 
 // ---- IK salary mapping (same formula as HR tab) ----
-const IK_LEVELS = [
-  "okulOncesi",
-  "ilkokulYerel",
-  "ilkokulInt",
-  "ortaokulYerel",
-  "ortaokulInt",
-  "liseYerel",
-  "liseInt",
-];
 const IK_ROLES = [
   "turk_mudur",
   "turk_mdyard",
@@ -207,7 +198,8 @@ function salaryMapForYear(yearIK) {
 
   for (const role of IK_ROLES) {
     let totalCount = 0;
-    for (const lvl of IK_LEVELS) totalCount += toNum(hc?.[lvl]?.[role]);
+    const levelKeys = Object.keys(hc || {});
+    for (const lvl of levelKeys) totalCount += toNum(hc?.[lvl]?.[role]);
     roleAnnual[role] = toNum(unitCosts?.[role]) * totalCount;
   }
 

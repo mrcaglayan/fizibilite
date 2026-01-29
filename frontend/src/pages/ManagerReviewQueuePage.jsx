@@ -6,7 +6,6 @@ import { useNavigate, useOutletContext } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { FaCheck, FaCheckCircle, FaExclamationTriangle, FaPaperPlane, FaSearch, FaStar, FaThLarge } from 'react-icons/fa';
 import { api } from '../api';
-import { useOutsideClick } from '../hooks/useOutsideClick';
 import { useAuth } from '../auth/AuthContext';
 import { writeGlobalLastRouteSegment, writeLastVisitedPath, writeSelectedScenarioId } from '../utils/schoolNavStorage';
 
@@ -49,6 +48,13 @@ const WORK_ID_TO_ROUTE = {
   'gelirler.unit_fee': 'gelirler',
   'giderler.isletme': 'giderler',
 };
+
+function getRequiredTotal(entry) {
+  const total = Number(entry?.totalRequired);
+  if (Number.isFinite(total) && total > 0) return total;
+  if (Array.isArray(entry?.requiredItems)) return entry.requiredItems.length;
+  return REQUIRED_WORK_IDS.length;
+}
 
 const FILTER_TABS = [
   { key: 'all', label: 'Tümü' },
@@ -121,12 +127,25 @@ export default function ManagerReviewQueuePage() {
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
   const [activeCard, setActiveCard] = useState(null);
-  const modalRef = useRef(null);
+  const [modalLayoutShared, setModalLayoutShared] = useState(true);
+  const activeScenarioIdRef = useRef(null);
+  const pendingQueueRef = useRef(null);
+  const isModalOpenRef = useRef(false);
   const motionId = useId();
   const tabsId = useId();
 
-  const closeModal = useCallback(() => setActiveCard(null), []);
-  useOutsideClick(modalRef, closeModal, Boolean(activeCard));
+  const closeModal = useCallback(() => {
+    isModalOpenRef.current = false;
+    setModalLayoutShared(true);
+    requestAnimationFrame(() => setActiveCard(null));
+  }, []);
+
+  const openModalWithCard = useCallback((cardPayload) => {
+    isModalOpenRef.current = true;
+    setModalLayoutShared(true);
+    activeScenarioIdRef.current = cardPayload?.scenario?.id ?? null;
+    setActiveCard(cardPayload);
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -144,6 +163,12 @@ export default function ManagerReviewQueuePage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [activeCard, closeModal]);
+
+  useEffect(() => {
+    if (!activeCard) return;
+    const id = window.setTimeout(() => setModalLayoutShared(false), 220);
+    return () => window.clearTimeout(id);
+  }, [activeCard]);
 
 
   // Determine whether the current user is allowed to view the review queue.
@@ -172,12 +197,38 @@ export default function ManagerReviewQueuePage() {
   }, [outlet]);
 
   // Load the queue.  Fetch schools, then scenarios for each school, then work items.
-  const loadQueue = useCallback(async () => {
+  const loadQueue = useCallback(async (options = {}) => {
     if (!canView) return;
     setLoading(true);
     try {
       const results = await api.managerGetReviewQueue();
-      setQueueData(Array.isArray(results) ? results : []);
+      const normalized = Array.isArray(results) ? results : [];
+      const activeScenarioId =
+        options?.activeScenarioId ?? activeScenarioIdRef.current;
+      const deferUpdate =
+        typeof options?.deferUpdate === 'boolean'
+          ? options.deferUpdate
+          : isModalOpenRef.current || activeScenarioId != null;
+      if (!deferUpdate) {
+        setQueueData(normalized);
+      } else {
+        pendingQueueRef.current = normalized;
+      }
+
+      if (activeScenarioId != null) {
+        const match = normalized.find(
+          (entry) => String(entry?.scenario?.id) === String(activeScenarioId)
+        );
+        if (match) {
+          setActiveCard({
+            school: match.school,
+            scenario: match.scenario,
+            requiredItems: match.requiredItems,
+            approvedCount: match.approvedCount,
+            totalRequired: getRequiredTotal(match),
+          });
+        }
+      }
     } catch (err) {
       console.error(err);
       toast.error(err?.message || 'Failed to load review queue');
@@ -185,6 +236,15 @@ export default function ManagerReviewQueuePage() {
       setLoading(false);
     }
   }, [canView]);
+
+  useEffect(() => {
+    activeScenarioIdRef.current = activeCard?.scenario?.id ?? null;
+    isModalOpenRef.current = Boolean(activeCard);
+    if (!activeCard && pendingQueueRef.current) {
+      setQueueData(pendingQueueRef.current);
+      pendingQueueRef.current = null;
+    }
+  }, [activeCard]);
 
   useEffect(() => {
     loadQueue();
@@ -196,7 +256,8 @@ export default function ManagerReviewQueuePage() {
     const status = scenario.status;
     const sentAt = scenario.sent_at;
     const approvedCount = Number(entry.approvedCount || 0);
-    const allApproved = approvedCount === REQUIRED_WORK_IDS.length;
+    const totalRequired = getRequiredTotal(entry);
+    const allApproved = approvedCount === totalRequired;
     const isManagerApproved = status === 'approved' && !sentAt;
     const isFinalApproved = status === 'approved' && !!sentAt;
     switch (filterKey) {
@@ -261,12 +322,71 @@ export default function ManagerReviewQueuePage() {
     }
   }, []);
 
+  const applyWorkItemState = (items, workId, nextState, comment) => {
+    const updatedItems = Array.isArray(items)
+      ? items.map((entry) => {
+          if (entry.workId !== workId) return entry;
+          return {
+            ...entry,
+            item: {
+              ...entry.item,
+              state: nextState,
+              manager_comment: comment ? comment : entry.item?.manager_comment,
+            },
+          };
+        })
+      : items;
+    const approvedCount = Array.isArray(updatedItems)
+      ? updatedItems.filter((entry) => entry?.item?.state === 'approved').length
+      : 0;
+    return { updatedItems, approvedCount };
+  };
+
+  const updateQueueEntry = useCallback((scenarioId, updater) => {
+    setQueueData((prev) =>
+      prev.map((entry) => {
+        if (!entry?.scenario) return entry;
+        if (String(entry.scenario.id) !== String(scenarioId)) return entry;
+        return updater(entry);
+      })
+    );
+  }, []);
+
   // Handlers for approving or revising a work item
   const handleApprove = async (schoolId, scenarioId, workId) => {
     try {
       await api.reviewWorkItem(schoolId, scenarioId, workId, { action: 'approve' });
       toast.success('Onaylandı');
-      loadQueue();
+      const isActiveScenario = String(activeCard?.scenario?.id) === String(scenarioId);
+      if (isActiveScenario) {
+        setActiveCard((prev) => {
+          if (!prev) return prev;
+          const { updatedItems, approvedCount } = applyWorkItemState(
+            prev.requiredItems,
+            workId,
+            'approved'
+          );
+          return {
+            ...prev,
+            requiredItems: updatedItems,
+            approvedCount,
+          };
+        });
+        updateQueueEntry(scenarioId, (entry) => {
+          const { updatedItems, approvedCount } = applyWorkItemState(
+            entry.requiredItems,
+            workId,
+            'approved'
+          );
+          return {
+            ...entry,
+            requiredItems: updatedItems,
+            approvedCount,
+          };
+        });
+      } else {
+        loadQueue({ deferUpdate: false });
+      }
     } catch (e) {
       console.error(e);
       toast.error(e?.message || 'Failed to approve work item');
@@ -283,7 +403,39 @@ export default function ManagerReviewQueuePage() {
         comment: comment && comment.trim() ? comment.trim() : undefined,
       });
       toast.success('Revizyon istendi');
-      loadQueue();
+      const isActiveScenario = String(activeCard?.scenario?.id) === String(scenarioId);
+      if (isActiveScenario) {
+        const trimmedComment = comment && comment.trim() ? comment.trim() : '';
+        setActiveCard((prev) => {
+          if (!prev) return prev;
+          const { updatedItems, approvedCount } = applyWorkItemState(
+            prev.requiredItems,
+            workId,
+            'needs_revision',
+            trimmedComment
+          );
+          return {
+            ...prev,
+            requiredItems: updatedItems,
+            approvedCount,
+          };
+        });
+        updateQueueEntry(scenarioId, (entry) => {
+          const { updatedItems, approvedCount } = applyWorkItemState(
+            entry.requiredItems,
+            workId,
+            'needs_revision',
+            trimmedComment
+          );
+          return {
+            ...entry,
+            requiredItems: updatedItems,
+            approvedCount,
+          };
+        });
+      } else {
+        loadQueue({ deferUpdate: false });
+      }
     } catch (e) {
       console.error(e);
       toast.error(e?.message || 'Failed to request revision');
@@ -300,7 +452,8 @@ export default function ManagerReviewQueuePage() {
       }
       await api.sendForApproval(schoolId, scenarioId);
       toast.success('Merkeze iletildi');
-      loadQueue();
+      const keepOpenId = activeCard?.scenario?.id ?? null;
+      loadQueue({ activeScenarioId: keepOpenId, deferUpdate: Boolean(keepOpenId) });
     } catch (e) {
       console.error(e);
       toast.error(e?.message || 'Failed to send for approval');
@@ -323,7 +476,8 @@ export default function ManagerReviewQueuePage() {
   const activeScenario = activeCard?.scenario;
   const activeSchool = activeCard?.school;
   const activeStatusMeta = activeScenario ? getScenarioStatusMeta(activeScenario) : null;
-  const activeAllApproved = activeCard ? activeCard.approvedCount === REQUIRED_WORK_IDS.length : false;
+  const activeTotalRequired = activeCard ? getRequiredTotal(activeCard) : REQUIRED_WORK_IDS.length;
+  const activeAllApproved = activeCard ? activeCard.approvedCount === activeTotalRequired : false;
 
   return (
     <div className="container">
@@ -335,13 +489,22 @@ export default function ManagerReviewQueuePage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="rq-overlay"
+            onClick={closeModal}
           />
         ) : null}
       </AnimatePresence>
 
       <AnimatePresence>
         {activeCard && typeof activeCard === 'object' ? (
-          <div className="rq-modal-wrap" role="dialog" aria-modal="true" aria-label="Scenario details">
+          <div
+            className="rq-modal-wrap"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Scenario details"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) closeModal();
+            }}
+          >
             <motion.button
               key={`rq-close-${activeScenario?.id}-${motionId}`}
               initial={{ opacity: 0 }}
@@ -356,13 +519,21 @@ export default function ManagerReviewQueuePage() {
             </motion.button>
 
             <motion.div
-              layoutId={`rq-card-${activeScenario?.id}-${motionId}`}
-              ref={modalRef}
+              layoutId={
+                modalLayoutShared
+                  ? `rq-card-${activeScenario?.id}-${motionId}`
+                  : `rq-modal-${activeScenario?.id}-${motionId}`
+              }
               className="card rq-modal"
+              onClick={(event) => event.stopPropagation()}
             >
               <div className="rq-modal-head">
                 <motion.div
-                  layoutId={`rq-thumb-${activeScenario?.id}-${motionId}`}
+                  layoutId={
+                    modalLayoutShared
+                      ? `rq-thumb-${activeScenario?.id}-${motionId}`
+                      : `rq-modal-thumb-${activeScenario?.id}-${motionId}`
+                  }
                   className="rq-thumb rq-thumb--lg"
                 >
                   {getScenarioInitials(activeScenario)}
@@ -370,7 +541,11 @@ export default function ManagerReviewQueuePage() {
 
                 <div className="rq-modal-head-text">
                   <motion.div
-                    layoutId={`rq-title-${activeScenario?.id}-${motionId}`}
+                    layoutId={
+                      modalLayoutShared
+                        ? `rq-title-${activeScenario?.id}-${motionId}`
+                        : `rq-modal-title-${activeScenario?.id}-${motionId}`
+                    }
                     className="rq-title rq-title--lg"
                   >
                     {activeScenario?.name} ({activeScenario?.academic_year})
@@ -384,7 +559,7 @@ export default function ManagerReviewQueuePage() {
                   ) : null}
                   {activeCard ? (
                     <span className="small is-muted">
-                      {activeCard.approvedCount}/{REQUIRED_WORK_IDS.length} onaylandı
+                      {activeCard.approvedCount}/{activeTotalRequired} onaylandı
                     </span>
                   ) : null}
 
@@ -486,6 +661,12 @@ export default function ManagerReviewQueuePage() {
                   </table>
                 </div>
               </div>
+
+              <div className="rq-modal-footer">
+                <button className="btn" type="button" onClick={closeModal}>
+                  Kapat
+                </button>
+              </div>
             </motion.div>
           </div>
         ) : null}
@@ -545,18 +726,20 @@ export default function ManagerReviewQueuePage() {
         </div>
       ) : (
         <div className="review-queue-cards">
-          {filteredRows.map(({ school, scenario, requiredItems, approvedCount }) => {
+          {filteredRows.map((entry) => {
+            const { school, scenario, requiredItems, approvedCount } = entry;
             const statusMeta = getScenarioStatusMeta(scenario);
-            const allApproved = approvedCount === REQUIRED_WORK_IDS.length;
+            const totalRequired = getRequiredTotal(entry);
+            const allApproved = approvedCount === totalRequired;
 
-            const cardPayload = { school, scenario, requiredItems, approvedCount };
+            const cardPayload = { school, scenario, requiredItems, approvedCount, totalRequired };
 
             return (
               <motion.div
                 key={scenario.id}
                 layoutId={`rq-card-${scenario.id}-${motionId}`}
                 className="card rq-card-compact"
-                onClick={() => setActiveCard(cardPayload)}
+                onClick={() => openModalWithCard(cardPayload)}
               >
                 <div className="rq-compact-row">
                   <div className="rq-compact-left">
@@ -579,7 +762,7 @@ export default function ManagerReviewQueuePage() {
                       <div className="rq-subtitle">
                         <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
                         <span className="small is-muted" style={{ marginLeft: 8 }}>
-                          {approvedCount}/{REQUIRED_WORK_IDS.length} onaylandı
+                          {approvedCount}/{totalRequired} onaylandı
                         </span>
                       </div>
                     </div>
@@ -591,7 +774,7 @@ export default function ManagerReviewQueuePage() {
                       className="rq-open-pill"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setActiveCard(cardPayload);
+                        openModalWithCard(cardPayload);
                       }}
                     >
                       İncele

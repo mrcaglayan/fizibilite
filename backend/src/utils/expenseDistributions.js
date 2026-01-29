@@ -57,6 +57,13 @@ const DORM_TO_INCOME_KEY = {
   digerYurt: "yazOkulu",
 };
 const DISCOUNT_TOTAL_KEY = "discountsTotal";
+const SALARY_KEYS = new Set([
+  "turkPersonelMaas",
+  "turkDestekPersonelMaas",
+  "yerelPersonelMaas",
+  "yerelDestekPersonelMaas",
+  "internationalPersonelMaas",
+]);
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -83,6 +90,44 @@ function computeDiscountBaseY1(inputs) {
   };
 }
 
+function computeSalaryFromIkY1(ik) {
+  const yearIK = ik?.years?.y1 ? ik.years.y1 : ik || {};
+  const unitCosts = yearIK?.unitCosts || {};
+  const headcountsByLevel = yearIK?.headcountsByLevel || {};
+  const levelKeys = Object.keys(headcountsByLevel || {});
+  const roles = [
+    "turk_mudur",
+    "turk_mdyard",
+    "turk_egitimci",
+    "turk_temsil",
+    "yerel_yonetici_egitimci",
+    "yerel_destek",
+    "yerel_ulke_temsil_destek",
+    "int_yonetici_egitimci",
+  ];
+
+  const roleAnnual = {};
+  for (const role of roles) {
+    let count = 0;
+    for (const lvl of levelKeys) {
+      count += safeNum(headcountsByLevel?.[lvl]?.[role]);
+    }
+    roleAnnual[role] = safeNum(unitCosts?.[role]) * count;
+  }
+
+  return {
+    turkPersonelMaas:
+      safeNum(roleAnnual.turk_mudur) +
+      safeNum(roleAnnual.turk_mdyard) +
+      safeNum(roleAnnual.turk_egitimci),
+    turkDestekPersonelMaas: safeNum(roleAnnual.turk_temsil),
+    yerelPersonelMaas: safeNum(roleAnnual.yerel_yonetici_egitimci),
+    yerelDestekPersonelMaas:
+      safeNum(roleAnnual.yerel_destek) + safeNum(roleAnnual.yerel_ulke_temsil_destek),
+    internationalPersonelMaas: safeNum(roleAnnual.int_yonetici_egitimci),
+  };
+}
+
 function applyDistributionOverlay(inputs, allocations) {
   const next = cloneJson(inputs || {});
   const giderler = next.giderler || {};
@@ -100,6 +145,7 @@ function applyDistributionOverlay(inputs, allocations) {
   const dormRows = Array.isArray(next?.gelirler?.dormitory?.rows) ? next.gelirler.dormitory.rows : [];
   const dormByKey = new Map(dormRows.map((row) => [String(row?.key || ""), row]));
 
+  const salaryBase = computeSalaryFromIkY1(next?.ik);
   const list = Array.isArray(allocations) ? allocations : [];
   for (const row of list) {
     if (!row) continue;
@@ -108,7 +154,13 @@ function applyDistributionOverlay(inputs, allocations) {
     const add = safeNum(row.allocated_amount ?? row.allocatedAmount);
 
     if (OPERATING_KEYS.has(key)) {
-      operatingItems[key] = safeNum(operatingItems[key]) + add;
+      if (SALARY_KEYS.has(key)) {
+        const base = safeNum(salaryBase?.[key]);
+        const current = safeNum(operatingItems[key]);
+        operatingItems[key] = Math.max(current, base) + add;
+      } else {
+        operatingItems[key] = safeNum(operatingItems[key]) + add;
+      }
       continue;
     }
 

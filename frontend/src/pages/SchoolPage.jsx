@@ -16,8 +16,10 @@ import {
   writeLastVisitedPath,
   writeSelectedScenarioId,
   writeGlobalLastRouteSegment,
+  writeScenarioFlags,
 } from "../utils/schoolNavStorage";
 import { getProgramType, mapBaseKademeToVariant, normalizeProgramType } from "../utils/programType";
+import { isHeadquarterScenario } from "../utils/scenarioProfile";
 
 // Helper: Convert dirty input paths to permission resource keys for modifiedResources.
 // It strips a leading 'inputs.' prefix (if present), converts camelCase
@@ -175,6 +177,7 @@ const TAB_TO_WORK_ID = {
   income: "gelirler.unit_fee",
   expenses: "giderler.isletme",
 };
+const HQ_REQUIRED_WORK_IDS = new Set(["ik.local_staff", "gelirler.unit_fee", "giderler.isletme"]);
 
 function parseAcademicYear(academicYear) {
   const s = String(academicYear || "").trim();
@@ -292,6 +295,7 @@ export default function SchoolPage() {
   // modules for review via submitWorkItem, which will refresh this list.
   const [workItems, setWorkItems] = useState([]);
   const [workItemsLoaded, setWorkItemsLoaded] = useState(false);
+  const [requiredWorkIds, setRequiredWorkIds] = useState([]);
   const [scenarioMetaLoaded, setScenarioMetaLoaded] = useState(false);
   const [reviewingWorkItem, setReviewingWorkItem] = useState(false);
 
@@ -311,14 +315,17 @@ export default function SchoolPage() {
     if (!sid || !schoolId) {
       setWorkItems([]);
       setWorkItemsLoaded(false);
+      setRequiredWorkIds([]);
       return;
     }
     try {
       const data = await api.listWorkItems(schoolId, sid);
       setWorkItems(Array.isArray(data?.workItems) ? data.workItems : []);
+      setRequiredWorkIds(Array.isArray(data?.requiredWorkIds) ? data.requiredWorkIds : []);
       setWorkItemsLoaded(true);
     } catch (_) {
       // ignore errors, keep existing list
+      setRequiredWorkIds([]);
       setWorkItemsLoaded(true);
     }
   }, [schoolId, selectedScenario?.id]);
@@ -575,6 +582,12 @@ export default function SchoolPage() {
     () => computeScenarioProgress({ inputs, norm, config: progressConfig, scenario: selectedScenario }),
     [inputs, norm, progressConfig, selectedScenario]
   );
+  const isHQ = useMemo(() => isHeadquarterScenario(inputs), [inputs]);
+  useEffect(() => {
+    if (schoolId && selectedScenarioId && inputs) {
+      writeScenarioFlags(schoolId, selectedScenarioId, { isHeadquarter: isHQ });
+    }
+  }, [schoolId, selectedScenarioId, inputs, isHQ]);
   const progMap = useMemo(
     () => Object.fromEntries((scenarioProgress?.tabs || []).map((t) => [t.key, t])),
     [scenarioProgress]
@@ -586,18 +599,24 @@ export default function SchoolPage() {
   }, [progMap, ignoreNormProgress]);
   const expensesAvgPct = useMemo(() => {
     const a = pctValue(progMap.giderler);
+    if (isHQ) return a;
     // Use the new discounts key instead of the legacy indirimler key.  If the
     // discounts tab is missing, default to 0 for the percentage value.
     const b = pctValue(progMap.discounts);
     return Math.round((a + b) / 2);
-  }, [progMap]);
+  }, [progMap, isHQ]);
   const normMissingLines = useMemo(
     () => mergeMissingLines(progMap.gradesPlan?.missingLines, progMap.norm?.missingLines),
     [progMap]
   );
   const expensesMissingLines = useMemo(
-    () => mergeMissingLines(progMap.giderler?.missingLines, progMap.discounts?.missingLines),
-    [progMap]
+    () =>
+      isHQ
+        ? Array.isArray(progMap.giderler?.missingLines)
+          ? progMap.giderler.missingLines
+          : []
+        : mergeMissingLines(progMap.giderler?.missingLines, progMap.discounts?.missingLines),
+    [progMap, isHQ]
   );
 
   const fetchScenarioReport = useCallback(
@@ -662,15 +681,18 @@ export default function SchoolPage() {
       "int_yonetici_egitimci",
     ];
 
-    const levels = [
-      "okulOncesi",
-      "ilkokulYerel",
-      "ilkokulInt",
-      "ortaokulYerel",
-      "ortaokulInt",
-      "liseYerel",
-      "liseInt",
-    ];
+    const levelKeys = Object.keys(headcountsByLevel || {});
+    const levels = levelKeys.length
+      ? levelKeys
+      : [
+          "okulOncesi",
+          "ilkokulYerel",
+          "ilkokulInt",
+          "ortaokulYerel",
+          "ortaokulInt",
+          "liseYerel",
+          "liseInt",
+        ];
 
     const roleAnnual = {};
     for (const r of roles) {
@@ -1275,6 +1297,7 @@ export default function SchoolPage() {
   function ensurePlanningStudentsForY2Y3(actionLabel = "Islem") {
     // If inputs are not loaded yet, don't block here (other guards will handle it)
     if (!inputs) return true;
+    if (isHQ) return true;
 
     const totals = getPlannedStudentTotalsByYear(inputs);
     const missing = [];
@@ -1594,8 +1617,14 @@ export default function SchoolPage() {
     : moduleLocked
       ? moduleLockReason
       : "";
+  const isActiveRequired = activeWorkId
+    ? (requiredWorkIds.length
+      ? requiredWorkIds.includes(activeWorkId)
+      : (isHQ ? HQ_REQUIRED_WORK_IDS.has(activeWorkId) : true))
+    : false;
   const canSubmitWorkItem =
     activeWorkId &&
+    isActiveRequired &&
     !scenarioLocked &&
     ["not_started", "in_progress", "needs_revision"].includes(activeWorkState);
   const markDirty = useCallback(
@@ -1873,22 +1902,25 @@ export default function SchoolPage() {
       return item?.state ? String(item.state) : "not_started";
     };
     const footerModules = [];
+    const optionalSuffix = " (Opsiyonel)";
     if (progMap && progMap.temelBilgiler) {
       footerModules.push({
         key: "temel",
-        label: "Temel",
+        label: isHQ ? `Temel${optionalSuffix}` : "Temel",
         labelShort: "Temel",
         pct: pctValue(progMap.temelBilgiler),
         done: progMap.temelBilgiler.done === true,
+        isOptional: isHQ,
       });
     }
     if (progMap && progMap.kapasite) {
       footerModules.push({
         key: "kapasite",
-        label: "Kapasite",
+        label: isHQ ? `Kapasite${optionalSuffix}` : "Kapasite",
         labelShort: "Kap",
         pct: pctValue(progMap.kapasite),
         done: progMap.kapasite.done === true,
+        isOptional: isHQ,
       });
     }
     // Combine gradesPlan and norm into a single "Norm" segment.  Use normAvgPct for pct.
@@ -1898,16 +1930,17 @@ export default function SchoolPage() {
         (progMap?.norm?.done === true || progMap?.norm?.done === undefined);
     footerModules.push({
       key: "norm",
-      label: "Norm",
+      label: isHQ ? `Norm${optionalSuffix}` : "Norm",
       labelShort: "Norm",
       pct: Number.isFinite(normAvgPct) ? normAvgPct : 0,
       done: normDone,
+      isOptional: isHQ,
     });
     if (progMap && progMap.ik) {
       footerModules.push({
         key: "ik",
-        label: "İK",
-        labelShort: "İK",
+        label: "?K",
+        labelShort: "?K",
         pct: pctValue(progMap.ik),
         done: progMap.ik.done === true,
       });
@@ -1922,9 +1955,10 @@ export default function SchoolPage() {
       });
     }
     // Combine giderler and discounts into a single "Gider" segment.  Use expensesAvgPct.
-    const giderDone =
-      (progMap?.giderler?.done === true || progMap?.giderler?.done === undefined) &&
-      (progMap?.discounts?.done === true || progMap?.discounts?.done === undefined);
+    const giderDone = isHQ
+      ? (progMap?.giderler?.done === true || progMap?.giderler?.done === undefined)
+      : (progMap?.giderler?.done === true || progMap?.giderler?.done === undefined) &&
+        (progMap?.discounts?.done === true || progMap?.discounts?.done === undefined);
     footerModules.push({
       key: "gider",
       label: "Gider",
@@ -1932,7 +1966,8 @@ export default function SchoolPage() {
       pct: Number.isFinite(expensesAvgPct) ? expensesAvgPct : 0,
       done: giderDone,
     });
-    const allModulesDone = footerModules.every((m) => m.done);
+    const requiredModules = footerModules.filter((m) => !m.isOptional);
+    const allModulesDone = requiredModules.every((m) => m.done);
     // Determine scenario progress pct for label heuristics
     const scenarioProgressPct = selectedScenario?.progress_pct;
     // Determine status pills: scenario-first when workflow advanced beyond draft,
@@ -2202,7 +2237,7 @@ export default function SchoolPage() {
       // disallow if modules incomplete or there are pending changes or locks
       if (!allModulesDone) {
         primaryDisabled = true;
-        const incomplete = footerModules.filter((m) => !m.done);
+        const incomplete = footerModules.filter((m) => !m.done && !m.isOptional);
         primaryTooltipReasons.push(
           "Tüm modüller tamamlanmalı: " +
             incomplete.map((m) => `${m.label} ${m.pct}%`).join(", ")
@@ -2255,39 +2290,45 @@ export default function SchoolPage() {
       // the button but keep it disabled with an explanatory tooltip.
       if (!activeWorkId) {
         primaryDisabled = true;
-        primaryTooltipReasons.push("Gönderilecek bir modül yok.");
+        primaryTooltipReasons.push("G?nderilecek bir mod?l yok.");
       }
-      // User must have write permission on the active module's resource (page or section).
-      if (activeWorkId && !userHasModuleWrite) {
+      const isOptionalModule = activeWorkId && !isActiveRequired;
+      if (isOptionalModule) {
         primaryDisabled = true;
-        primaryTooltipReasons.push("Bu modülü gönderme yetkiniz yok.");
-      }
-      // Module must be in a state that allows submission (not submitted or approved).
-      if (activeWorkId && !canSubmitWorkItem) {
-        primaryDisabled = true;
-        primaryTooltipReasons.push(moduleLockReason || "Modül gönderilemez");
-      }
-      // Module must be completed before sending.
-      if (!activeModuleDone) {
-        primaryDisabled = true;
-        primaryTooltipReasons.push("Bu modül tamamlanmalı.");
-      }
-      // Cannot submit while there are unsaved changes.
-      if (inputsDirty) {
-        primaryDisabled = true;
-        primaryTooltipReasons.push("Önce değişiklikleri kaydedin.");
-      }
-      if (inputsSaving) {
-        primaryDisabled = true;
-        primaryTooltipReasons.push("Kaydetme devam ediyor.");
-      }
-      if (calculating) {
-        primaryDisabled = true;
-        primaryTooltipReasons.push("Hesaplama devam ediyor.");
-      }
-      if (scenarioLocked) {
-        primaryDisabled = true;
-        primaryTooltipReasons.push("Senaryo kilitli.");
+        primaryTooltipReasons.push("HQ senaryoda bu mod?l opsiyonel; g?nderilmesi gerekmiyor.");
+      } else {
+        // User must have write permission on the active module's resource (page or section).
+        if (activeWorkId && !userHasModuleWrite) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push("Bu mod?l? g?nderme yetkiniz yok.");
+        }
+        // Module must be in a state that allows submission (not submitted or approved).
+        if (activeWorkId && !canSubmitWorkItem) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push(moduleLockReason || "Mod?l g?nderilemez");
+        }
+        // Module must be completed before sending.
+        if (!activeModuleDone) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push("Bu mod?l tamamlanmal?.");
+        }
+        // Cannot submit while there are unsaved changes.
+        if (inputsDirty) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push("?nce de?i?iklikleri kaydedin.");
+        }
+        if (inputsSaving) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push("Kaydetme devam ediyor.");
+        }
+        if (calculating) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push("Hesaplama devam ediyor.");
+        }
+        if (scenarioLocked) {
+          primaryDisabled = true;
+          primaryTooltipReasons.push("Senaryo kilitli.");
+        }
       }
       if (!primaryDisabled && activeWorkId && userHasModuleWrite && canSubmitWorkItem && activeModuleDone) {
         // For module-level submission, submit only the active work item.

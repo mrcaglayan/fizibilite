@@ -32,7 +32,9 @@ import {
   writeSelectedScenarioId,
   readGlobalLastRouteSegment,
   writeLastActiveSchoolId,
+  writeScenarioFlags,
 } from "../utils/schoolNavStorage";
+import { isHeadquarterScenario } from "../utils/scenarioProfile";
 import { can } from "../utils/permissions";
 
 const COPY_SELECT_TABS = [
@@ -1091,6 +1093,8 @@ export default function SelectPage() {
             ? normalizeGradesInputs(normalizeTemelBilgilerInputs(normalizeCapacityInputs(raw)))
             : raw;
         setInputs(normalized);
+        const isHQ = isHeadquarterScenario(normalized);
+        writeScenarioFlags(selectedSchoolId, selectedScenarioIdLocal, { isHeadquarter: isHQ });
         setReport(null);
       } catch (e) {
         if (!active) return;
@@ -1190,6 +1194,10 @@ export default function SelectPage() {
     () => scenarios.find((s) => String(s.id) === String(selectedScenarioIdLocal)) || null,
     [scenarios, selectedScenarioIdLocal]
   );
+  const selectedSchoolName = useMemo(() => {
+    const match = schools.find((s) => String(s.id) === String(selectedSchoolId));
+    return match?.name || "";
+  }, [schools, selectedSchoolId]);
   const sortedScenarios = useMemo(() => {
     if (!scenarioSort.key) return scenarios;
     const indexed = scenarios.map((s, idx) => ({ s, idx }));
@@ -2051,6 +2059,7 @@ export default function SelectPage() {
 
   function ensurePlanningStudentsForY2Y3(actionLabel = "Islem") {
     if (!inputs) return true;
+    if (isHeadquarterScenario(inputs)) return true;
 
     const totals = getPlannedStudentTotalsByYear(inputs);
     const missing = [];
@@ -2460,6 +2469,7 @@ export default function SelectPage() {
           onClose={() => setExpenseSplitOpen(false)}
           sourceScenario={selectedRowScenario}
           sourceSchoolId={selectedSchoolId}
+          sourceSchoolName={selectedSchoolName}
         />
       ) : null}
 

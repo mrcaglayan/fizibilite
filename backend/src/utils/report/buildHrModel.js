@@ -90,6 +90,7 @@ function getInflationFactors(temelBilgiler) {
 }
 
 const LEVEL_DEFS = [
+  { key: "merkez", baseLabel: "MERKEZ / HQ", kademeKey: null },
   { key: "okulOncesi", baseLabel: "Okul Öncesi", kademeKey: "okulOncesi" },
   { key: "ilkokulYerel", baseLabel: "İlkokul", kademeKey: "ilkokul", suffix: "-YEREL" },
   { key: "ilkokulInt", baseLabel: "İlkokul", kademeKey: "ilkokul", suffix: "-INT." },
@@ -282,15 +283,26 @@ function buildHrModel({ scenario, inputs, report, programType, currencyMeta, rep
 
   const kademeConfig = _inputs?.temelBilgiler?.kademeler;
   const kademeler = normalizeKademeConfig(kademeConfig);
+  const baseKeys = ["okulOncesi", "ilkokul", "ortaokul", "lise"];
+  const noKademeMode = baseKeys.every((k) => kademeler?.[k]?.enabled === false);
 
   const levels = LEVEL_DEFS.map((lvl) => {
     const base = formatKademeLabel(lvl.baseLabel, kademeler, lvl.kademeKey);
     return { ...lvl, label: lvl.suffix ? `${base}${lvl.suffix}` : base };
   });
 
-  let visibleLevels = levels.filter(
-    (lvl) => kademeler?.[lvl.kademeKey]?.enabled !== false && isKademeKeyVisible(lvl.key, resolvedProgramType)
-  );
+  let visibleLevels = [];
+  if (noKademeMode) {
+    const hq = levels.find((lvl) => lvl.key === "merkez");
+    visibleLevels = hq ? [hq] : [];
+  } else {
+    visibleLevels = levels.filter(
+      (lvl) =>
+        lvl.key !== "merkez" &&
+        kademeler?.[lvl.kademeKey]?.enabled !== false &&
+        isKademeKeyVisible(lvl.key, resolvedProgramType)
+    );
+  }
   if (!visibleLevels.length) visibleLevels = levels;
 
   // Build IK structure and ensure derived Y2/Y3 unit costs are consistent

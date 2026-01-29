@@ -13,7 +13,7 @@ const {
 } = require('../middleware/auth');
 const { calculateSchoolFeasibility } = require("../engine/feasibilityEngine");
 const { computeScenarioProgress } = require("../utils/scenarioProgress");
-const { computeScenarioWorkflowStatus, REQUIRED_WORK_IDS } = require("../utils/scenarioWorkflow");
+const { computeScenarioWorkflowStatus, getRequiredWorkIdsForScenario } = require("../utils/scenarioWorkflow");
 const { getProgressConfig } = require("../utils/progressConfig");
 const { normalizeProgramType } = require("../utils/programType");
 const { getPrevScenario } = require("../utils/report/getPrevScenario");
@@ -1742,7 +1742,8 @@ router.get(
          ORDER BY work_id ASC`,
         { sid: scenarioId }
       );
-      return res.json({ workItems: rows });
+      const requiredWorkIds = await getRequiredWorkIdsForScenario(pool, scenarioId);
+      return res.json({ workItems: rows, requiredWorkIds });
     } catch (e) {
       return res.status(500).json({ error: 'Server error', details: String(e?.message || e) });
     }
@@ -2402,15 +2403,6 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
     };
 
     // IK salary mapping (same as engine)
-    const IK_LEVELS = [
-      "okulOncesi",
-      "ilkokulYerel",
-      "ilkokulInt",
-      "ortaokulYerel",
-      "ortaokulInt",
-      "liseYerel",
-      "liseInt",
-    ];
     const IK_ROLES = [
       "turk_mudur",
       "turk_mdyard",
@@ -2428,7 +2420,8 @@ router.get("/schools/:schoolId/scenarios/:scenarioId/export-xlsx", async (req, r
       const roleAnnual = {};
       for (const role of IK_ROLES) {
         let totalCount = 0;
-        for (const lvl of IK_LEVELS) totalCount += n(hc?.[lvl]?.[role]);
+        const levelKeys = Object.keys(hc || {});
+        for (const lvl of levelKeys) totalCount += n(hc?.[lvl]?.[role]);
         roleAnnual[role] = n(unitCosts?.[role]) * totalCount;
       }
       const sum = (keys) => keys.reduce((s, k) => s + n(roleAnnual[k]), 0);

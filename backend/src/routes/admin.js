@@ -9,7 +9,7 @@ const { ensurePermissions } = require("../utils/ensurePermissions");
 const { PERMISSIONS_CATALOG } = require("../utils/permissionsCatalog");
 const { getUserPermissions } = require("../utils/permissionService");
 const { getProgressConfig, parseJsonValue } = require("../utils/progressConfig");
-const { REQUIRED_WORK_IDS } = require("../utils/scenarioWorkflow");
+const { BASE_REQUIRED_WORK_IDS } = require("../utils/scenarioWorkflow");
 const { parseListParams } = require("../utils/listParams");
 
 const router = express.Router();
@@ -1055,9 +1055,9 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
             .filter((id) => Boolean(id))
         )
       );
-      // Ensure each is in REQUIRED_WORK_IDS
+      // Ensure each is in BASE_REQUIRED_WORK_IDS
       for (const wid of uniqueIds) {
-        if (!REQUIRED_WORK_IDS.includes(wid)) {
+        if (!BASE_REQUIRED_WORK_IDS.includes(wid)) {
           return res.status(400).json({ error: `Invalid work id: ${wid}` });
         }
       }
@@ -1093,7 +1093,7 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
           { id: scenarioId, action: 'revise', note, u: req.user.id }
         );
         // Ensure all required work items exist.  Insert missing rows with default state 'approved'.
-        for (const wid of REQUIRED_WORK_IDS) {
+        for (const wid of BASE_REQUIRED_WORK_IDS) {
           await conn.query(
             `INSERT INTO scenario_work_items (scenario_id, work_id, state, updated_by)
              SELECT :sid, :wid, 'approved', :uid
@@ -1109,7 +1109,7 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
           `UPDATE scenario_work_items
            SET state='approved', updated_by=?, updated_at=CURRENT_TIMESTAMP
            WHERE scenario_id=? AND work_id IN (?)`,
-          [req.user.id, scenarioId, REQUIRED_WORK_IDS]
+          [req.user.id, scenarioId, BASE_REQUIRED_WORK_IDS]
         );
         // Now set selected ones to 'needs_revision'
         await conn.query(
