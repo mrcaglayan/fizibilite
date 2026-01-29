@@ -31,6 +31,15 @@ a {
   padding-left: 50px;
   padding-right: 50px;
 }
+.container.select-page {
+  height: calc(100vh - 66px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  box-sizing: border-box;
+}
 .container.school-page {
   max-width: 100%;
   margin: 0 auto;
@@ -407,6 +416,34 @@ input.num-spin[type="number"]::-webkit-inner-spin-button {
 /* Select page fixed table panels */
 .select-page-tables {
   --select-table-height: clamp(320px, 60vh, 640px);
+}
+.container.select-page .select-page-tables {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+  --select-table-height: 100%;
+}
+.container.select-page .select-table-card {
+  min-height: 0;
+  height: 100%;
+}
+.container.select-page .select-table-footer {
+  margin-top: auto;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+@media (max-width: 980px), (max-height: 720px) {
+  .container.select-page {
+    height: auto;
+    min-height: calc(100vh - 66px);
+    overflow: auto;
+  }
+  .select-page-tables {
+    flex-direction: column;
+  }
+  .container.select-page .select-table-card {
+    height: auto;
+  }
 }
 
 /* ==== Access Management hub styles ====
@@ -802,8 +839,8 @@ input.num-spin[type="number"]::-webkit-inner-spin-button {
 .select-table-card {
   display: flex;
   flex-direction: column;
-  height: var(--select-table-height);
   min-height: var(--select-table-height);
+  overflow: hidden;
 }
 .select-table-body {
   flex: 1 1 auto;

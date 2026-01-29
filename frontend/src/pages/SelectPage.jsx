@@ -4,7 +4,18 @@ import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom
 import { ToastContainer, toast } from "react-toastify";
 // Import additional icons for better visual cues on the action buttons.
 // FaCheckCircle represents approval actions and FaTrash represents deletion actions.
-import { FaCheckCircle, FaPaperPlane, FaTrash, FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
+import {
+  FaBalanceScale,
+  FaCheckCircle,
+  FaCopy,
+  FaEdit,
+  FaPaperPlane,
+  FaPlus,
+  FaSort,
+  FaSortDown,
+  FaSortUp,
+  FaTrash,
+} from "react-icons/fa";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import ProgressBar from "../components/ui/ProgressBar";
@@ -781,6 +792,9 @@ export default function SelectPage() {
   const [newScenarioStartYear, setNewScenarioStartYear] = useState(DEFAULT_START_YEAR);
   const [newScenarioEndYear, setNewScenarioEndYear] = useState(DEFAULT_END_YEAR);
   const [newScenarioKademeler, setNewScenarioKademeler] = useState(getDefaultKademeConfig());
+  // Some branches (e.g. Headquarter / Merkez) may not have any academic "kademe".
+  // We support this by allowing an explicit "no kademe" toggle in the wizard.
+  const [newScenarioNoKademe, setNewScenarioNoKademe] = useState(false);
   const [newScenarioInputCurrency, setNewScenarioInputCurrency] = useState("USD");
   const [newScenarioLocalCurrencyCode, setNewScenarioLocalCurrencyCode] = useState("");
   const [newScenarioFxUsdToLocal, setNewScenarioFxUsdToLocal] = useState("");
@@ -809,6 +823,7 @@ export default function SelectPage() {
   const [calculating, setCalculating] = useState(false);
 
   const copySelectionMsgTimerRef = useRef(null);
+  const kademeBeforeNoKademeRef = useRef(null);
 
   useEffect(() => {
     if (!outlet?.setHeaderMeta) return;
@@ -1132,6 +1147,7 @@ export default function SelectPage() {
     () => Object.values(draftKademeConfig).some((row) => row && row.enabled),
     [draftKademeConfig]
   );
+  const kademeStepOk = newScenarioNoKademe || hasEnabledKademe;
   const normalizedLocalCode = String(newScenarioLocalCurrencyCode || "").trim().toUpperCase();
   const localCodeOk = newScenarioInputCurrency !== "LOCAL" || CURRENCY_CODE_REGEX.test(normalizedLocalCode);
   const fxValue = Number(newScenarioFxUsdToLocal);
@@ -1142,7 +1158,7 @@ export default function SelectPage() {
     Boolean(draftAcademicYear) &&
     draftRangeOk &&
     !yearConflict &&
-    hasEnabledKademe &&
+    kademeStepOk &&
     currencyStepOk;
   const scenarioStepTotal = 6;
   const scenarioStepLabels = [
@@ -1158,7 +1174,7 @@ export default function SelectPage() {
     currencyStepOk,
     Boolean(newScenarioProgramType),
     Boolean(draftAcademicYear) && draftRangeOk && !yearConflict,
-    hasEnabledKademe,
+    kademeStepOk,
     draftReady,
   ];
 
@@ -1367,7 +1383,7 @@ export default function SelectPage() {
       if (!draftRangeOk) return "Bitis yili, baslangic yilindan 1 fazla olmali.";
       if (yearConflict) return "Bu yil turu icin zaten bir senaryo var. Lutfen baska bir yil secin.";
     }
-    if (step === 4 && !hasEnabledKademe) return "En az bir kademe secmelisiniz.";
+    if (step === 4 && !kademeStepOk) return "En az bir kademe secmelisiniz.";
     if (step === 5 && !newScenarioName.trim()) return "Senaryo adi zorunludur.";
     return "";
   }
@@ -1398,6 +1414,8 @@ export default function SelectPage() {
     setNewScenarioStartYear(DEFAULT_START_YEAR);
     setNewScenarioEndYear(DEFAULT_END_YEAR);
     setNewScenarioKademeler(getDefaultKademeConfig());
+    setNewScenarioNoKademe(false);
+    kademeBeforeNoKademeRef.current = null;
     setNewScenarioInputCurrency("USD");
     setNewScenarioLocalCurrencyCode("");
     setNewScenarioFxUsdToLocal("");
@@ -1462,9 +1480,13 @@ export default function SelectPage() {
         setNewScenarioEndYear(DEFAULT_END_YEAR);
       }
       const existingKademe = data?.inputs?.temelBilgiler?.kademeler;
-      setNewScenarioKademeler(
-        existingKademe ? normalizeKademeConfig(existingKademe) : getDefaultKademeConfig()
-      );
+      const normalizedKademe = existingKademe
+        ? normalizeKademeConfig(existingKademe)
+        : getDefaultKademeConfig();
+      const hasAnyEnabled = Object.values(normalizedKademe).some((row) => row && row.enabled);
+      setNewScenarioKademeler(normalizedKademe);
+      setNewScenarioNoKademe(!hasAnyEnabled);
+      kademeBeforeNoKademeRef.current = hasAnyEnabled ? structuredClone(normalizedKademe) : null;
       const scenarioCurrency = scenario.input_currency || "USD";
       setNewScenarioInputCurrency(scenarioCurrency);
       setNewScenarioLocalCurrencyCode(scenario.local_currency_code || "");
@@ -1504,7 +1526,7 @@ export default function SelectPage() {
       setErr("Bu yil turu icin zaten bir senaryo var. Lutfen baska bir yil secin.");
       return;
     }
-    if (!hasEnabledKademe) {
+    if (!kademeStepOk) {
       setErr("En az bir kademe secmelisiniz.");
       return;
     }
@@ -1522,7 +1544,10 @@ export default function SelectPage() {
     setScenarioWizardSaving(true);
     try {
       const scenarioProgramType = newScenarioProgramType || PROGRAM_TYPES.LOCAL;
-      const kademeConfig = normalizeKademeConfig(newScenarioKademeler);
+      const baseKademe = normalizeKademeConfig(newScenarioKademeler);
+      const kademeConfig = newScenarioNoKademe
+        ? Object.fromEntries(Object.entries(baseKademe).map(([k, v]) => [k, { ...v, enabled: false }]))
+        : baseKademe;
       const created = await api.createScenario(selectedSchoolId, {
         name,
         academicYear: draftAcademicYear,
@@ -1559,7 +1584,7 @@ export default function SelectPage() {
       setErr("Bu yil turu icin zaten bir senaryo var. Lutfen baska bir yil secin.");
       return;
     }
-    if (!hasEnabledKademe) {
+    if (!kademeStepOk) {
       setErr("En az bir kademe secmelisiniz.");
       return;
     }
@@ -1577,7 +1602,10 @@ export default function SelectPage() {
     setScenarioWizardSaving(true);
     try {
       const scenarioProgramType = newScenarioProgramType || PROGRAM_TYPES.LOCAL;
-      const kademeConfig = normalizeKademeConfig(newScenarioKademeler);
+      const baseKademe = normalizeKademeConfig(newScenarioKademeler);
+      const kademeConfig = newScenarioNoKademe
+        ? Object.fromEntries(Object.entries(baseKademe).map(([k, v]) => [k, { ...v, enabled: false }]))
+        : baseKademe;
       await api.updateScenario(selectedSchoolId, scenarioWizardScenario.id, {
         name,
         academicYear: draftAcademicYear,
@@ -1625,6 +1653,21 @@ export default function SelectPage() {
       const base = normalizeKademeConfig(prev);
       const next = { ...base, [key]: { ...base[key], ...patch } };
       return normalizeKademeConfig(next);
+    });
+  };
+
+  const setNoKademeMode = (enabled) => {
+    const nextEnabled = Boolean(enabled);
+    setNewScenarioNoKademe(nextEnabled);
+    setNewScenarioKademeler((prev) => {
+      const base = normalizeKademeConfig(prev);
+      if (nextEnabled) {
+        kademeBeforeNoKademeRef.current = structuredClone(base);
+        return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, { ...v, enabled: false }]));
+      }
+      const restored = kademeBeforeNoKademeRef.current;
+      kademeBeforeNoKademeRef.current = null;
+      return restored ? normalizeKademeConfig(restored) : getDefaultKademeConfig();
     });
   };
 
@@ -2150,7 +2193,7 @@ export default function SelectPage() {
   };
 
   return (
-    <div className="container">
+    <div className="container select-page">
       <ToastContainer position="bottom-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover hideProgressBar theme="dark" />
       <style>{`@keyframes schoolSpin{to{transform:rotate(360deg)}}`}</style>
 
@@ -2643,6 +2686,19 @@ export default function SelectPage() {
                   {newScenarioStep === 4 && (
                     <div style={{ marginTop: 10 }}>
                       <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Kademeler</div>
+                      <label className="row small" style={{ gap: 8, alignItems: "center", marginBottom: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={newScenarioNoKademe}
+                          onChange={(e) => setNoKademeMode(e.target.checked)}
+                        />
+                        <span>Kademe yok (Merkez / Headquarter)</span>
+                      </label>
+                      {newScenarioNoKademe ? (
+                        <div className="small muted" style={{ marginBottom: 8 }}>
+                          Bu senaryo icin kademe secmeye gerek yok. Kademe-bagimli alanlar ilerleme hesabina dahil edilmez.
+                        </div>
+                      ) : null}
                       <table className="table">
                         <thead>
                           <tr>
@@ -2662,6 +2718,7 @@ export default function SelectPage() {
                                   <input
                                     type="checkbox"
                                     checked={!!row?.enabled}
+                                    disabled={newScenarioNoKademe}
                                     onChange={(e) => updateNewKademe(def.key, { enabled: e.target.checked })}
                                   />
                                 </td>
@@ -2670,7 +2727,7 @@ export default function SelectPage() {
                                     className="input sm"
                                     value={row?.from || ""}
                                     onChange={(e) => updateNewKademe(def.key, { from: e.target.value })}
-                                    disabled={!row?.enabled}
+                                    disabled={newScenarioNoKademe || !row?.enabled}
                                   >
                                     {gradeOptions.map((g) => (
                                       <option key={g} value={g}>{g}</option>
@@ -2682,7 +2739,7 @@ export default function SelectPage() {
                                     className="input sm"
                                     value={row?.to || ""}
                                     onChange={(e) => updateNewKademe(def.key, { to: e.target.value })}
-                                    disabled={!row?.enabled}
+                                    disabled={newScenarioNoKademe || !row?.enabled}
                                   >
                                     {gradeOptions.map((g) => (
                                       <option key={g} value={g}>{g}</option>
@@ -2694,7 +2751,7 @@ export default function SelectPage() {
                           })}
                         </tbody>
                       </table>
-                      {!hasEnabledKademe ? (
+                      {!newScenarioNoKademe && !hasEnabledKademe ? (
                         <div className="small" style={{ color: "#b91c1c" }}>En az bir kademe secmelisiniz.</div>
                       ) : null}
                     </div>
@@ -2754,7 +2811,7 @@ export default function SelectPage() {
 
       <div
         className="row select-page-tables"
-        style={{ gap: 12, alignItems: "stretch", marginTop: 12, flexWrap: "wrap" }}
+        style={{ gap: 12, alignItems: "stretch", flexWrap: "wrap" }}
       >
         <div className="card select-table-card" style={{ flex: "1 1 320px", minWidth: 280 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Okullar</div>
@@ -2870,6 +2927,7 @@ export default function SelectPage() {
                     title="Yeni Senaryo"
                   >
                     <span className="btn-inner">
+                      <FaPlus aria-hidden="true" />
                       <span>Yeni Senaryo</span>
                     </span>
                   </button>
@@ -2886,6 +2944,7 @@ export default function SelectPage() {
                     title="Planlamayi Duzenle"
                   >
                     <span className="btn-inner">
+                      <FaEdit aria-hidden="true" />
                       <span>Planlamayi Duzenle</span>
                     </span>
                   </button>
@@ -2899,7 +2958,7 @@ export default function SelectPage() {
                     title="Kopyala"
                   >
                     <span className="btn-inner">
-                      {toolbarIsCopying ? <InlineSpinner /> : null}
+                      {toolbarIsCopying ? <InlineSpinner /> : <FaCopy aria-hidden="true" />}
                       <span>Kopyala</span>
                     </span>
                   </button>
@@ -2913,6 +2972,7 @@ export default function SelectPage() {
                     title="Gider Paylaştır"
                   >
                     <span className="btn-inner">
+                      <FaBalanceScale aria-hidden="true" />
                       <span>Gider Paylaştır</span>
                     </span>
                   </button>
@@ -3124,17 +3184,16 @@ export default function SelectPage() {
               </div>
             </>
           )}
+          <div className="row select-table-footer" style={{ justifyContent: "flex-end" }}>
+            <button
+              className="btn primary"
+              onClick={handleApply}
+              disabled={!selectedSchoolId || !selectedScenarioIdLocal}
+            >
+              Uygula
+            </button>
+          </div>
         </div>
-      </div>
-
-      <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-        <button
-          className="btn primary"
-          onClick={handleApply}
-          disabled={!selectedSchoolId || !selectedScenarioIdLocal}
-        >
-          Uygula
-        </button>
       </div>
     </div>
   );

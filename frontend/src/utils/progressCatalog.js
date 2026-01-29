@@ -386,7 +386,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
           `Rakip ${key} ${suffix}`,
           "number",
           (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "rakipAnalizi", key, suffix], null),
-          () => (ctx.enabledKademes.size ? ctx.enabledKademes.has(key) : true)
+          () => (ctx.hasKademeSelection ? ctx.enabledKademes.has(key) : true)
         )
       );
     });
@@ -401,7 +401,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
           `Kapasite ${key} ${period}`,
           "number",
           (inputsArg) => safeGet(inputsArg, ["kapasite", "byKademe", key, "caps", period], null),
-          () => (ctx.enabledKademes.size ? ctx.enabledKademes.has(key) : true)
+          () => (ctx.hasKademeSelection ? ctx.enabledKademes.has(key) : true)
         )
       );
     });
@@ -475,7 +475,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
               );
               return pickHeadcountValue(yerelValue, intValue);
             },
-            () => (ctx.enabledLevels.size ? ctx.enabledLevels.has(lvl.key) : true)
+            () => (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true)
           )
         );
       });
@@ -494,7 +494,7 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
           const intVal = getTuitionUnitFee(inputsArg, row.intKey);
           return pickTuitionValue(yerelVal, intVal);
         },
-        () => (ctx.enabledKademes.size ? ctx.enabledKademes.has(row.baseKey) : true)
+        () => (ctx.hasKademeSelection ? ctx.enabledKademes.has(row.baseKey) : true)
       )
     );
   });

@@ -408,7 +408,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
           `Rakip ${key} ${suffix}`,
           "number",
           (inputsArg) => safeGet(inputsArg, ["temelBilgiler", "rakipAnalizi", key, suffix], null),
-          () => (ctx.enabledKademes.size ? ctx.enabledKademes.has(key) : true)
+          () => (ctx.hasKademeSelection ? ctx.enabledKademes.has(key) : true)
         )
       );
     });
@@ -423,7 +423,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
           `Kapasite ${key} ${period}`,
           "number",
           (inputsArg) => safeGet(inputsArg, ["kapasite", "byKademe", key, "caps", period], null),
-          () => (ctx.enabledKademes.size ? ctx.enabledKademes.has(key) : true)
+          () => (ctx.hasKademeSelection ? ctx.enabledKademes.has(key) : true)
         )
       );
     });
@@ -440,7 +440,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
             `Plan ${grade} ${year} ${fieldKey}`,
             "number",
             (inputsArg) => getGradePlanValue(inputsArg, year, grade, fieldKey),
-            () => (ctx.enabledGrades.size ? ctx.enabledGrades.has(grade) : true)
+            () => (ctx.hasKademeSelection ? ctx.enabledGrades.has(grade) : true)
           )
         );
       });
@@ -482,7 +482,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
             "number",
             (inputsArg) =>
               safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", lvl.key, role.key], null),
-            () => (ctx.enabledLevels.size ? ctx.enabledLevels.has(lvl.key) : true)
+            () => (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true)
           )
         );
       });
@@ -503,7 +503,7 @@ function buildProgressCatalog({ inputs, norm } = {}) {
         },
         () => {
           const baseKey = KADEME_BASE_BY_ROW[row.key] || row.key;
-          return ctx.enabledKademes.size ? ctx.enabledKademes.has(baseKey) : true;
+          return ctx.hasKademeSelection ? ctx.enabledKademes.has(baseKey) : true;
         }
       )
     );
@@ -604,6 +604,23 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
 
     const requiresKademe = section.requiresKademe === true;
     const hasKademeSelection = catalog.context?.hasKademeSelection;
+
+    // If kademeler are explicitly present but none are enabled (e.g. Headquarter / Merkez
+    // branches), treat kademe-required sections as not applicable.
+    const kademeSelectedButEmpty =
+      Boolean(hasKademeSelection) &&
+      catalog.context?.enabledKademes &&
+      catalog.context.enabledKademes.size === 0;
+    if (requiresKademe && kademeSelectedButEmpty) {
+      sectionResults.set(section.id, {
+        enabled: true,
+        done: true,
+        doneUnits: 0,
+        totalUnits: 0,
+        missingReasons: [],
+      });
+      return;
+    }
     if (requiresKademe && !hasKademeSelection) {
       sectionResults.set(section.id, {
         enabled: true,
