@@ -906,6 +906,21 @@ router.get("/scenarios/queue", async (req, res) => {
 
     const data = rows.map((row) => {
       const progressJson = parseJsonValue(row.progress_json);
+      const missingLines = Array.isArray(progressJson?.missingDetailsLines)
+        ? progressJson.missingDetailsLines.filter(Boolean).map((line) => String(line))
+        : [];
+      const previewLimit = 2;
+      const previewLines = missingLines.slice(0, previewLimit);
+      const remainingCount = missingLines.length - previewLines.length;
+      let progressMissingPreview = previewLines.join(" / ");
+      if (remainingCount > 0) {
+        progressMissingPreview = progressMissingPreview
+          ? `${progressMissingPreview} (+${remainingCount})`
+          : `(+${remainingCount})`;
+      }
+      if (progressMissingPreview && progressMissingPreview.length > 160) {
+        progressMissingPreview = `${progressMissingPreview.slice(0, 157)}...`;
+      }
       return {
         scenario: {
           id: row.scenario_id,
@@ -919,7 +934,8 @@ router.get("/scenarios/queue", async (req, res) => {
           local_currency_code: row.local_currency_code,
           fx_usd_to_local: row.fx_usd_to_local,
           progress_pct: row.progress_pct != null ? Number(row.progress_pct) : null,
-          progress_json: progressJson,
+          progress_missing_preview: progressMissingPreview || null,
+          progress_missing_count: missingLines.length,
           progress_calculated_at: row.progress_calculated_at,
           sent_at: row.sent_at,
           sent_by: row.sent_by,

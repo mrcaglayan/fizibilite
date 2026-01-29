@@ -70,17 +70,6 @@ CREATE TABLE `school_norm_configs` (
   CONSTRAINT `school_norm_configs_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `scenario_norm_configs` (
-  `scenario_id` bigint NOT NULL,
-  `teacher_weekly_max_hours` decimal(6,2) NOT NULL DEFAULT '24.00',
-  `curriculum_weekly_hours_json` json NOT NULL,
-  `updated_by` bigint NOT NULL,
-  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`scenario_id`),
-  KEY `updated_by` (`updated_by`),
-  CONSTRAINT `scenario_norm_configs_ibfk_1` FOREIGN KEY (`scenario_id`) REFERENCES `school_scenarios` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `scenario_norm_configs_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `school_scenarios` (
   `id` bigint NOT NULL AUTO_INCREMENT,
@@ -138,6 +127,21 @@ CREATE TABLE `school_scenarios` (
   CONSTRAINT `school_scenarios_ibfk_1` FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
   CONSTRAINT `school_scenarios_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+
+CREATE TABLE `scenario_norm_configs` (
+  `scenario_id` bigint NOT NULL,
+  `teacher_weekly_max_hours` decimal(6,2) NOT NULL DEFAULT '24.00',
+  `curriculum_weekly_hours_json` json NOT NULL,
+  `updated_by` bigint NOT NULL,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`scenario_id`),
+  KEY `updated_by` (`updated_by`),
+  CONSTRAINT `scenario_norm_configs_ibfk_1` FOREIGN KEY (`scenario_id`) REFERENCES `school_scenarios` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `scenario_norm_configs_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 
 -- Migration helper:
 -- ALTER TABLE school_scenarios

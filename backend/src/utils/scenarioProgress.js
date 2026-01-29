@@ -2,7 +2,7 @@ const YEAR_KEYS = ["y1", "y2", "y3"];
 
 // Bump this whenever the progress calculation rules change.
 // Used to invalidate cached progress_json/progress_pct without requiring a DB migration.
-const PROGRESS_ENGINE_VERSION = 2;
+const PROGRESS_ENGINE_VERSION = 3;
 
 const KADEME_DEFS = [
   { key: "okulOncesi", label: "Okul Oncesi", defaultFrom: "KG", defaultTo: "KG" },
@@ -641,6 +641,16 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
 
     const fieldIds = Array.isArray(section.fields) ? section.fields : [];
     const selectedIds = fieldIds.filter((id) => cfg.selectedFields?.[id] !== false);
+    if (selectedIds.length === 0) {
+      sectionResults.set(section.id, {
+        enabled: true,
+        done: true,
+        doneUnits: 0,
+        totalUnits: 0,
+        missingReasons: [],
+      });
+      return;
+    }
     const applicable = selectedIds
       .map((id) => catalog.fieldsById[id])
       .filter(Boolean)
@@ -750,7 +760,11 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
       }
     });
 
-    const pct = tabTotal ? Math.round((tabDone / tabTotal) * 100) : 0;
+    const pct = tabTotal
+      ? Math.round((tabDone / tabTotal) * 100)
+      : allDone
+        ? 100
+        : 0;
     const missingPreview = missingLines.length ? missingLines.join(" / ") : "";
 
     return {
@@ -763,7 +777,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
     };
   });
 
-  const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 0;
+  const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 100;
   const missingDetailsLines = tabs
     .filter((t) => !t.done)
     .map((t) => {

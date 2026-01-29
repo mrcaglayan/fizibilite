@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import { Link, useLocation, useOutletContext } from "react-router-dom";
 import { ToastContainer, toast } from "react-toastify";
+import { FaSchool, FaUserPlus } from "react-icons/fa";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import Tooltip from "../components/ui/Tooltip";
@@ -224,6 +225,8 @@ export default function AdminPage({ forcedTab = null } = {}) {
   const [schoolsSearch, setSchoolsSearch] = useState("");
   const [newSchoolName, setNewSchoolName] = useState("");
   const [schoolCreateLoading, setSchoolCreateLoading] = useState(false);
+  const [schoolBulkCreateLoading, setSchoolBulkCreateLoading] = useState(false);
+  const [schoolCreateRows, setSchoolCreateRows] = useState([""]);
   const [schoolSavingId, setSchoolSavingId] = useState(null);
   const [schoolNameDrafts, setSchoolNameDrafts] = useState({});
 
@@ -639,6 +642,12 @@ export default function AdminPage({ forcedTab = null } = {}) {
     return countrySchools.filter((s) => String(s.name || "").toLowerCase().includes(q));
   }, [countrySchools, schoolsSearch]);
 
+  const schoolCreateBusy = schoolCreateLoading || schoolBulkCreateLoading;
+  const bulkCreateCount = schoolCreateRows.reduce(
+    (count, name) => (String(name || "").trim() ? count + 1 : count),
+    0
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -810,6 +819,7 @@ export default function AdminPage({ forcedTab = null } = {}) {
     setSchoolNameDrafts({});
     setSchoolsSearch("");
     setNewSchoolName("");
+    setSchoolCreateRows([""]);
   }, [schoolsCountryId]);
 
   async function createCountry() {
@@ -854,6 +864,63 @@ export default function AdminPage({ forcedTab = null } = {}) {
       toast.error(e.message || "Create school failed");
     } finally {
       setSchoolCreateLoading(false);
+    }
+  }
+
+  function updateSchoolCreateRow(index, value) {
+    setSchoolCreateRows((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  }
+
+  function addSchoolCreateRow() {
+    setSchoolCreateRows((prev) => [...prev, ""]);
+  }
+
+  function removeSchoolCreateRow(index) {
+    setSchoolCreateRows((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+  }
+
+  async function createCountrySchoolsBulk() {
+    if (!schoolsCountryId) {
+      toast.error("Select a country");
+      return;
+    }
+    const rawNames = schoolCreateRows.map((name) => String(name || "").trim()).filter(Boolean);
+    const names = Array.from(new Set(rawNames));
+    if (!names.length) {
+      toast.error("At least one school name is required");
+      return;
+    }
+    setSchoolBulkCreateLoading(true);
+    const errors = [];
+    let created = 0;
+    try {
+      for (const name of names) {
+        try {
+          await api.adminCreateCountrySchool(schoolsCountryId, { name });
+          created += 1;
+        } catch (e) {
+          errors.push({ name, message: e?.message || "Create school failed" });
+        }
+      }
+      if (created > 0) {
+        await loadCountrySchools(schoolsCountryId);
+      }
+      if (errors.length) {
+        toast.error(`${errors.length} of ${names.length} schools failed`);
+        setSchoolCreateRows(errors.map((err) => err.name));
+      } else {
+        toast.success(`${created} schools created`);
+        setSchoolCreateRows([""]);
+      }
+    } finally {
+      setSchoolBulkCreateLoading(false);
     }
   }
 
@@ -1917,7 +1984,10 @@ export default function AdminPage({ forcedTab = null } = {}) {
                   ))}
                 </select>
                 <button className="btn primary" onClick={createUser} disabled={loading}>
-                  Create
+                  <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                    <FaUserPlus aria-hidden="true" />
+                    <span>Create</span>
+                  </span>
                 </button>
               </div>
               <div className="small" style={{ marginTop: 8 }}>
@@ -2203,15 +2273,71 @@ export default function AdminPage({ forcedTab = null } = {}) {
                 placeholder="New school name"
                 value={newSchoolName}
                 onChange={(e) => setNewSchoolName(e.target.value)}
-                disabled={!schoolsCountryId || schoolCreateLoading}
+                disabled={!schoolsCountryId || schoolCreateBusy}
               />
               <button
                 className="btn primary"
                 onClick={createCountrySchool}
-                disabled={!schoolsCountryId || schoolCreateLoading}
+                disabled={!schoolsCountryId || schoolCreateBusy}
               >
-                {schoolCreateLoading ? "Creating..." : "Create"}
+                <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <FaSchool aria-hidden="true" />
+                  <span>{schoolCreateLoading ? "Creating..." : "Create"}</span>
+                </span>
               </button>
+            </div>
+
+            <div style={{ marginBottom: 12, paddingTop: 8, borderTop: "1px solid #eef2f7" }}>
+              <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>
+                Bulk add schools
+              </div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {schoolCreateRows.map((row, idx) => (
+                  <div key={`school-create-row-${idx}`} className="row">
+                    <input
+                      className="input"
+                      placeholder={`School name #${idx + 1}`}
+                      value={row}
+                      onChange={(e) => updateSchoolCreateRow(idx, e.target.value)}
+                      disabled={!schoolsCountryId || schoolCreateBusy}
+                    />
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => removeSchoolCreateRow(idx)}
+                      disabled={!schoolsCountryId || schoolCreateBusy || schoolCreateRows.length <= 1}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={addSchoolCreateRow}
+                  disabled={!schoolsCountryId || schoolCreateBusy}
+                >
+                  Add row
+                </button>
+                <button
+                  className="btn primary"
+                  type="button"
+                  onClick={createCountrySchoolsBulk}
+                  disabled={!schoolsCountryId || schoolCreateBusy || bulkCreateCount === 0}
+                >
+                  <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                    <FaSchool aria-hidden="true" />
+                    <span>
+                      {schoolBulkCreateLoading ? "Creating..." : `Create ${bulkCreateCount || ""}`.trim()}
+                    </span>
+                  </span>
+                </button>
+              </div>
+              <div className="small" style={{ marginTop: 6, color: "#6b7280" }}>
+                Add one school per row, then create all at once.
+              </div>
             </div>
 
             {!selectedSchoolsCountry ? (
@@ -2882,12 +3008,13 @@ export default function AdminPage({ forcedTab = null } = {}) {
                   const progressPct = Number.isFinite(Number(row.scenario?.progress_pct))
                     ? Math.round(Number(row.scenario.progress_pct))
                     : null;
-                  const progressLines = row.scenario?.progress_json?.missingDetailsLines;
+                  const progressMissingCount = Number(row.scenario?.progress_missing_count || 0);
+                  const progressMissingPreview = row.scenario?.progress_missing_preview;
                   const progressTooltipLines =
                     progressPct == null
                       ? []
-                      : Array.isArray(progressLines) && progressLines.length
-                        ? ["Eksik:", ...progressLines]
+                      : progressMissingCount > 0
+                        ? ["Eksik:", progressMissingPreview || "Eksik alanlar"]
                         : ["Tum tablar tamamlandi"];
 
                   return (

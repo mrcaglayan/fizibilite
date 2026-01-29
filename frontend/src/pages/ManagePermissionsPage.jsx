@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { toast } from "react-toastify";
+import { FaSchool, FaUserPlus } from "react-icons/fa";
 import { api } from "../api";
 import { useListSchools, useManagerUsers } from "../hooks/useListQueries";
 
@@ -933,7 +934,10 @@ export default function ManagePermissionsPage() {
                     className="btn primary"
                     disabled={creatingUser}
                   >
-                    {creatingUser ? "Creating..." : "Create user"}
+                    <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                      <FaUserPlus aria-hidden="true" />
+                      <span>{creatingUser ? "Creating..." : "Create user"}</span>
+                    </span>
                   </button>
                 </div>
               </form>
@@ -1051,7 +1055,10 @@ export default function ManagePermissionsPage() {
                     className="btn primary"
                     disabled={creatingSchool}
                   >
-                    {creatingSchool ? "Creating..." : "Create school"}
+                    <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                      <FaSchool aria-hidden="true" />
+                      <span>{creatingSchool ? "Creating..." : "Create school"}</span>
+                    </span>
                   </button>
                 </div>
               </form>

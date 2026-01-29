@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { api } from "../../api";
 import { toast } from "react-toastify";
 
@@ -22,7 +22,48 @@ export default function AdminCreateUserModal({ show, onClose, onCreated, countri
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
   const [countryId, setCountryId] = useState("");
+  const [schoolId, setSchoolId] = useState("");
+  const [schools, setSchools] = useState([]);
+  const [schoolsLoading, setSchoolsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!show) return;
+    if (role !== "principal") {
+      setSchoolId("");
+      setSchools([]);
+      return;
+    }
+    if (!countryId) {
+      setSchoolId("");
+      setSchools([]);
+      return;
+    }
+    setSchoolId("");
+    setSchools([]);
+    let active = true;
+    setSchoolsLoading(true);
+    (async () => {
+      try {
+        const rows = await api.adminListCountrySchools(countryId);
+        const list = Array.isArray(rows) ? rows : rows?.items && Array.isArray(rows.items) ? rows.items : [];
+        if (active) {
+          setSchools(list);
+        }
+      } catch (err) {
+        console.error(err);
+        if (active) {
+          setSchools([]);
+          toast.error(err?.message || "Failed to load schools");
+        }
+      } finally {
+        if (active) setSchoolsLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [show, role, countryId]);
 
   if (!show) return null;
 
@@ -43,6 +84,10 @@ export default function AdminCreateUserModal({ show, onClose, onCreated, countri
       toast.error("Invalid role");
       return;
     }
+    if (role === "principal" && !countryId) {
+      toast.error("Country is required for principals");
+      return;
+    }
     setLoading(true);
     try {
       const payload = {
@@ -54,7 +99,26 @@ export default function AdminCreateUserModal({ show, onClose, onCreated, countri
       if (countryId && countryId !== "unassigned") {
         payload.country_id = Number(countryId);
       }
-      await api.createUser(payload);
+      const created = await api.createUser(payload);
+      if (role === "principal" && schoolId) {
+        const schoolIdNum = Number(schoolId);
+        if (Number.isFinite(schoolIdNum)) {
+          try {
+            const existing = await api.adminGetSchoolPrincipals(schoolIdNum);
+            const existingIds = Array.isArray(existing)
+              ? existing.map((u) => Number(u.id)).filter(Number.isFinite)
+              : [];
+            const newId = Number(created?.id);
+            if (Number.isFinite(newId) && !existingIds.includes(newId)) {
+              existingIds.push(newId);
+            }
+            await api.adminSetSchoolPrincipals(schoolIdNum, { userIds: existingIds });
+          } catch (err) {
+            console.error(err);
+            toast.error(err?.message || "Failed to assign principal to school");
+          }
+        }
+      }
       toast.success("User created");
       // Reset form fields
       setFullName("");
@@ -62,6 +126,8 @@ export default function AdminCreateUserModal({ show, onClose, onCreated, countri
       setPassword("");
       setRole("user");
       setCountryId("");
+      setSchoolId("");
+      setSchools([]);
       onCreated?.();
       onClose?.();
     } catch (err) {
@@ -124,13 +190,32 @@ export default function AdminCreateUserModal({ show, onClose, onCreated, countri
               value={countryId}
               onChange={(e) => setCountryId(e.target.value)}
             >
-              <option value="">Unassigned</option>
+              <option value="">
+                {role === "principal" ? "Select country (required)" : "Unassigned"}
+              </option>
               {countries.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
             </select>
+            {role === "principal" ? (
+              <select
+                className="input full"
+                value={schoolId}
+                onChange={(e) => setSchoolId(e.target.value)}
+                disabled={!countryId || schoolsLoading}
+              >
+                <option value="">
+                  {schoolsLoading ? "Loading schools..." : "Optional: assign to a school"}
+                </option>
+                {schools.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
           </div>
           <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
             <button type="button" className="btn" onClick={onClose} disabled={loading}>

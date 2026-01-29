@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useAdminUsers, useListCountries } from "../hooks/useListQueries";
 import { toast } from "react-toastify";
 import { useOutletContext } from "react-router-dom";
+import { FaSchool, FaUserPlus } from "react-icons/fa";
 import PermissionsTable from "../components/permissions/PermissionsTable";
 import AdminCreateUserModal from "../components/access/AdminCreateUserModal";
 import AdminCreateSchoolModal from "../components/access/AdminCreateSchoolModal";
@@ -835,10 +836,16 @@ export default function AdminPermissionsPage() {
           </div>
             <div className="row" style={{ gap: 8 }}>
               <button className="btn primary" onClick={() => setShowCreateUser(true)}>
-                Create user
+                <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <FaUserPlus aria-hidden="true" />
+                  <span>Create user</span>
+                </span>
               </button>
               <button className="btn primary" onClick={() => setShowCreateSchool(true)}>
-                Create school
+                <span className="row" style={{ gap: 6, alignItems: "center" }}>
+                  <FaSchool aria-hidden="true" />
+                  <span>Create school</span>
+                </span>
               </button>
             </div>
           </div>

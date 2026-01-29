@@ -68,6 +68,16 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
 
     const fieldIds = Array.isArray(section.fields) ? section.fields : [];
     const selectedIds = fieldIds.filter((id) => cfg.selectedFields?.[id] !== false);
+    if (selectedIds.length === 0) {
+      sectionResults.set(section.id, {
+        enabled: true,
+        done: true,
+        doneUnits: 0,
+        totalUnits: 0,
+        missingReasons: [],
+      });
+      return;
+    }
     const applicable = selectedIds
       .map((id) => catalog.fieldsById[id])
       .filter(Boolean)
@@ -179,7 +189,11 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
       }
     });
 
-    const pct = tabTotal ? Math.round((tabDone / tabTotal) * 100) : 0;
+    const pct = tabTotal
+      ? Math.round((tabDone / tabTotal) * 100)
+      : allDone
+        ? 100
+        : 0;
     const missingPreview = missingLines.length ? missingLines.join(" / ") : "";
 
     return {
@@ -192,7 +206,7 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
     };
   });
 
-  const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 0;
+  const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 100;
   const missingDetailsLines = tabs
     .filter((t) => !t.done)
     .map((t) => {
