@@ -31,7 +31,7 @@ const {
   getDistributionAllocationsForTarget,
   computePoolAmounts,
 } = require("../utils/expenseDistributions");
-const { computeExpenseSplitStaleFlags } = require("../utils/expenseSplitStale");
+const { computeExpenseSplitStaleFlags, computeExpenseSplitStaleByDistributionIds } = require("../utils/expenseSplitStale");
 const { buildRaporAoa } = require("../utils/excel/raporAoa");
 const { buildTemelBilgilerAoa } = require("../utils/excel/temelBilgilerAoa");
 const { buildKapasiteAoa } = require("../utils/excel/kapasiteAoa");
@@ -294,6 +294,75 @@ function normalizeInputsToUsd(inputsRaw, scenario) {
   }
 
   return out;
+}
+
+async function getLatestManagerApprovedScenarioId(pool, schoolId) {
+  if (!pool) throw new Error("getLatestManagerApprovedScenarioId requires pool");
+  const sid = Number(schoolId);
+  if (!Number.isFinite(sid)) return null;
+  const [[row]] = await pool.query(
+    `SELECT id
+     FROM school_scenarios
+     WHERE school_id=:sid AND status='approved' AND sent_at IS NULL
+     ORDER BY COALESCE(checked_at, created_at) DESC, id DESC
+     LIMIT 1`,
+    { sid }
+  );
+  return row?.id != null ? Number(row.id) : null;
+}
+
+async function getScenarioSplitInfo(pool, scenarioId) {
+  if (!pool) throw new Error("getScenarioSplitInfo requires pool");
+  const sid = Number(scenarioId);
+  if (!Number.isFinite(sid)) return { splitStatus: "none", isSourceScenario: false };
+
+  const [[srcRow]] = await pool.query(
+    `SELECT MAX(s.id) AS id
+     FROM expense_distribution_sets s
+     JOIN expense_distribution_targets t ON t.distribution_id = s.id
+     WHERE s.source_scenario_id=:sid`,
+    { sid }
+  );
+  const [[tgtRow]] = await pool.query(
+    "SELECT MAX(distribution_id) AS id FROM expense_distribution_targets WHERE target_scenario_id=:sid",
+    { sid }
+  );
+
+  const sourceDistId = Number(srcRow?.id);
+  const targetDistId = Number(tgtRow?.id);
+  const isSourceScenario = Number.isFinite(sourceDistId);
+
+  const allIds = [];
+  if (Number.isFinite(sourceDistId)) allIds.push(sourceDistId);
+  if (Number.isFinite(targetDistId) && targetDistId !== sourceDistId) allIds.push(targetDistId);
+
+  if (!allIds.length) return { splitStatus: "none", isSourceScenario };
+
+  const staleByDist = await computeExpenseSplitStaleByDistributionIds(pool, allIds);
+  const isStale = allIds.some((id) => staleByDist.get(Number(id)));
+
+  return { splitStatus: isStale ? "stale" : "ok", isSourceScenario };
+}
+
+async function hasStaleSourceInSchool(pool, schoolId) {
+  const sid = Number(schoolId);
+  if (!Number.isFinite(sid)) return false;
+  const [rows] = await pool.query(
+    `SELECT sc.id
+     FROM school_scenarios sc
+     WHERE sc.school_id=:sid
+       AND EXISTS (
+         SELECT 1 FROM expense_distribution_sets eds WHERE eds.source_scenario_id = sc.id
+       )`,
+    { sid }
+  );
+  const scenarioRows = (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: row.id,
+    expense_split_applied: true,
+  }));
+  if (!scenarioRows.length) return false;
+  const staleMap = await computeExpenseSplitStaleFlags(pool, scenarioRows);
+  return scenarioRows.some((row) => staleMap.get(Number(row.id)));
 }
 
 function extractScenarioYears(results) {
@@ -2102,6 +2171,59 @@ router.post(
       if (!reloaded || reloaded.status !== 'approved') {
         return res.status(409).json({ error: 'Not all required work items are approved' });
       }
+
+      const reasons = new Set();
+      try {
+        const latestApprovedId = await getLatestManagerApprovedScenarioId(pool, schoolId);
+        if (Number.isFinite(latestApprovedId) && Number(latestApprovedId) !== Number(scenarioId)) {
+          reasons.add("En guncel 'Kontrol edildi' senaryo degil");
+        }
+      } catch (_) {
+        // ignore latest check errors
+      }
+
+      try {
+        const snapshot = await getScenarioProgressSnapshot(pool, {
+          schoolId,
+          scenarioId,
+          countryId: req.user.country_id,
+        });
+        const pct = Number(snapshot?.progress?.pct ?? 0);
+        if (!Number.isFinite(pct) || pct < 100) {
+          reasons.add("Ilerleme %100 degil");
+        }
+      } catch (_) {
+        reasons.add("Ilerleme %100 degil");
+      }
+
+      try {
+        const splitInfo = await getScenarioSplitInfo(pool, scenarioId);
+        if (splitInfo.isSourceScenario) {
+          reasons.add("Kaynak senaryo");
+        }
+        if (splitInfo.splitStatus === "stale") {
+          reasons.add("Gider dagitimi guncel degil");
+        }
+      } catch (_) {
+        // ignore split info errors
+      }
+
+      try {
+        if (await hasStaleSourceInSchool(pool, schoolId)) {
+          reasons.add("Gider dagitimi guncel degil");
+        }
+      } catch (_) {
+        // ignore stale source errors
+      }
+
+      if (reasons.size) {
+        const list = Array.from(reasons);
+        return res.status(409).json({
+          error: `Senaryo merkeze iletilemez. ${list.join(", ")}`,
+          reasons: list,
+        });
+      }
+
       // Update scenario.  Use COALESCE to ensure checked_at/checked_by are set
       // if they were not already recorded.  This preserves existing
       // checked_at timestamps when resending scenarios that were

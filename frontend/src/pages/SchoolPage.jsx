@@ -56,6 +56,12 @@ function pathToResources(path) {
     tokens.shift();
   }
   if (tokens.length === 0) return result;
+  // Special-case: grades inputs are edited inside the Norm page, so map them to Norm permissions.
+  const gradeInputPages = new Set(["gradesYears", "gradesCurrent", "grades", "grades_years", "grades_current"]);
+  if (gradeInputPages.has(tokens[0])) {
+    result.push("section.norm.ders_dagilimi");
+    return result;
+  }
   // Normalize the module (page) token from camelCase to snake_case.
   const pageRaw = tokens[0];
   let page = pageRaw.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
@@ -2277,7 +2283,12 @@ export default function SchoolPage() {
             await refreshWorkItems();
             await refreshScenarioMeta();
           } catch (e) {
-            toast.error(e?.message || "İletme başarısız");
+            const reasons = Array.isArray(e?.data?.reasons) ? e.data.reasons.filter(Boolean) : [];
+            if (e?.status === 409 && reasons.length) {
+              toast.warn(`Merkeze iletilemez: ${reasons.join(", ")}`);
+            } else {
+              toast.error(e?.message || "İletme başarısız");
+            }
           }
         };
       }

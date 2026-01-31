@@ -14,10 +14,11 @@ const {
 } = require("../middleware/auth");
 const { parseListParams } = require("../utils/listParams");
 const { getScenarioProgressSnapshot } = require("../utils/scenarioProgressCache");
+const { calculateSchoolFeasibility } = require("../engine/feasibilityEngine");
+const { getNormConfigRowForScenario, normalizeNormConfigRow } = require("../utils/normConfig");
 const {
   computeExpenseSplitStaleFlags,
   computeExpenseSplitStaleByDistributionIds,
-  getScenarioSplitParticipation,
 } = require("../utils/expenseSplitStale");
 const { computeScenarioWorkflowStatus } = require("../utils/scenarioWorkflow");
 
@@ -33,6 +34,224 @@ function normalizeIdList(value) {
         .filter((id) => Number.isFinite(id))
     )
   );
+}
+
+const KPI_YEAR_KEYS = ["y1", "y2", "y3"];
+
+function parseInputsJson(inputsRaw) {
+  if (inputsRaw == null) return {};
+  if (typeof inputsRaw === "string") {
+    try {
+      return JSON.parse(inputsRaw);
+    } catch (err) {
+      const error = new Error("Invalid inputs JSON");
+      error.status = 400;
+      throw error;
+    }
+  }
+  if (typeof inputsRaw === "object") return inputsRaw;
+  return {};
+}
+
+function cloneInputs(value) {
+  if (!value || typeof value !== "object") return {};
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeInputsToUsd(inputsRaw, scenario) {
+  const inputs = parseInputsJson(inputsRaw);
+  if (!scenario || scenario.input_currency !== "LOCAL") return inputs;
+
+  const fx = Number(scenario.fx_usd_to_local);
+  if (!Number.isFinite(fx) || fx <= 0) {
+    const error = new Error("FX rate required for local currency");
+    error.status = 400;
+    throw error;
+  }
+
+  const out = cloneInputs(inputs);
+  const convert = (obj, key) => {
+    if (!obj || typeof obj !== "object") return;
+    const n = Number(obj[key]);
+    if (Number.isFinite(n)) obj[key] = n / fx;
+  };
+  const convertRows = (rows, key) => {
+    if (!Array.isArray(rows)) return;
+    rows.forEach((row) => convert(row, key));
+  };
+
+  const gelirler = out.gelirler && typeof out.gelirler === "object" ? out.gelirler : {};
+  convertRows(gelirler?.tuition?.rows, "unitFee");
+  convertRows(gelirler?.nonEducationFees?.rows, "unitFee");
+  convertRows(gelirler?.dormitory?.rows, "unitFee");
+  convertRows(gelirler?.otherInstitutionIncome?.rows, "amount");
+  convert(gelirler, "governmentIncentives");
+  convert(gelirler, "tuitionFeePerStudentYearly");
+  convert(gelirler, "lunchFeePerStudentYearly");
+  convert(gelirler, "dormitoryFeePerStudentYearly");
+  convert(gelirler, "otherFeePerStudentYearly");
+
+  const giderler = out.giderler && typeof out.giderler === "object" ? out.giderler : {};
+  const isletmeItems = giderler?.isletme?.items;
+  if (isletmeItems && typeof isletmeItems === "object") {
+    const skipKeys = ["pct", "percent", "ratio", "margin"];
+    Object.entries(isletmeItems).forEach(([key, value]) => {
+      const lower = key.toLowerCase();
+      if (skipKeys.some((token) => lower.includes(token))) return;
+      const n = Number(value);
+      if (Number.isFinite(n)) isletmeItems[key] = n / fx;
+    });
+  }
+
+  const legacyExpenseKeys = [
+    "educationStaffYearlyCostTotal",
+    "managementStaffYearlyCost",
+    "supportStaffYearlyCost",
+    "operationalExpensesYearly",
+  ];
+  legacyExpenseKeys.forEach((key) => convert(giderler, key));
+
+  const convertUnitCostItems = (items) => {
+    if (!items || typeof items !== "object") return;
+    Object.values(items).forEach((row) => {
+      convert(row, "unitCost");
+      convert(row, "unitCostY2");
+      convert(row, "unitCostY3");
+    });
+  };
+  convertUnitCostItems(giderler?.ogrenimDisi?.items);
+  convertUnitCostItems(giderler?.yurt?.items);
+
+  const ik = out.ik && typeof out.ik === "object" ? out.ik : {};
+  const ikYears = ik?.years && typeof ik.years === "object" ? ik.years : {};
+  ["y1", "y2", "y3"].forEach((yearKey) => {
+    const unitCosts = ikYears?.[yearKey]?.unitCosts;
+    if (!unitCosts || typeof unitCosts !== "object") return;
+    Object.entries(unitCosts).forEach(([key, value]) => {
+      const n = Number(value);
+      if (Number.isFinite(n)) unitCosts[key] = n / fx;
+    });
+  });
+  const legacyUnitCosts = ik?.unitCosts;
+  if (legacyUnitCosts && typeof legacyUnitCosts === "object") {
+    Object.entries(legacyUnitCosts).forEach(([key, value]) => {
+      const n = Number(value);
+      if (Number.isFinite(n)) legacyUnitCosts[key] = n / fx;
+    });
+  }
+
+  if (Array.isArray(out.discounts)) {
+    out.discounts = out.discounts.map((d) => {
+      if (!d || typeof d !== "object") return d;
+      const mode = String(d.mode || "percent");
+      if (mode !== "fixed") return d;
+      const n = Number(d.value);
+      if (!Number.isFinite(n)) return d;
+      return { ...d, value: n / fx };
+    });
+  }
+
+  return out;
+}
+
+function extractScenarioYears(results) {
+  let parsed = results;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch (_) {
+      parsed = null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return {};
+  if (parsed?.years && typeof parsed.years === "object") return parsed.years;
+  return { y1: parsed };
+}
+
+async function upsertScenarioKpis(pool, scenarioId, academicYear, results) {
+  const years = extractScenarioYears(results);
+  for (const yearKey of KPI_YEAR_KEYS) {
+    const y = years?.[yearKey];
+    if (!y || typeof y !== "object") continue;
+    const netCiro = Number(y?.income?.netActivityIncome || 0);
+    const netIncome = Number(y?.income?.netIncome || 0);
+    const totalExpenses = Number(y?.expenses?.totalExpenses || 0);
+    const netResult = Number(y?.result?.netResult || 0);
+    const studentsTotal = Math.round(Number(y?.students?.totalStudents || 0));
+
+    await pool.query(
+      `INSERT INTO scenario_kpis
+        (scenario_id, academic_year, year_key, net_ciro, net_income, total_expenses, net_result, students_total)
+       VALUES
+        (:scenario_id, :academic_year, :year_key, :net_ciro, :net_income, :total_expenses, :net_result, :students_total)
+       ON DUPLICATE KEY UPDATE
+        academic_year=VALUES(academic_year),
+        net_ciro=VALUES(net_ciro),
+        net_income=VALUES(net_income),
+        total_expenses=VALUES(total_expenses),
+        net_result=VALUES(net_result),
+        students_total=VALUES(students_total)`,
+      {
+        scenario_id: scenarioId,
+        academic_year: academicYear,
+        year_key: yearKey,
+        net_ciro: Number.isFinite(netCiro) ? netCiro : 0,
+        net_income: Number.isFinite(netIncome) ? netIncome : 0,
+        total_expenses: Number.isFinite(totalExpenses) ? totalExpenses : 0,
+        net_result: Number.isFinite(netResult) ? netResult : 0,
+        students_total: Number.isFinite(studentsTotal) ? studentsTotal : 0,
+      }
+    );
+  }
+}
+
+async function ensureScenarioKpis(pool, scenarioRow, userId) {
+  const scenarioId = Number(scenarioRow?.id);
+  const schoolId = Number(scenarioRow?.school_id);
+  if (!Number.isFinite(scenarioId) || !Number.isFinite(schoolId)) {
+    throw new Error("Invalid scenario");
+  }
+
+  const [kpiRows] = await pool.query(
+    "SELECT year_key FROM scenario_kpis WHERE scenario_id=:id",
+    { id: scenarioId }
+  );
+  const kpiKeys = new Set(
+    (Array.isArray(kpiRows) ? kpiRows : [])
+      .map((row) => String(row?.year_key || ""))
+      .filter((key) => key)
+  );
+  const hasAllKpis = KPI_YEAR_KEYS.every((key) => kpiKeys.has(key));
+  if (hasAllKpis) return;
+
+  const [[inputsRow]] = await pool.query(
+    "SELECT inputs_json FROM scenario_inputs WHERE scenario_id=:id",
+    { id: scenarioId }
+  );
+  if (!inputsRow) {
+    throw new Error("Inputs bulunamadi");
+  }
+
+  const normRow = await getNormConfigRowForScenario(pool, schoolId, scenarioId);
+  if (!normRow) {
+    throw new Error("Norm config eksik");
+  }
+  const normConfig = normalizeNormConfigRow(normRow);
+
+  const scenarioMeta = {
+    input_currency: scenarioRow?.input_currency,
+    fx_usd_to_local: scenarioRow?.fx_usd_to_local,
+    local_currency_code: scenarioRow?.local_currency_code,
+  };
+  const inputsForCalc = normalizeInputsToUsd(inputsRow.inputs_json, scenarioMeta);
+  const results = calculateSchoolFeasibility(inputsForCalc, normConfig);
+
+  await pool.query(
+    "INSERT INTO scenario_results (scenario_id, results_json, calculated_by) VALUES (:id,:json,:u) ON DUPLICATE KEY UPDATE results_json=VALUES(results_json), calculated_by=VALUES(calculated_by), calculated_at=CURRENT_TIMESTAMP",
+    { id: scenarioId, json: JSON.stringify(results), u: userId ?? null }
+  );
+  await upsertScenarioKpis(pool, scenarioId, scenarioRow?.academic_year, results);
 }
 
 async function listAccessibleSchools(pool, user) {
@@ -131,36 +350,71 @@ async function buildStaleSourceGuard(pool, schoolIds) {
   };
 }
 
-async function buildScenarioSplitInfo(pool, scenarioIds) {
-  const ids = normalizeIdList(scenarioIds);
-  const participationByScenarioId = new Map();
-  const allDistributionIds = new Set();
+async function buildScenarioSplitInfo(pool, scenarioRows) {
+  const list = Array.isArray(scenarioRows) ? scenarioRows : [];
+  const ids = normalizeIdList(list.map((row) => (row && typeof row === "object" ? row.id : row)));
+  if (!ids.length) return new Map();
 
-  await Promise.all(
-    ids.map(async (scenarioId) => {
-      const participation = await getScenarioSplitParticipation(pool, scenarioId);
-      participationByScenarioId.set(String(scenarioId), participation);
-      participation.sourceDistributionIds.forEach((id) => allDistributionIds.add(id));
-      participation.targetDistributionIds.forEach((id) => allDistributionIds.add(id));
-    })
+  const [sourceRows] = await pool.query(
+    `SELECT source_scenario_id AS scenario_id, MAX(id) AS latest_id
+     FROM expense_distribution_sets
+     WHERE source_scenario_id IN (:ids)
+     GROUP BY source_scenario_id`,
+    { ids }
   );
+  const [targetRows] = await pool.query(
+    `SELECT target_scenario_id AS scenario_id, MAX(distribution_id) AS latest_id
+     FROM expense_distribution_targets
+     WHERE target_scenario_id IN (:ids)
+     GROUP BY target_scenario_id`,
+    { ids }
+  );
+
+  const latestSourceByScenario = new Map();
+  (Array.isArray(sourceRows) ? sourceRows : []).forEach((row) => {
+    const sid = Number(row?.scenario_id);
+    const did = Number(row?.latest_id);
+    if (Number.isFinite(sid) && Number.isFinite(did)) {
+      latestSourceByScenario.set(String(sid), did);
+    }
+  });
+
+  const latestTargetByScenario = new Map();
+  (Array.isArray(targetRows) ? targetRows : []).forEach((row) => {
+    const sid = Number(row?.scenario_id);
+    const did = Number(row?.latest_id);
+    if (Number.isFinite(sid) && Number.isFinite(did)) {
+      latestTargetByScenario.set(String(sid), did);
+    }
+  });
+
+  const allDistributionIds = new Set();
+  ids.forEach((scenarioId) => {
+    const key = String(scenarioId);
+    const srcId = latestSourceByScenario.get(key);
+    const tgtId = latestTargetByScenario.get(key);
+    if (Number.isFinite(srcId)) allDistributionIds.add(srcId);
+    if (Number.isFinite(tgtId)) allDistributionIds.add(tgtId);
+  });
 
   const staleByDist = await computeExpenseSplitStaleByDistributionIds(pool, Array.from(allDistributionIds));
   const splitInfoByScenarioId = new Map();
 
   ids.forEach((scenarioId) => {
-    const participation = participationByScenarioId.get(String(scenarioId)) || {
-      sourceDistributionIds: [],
-      targetDistributionIds: [],
-    };
-    const allIds = [...participation.sourceDistributionIds, ...participation.targetDistributionIds];
+    const key = String(scenarioId);
+    const srcId = latestSourceByScenario.get(key);
+    const tgtId = latestTargetByScenario.get(key);
+    const hasSplit = Number.isFinite(srcId) || Number.isFinite(tgtId);
     let splitStatus = "none";
-    if (allIds.length) {
-      splitStatus = allIds.some((id) => staleByDist.get(Number(id))) ? "stale" : "ok";
+    if (hasSplit) {
+      const isStale =
+        (Number.isFinite(srcId) && staleByDist.get(Number(srcId))) ||
+        (Number.isFinite(tgtId) && staleByDist.get(Number(tgtId)));
+      splitStatus = isStale ? "stale" : "ok";
     }
-    splitInfoByScenarioId.set(String(scenarioId), {
+    splitInfoByScenarioId.set(key, {
       splitStatus,
-      isSourceScenario: participation.sourceDistributionIds.length > 0,
+      isSourceScenario: Number.isFinite(srcId),
     });
   });
 
@@ -419,7 +673,8 @@ router.get("/progress", async (req, res) => {
         const [[latestActive]] = await pool.query(
           `SELECT id, name, status, created_at
            FROM school_scenarios
-           WHERE school_id=:sid AND status <> 'approved'
+           WHERE school_id=:sid
+             AND NOT (status = 'approved' AND sent_at IS NOT NULL)
            ORDER BY created_at DESC, id DESC
            LIMIT 1`,
           { sid }
@@ -597,16 +852,18 @@ router.post(
       const { ids } = accessible;
       const guard = await buildStaleSourceGuard(pool, ids);
 
-      const [approvedRows] = await pool.query(
+      const [scenarioRows] = await pool.query(
         `SELECT sc.id, sc.school_id, sc.name, sc.academic_year, sc.status, sc.sent_at, sc.created_at, sc.checked_at
          FROM school_scenarios sc
-         WHERE sc.school_id IN (:ids) AND sc.status = 'approved'
+         WHERE sc.school_id IN (:ids)
+           AND NOT (sc.status = 'approved' AND sc.sent_at IS NOT NULL)
          ORDER BY sc.school_id ASC, COALESCE(sc.checked_at, sc.created_at) DESC, sc.id DESC`,
         { ids }
       );
-      const rows = Array.isArray(approvedRows) ? approvedRows : [];
+      const rows = Array.isArray(scenarioRows) ? scenarioRows : [];
       const latestBySchoolId = new Map();
       rows.forEach((row) => {
+        if (String(row.status || "") !== "approved" || row.sent_at != null) return;
         const key = String(row.school_id);
         if (!latestBySchoolId.has(key)) {
           latestBySchoolId.set(key, Number(row.id));
@@ -614,10 +871,7 @@ router.post(
       });
 
       const progressByScenarioId = await buildProgressByScenarioId(pool, req.user.country_id, rows);
-      const splitInfoByScenarioId = await buildScenarioSplitInfo(
-        pool,
-        rows.map((row) => row.id)
-      );
+      const splitInfoByScenarioId = await buildScenarioSplitInfo(pool, rows);
 
       const SENT_STATES = new Set(["sent_for_approval"]);
       const outputRows = rows.map((row) => {
@@ -628,11 +882,19 @@ router.post(
           splitStatus: "none",
           isSourceScenario: false,
         };
-        const isLatestKontrolEdildi =
-          Number(latestBySchoolId.get(String(schoolId))) === Number(scenarioId);
+        const isManagerApproved = String(row.status || "") === "approved" && row.sent_at == null;
+        const isLatestKontrolEdildi = isManagerApproved
+          ? Number(latestBySchoolId.get(String(schoolId))) === Number(scenarioId)
+          : true;
 
         const reasons = [];
-        if (!isLatestKontrolEdildi) reasons.push("En guncel 'Kontrol edildi' senaryo degil");
+        const status = String(row.status || "");
+        if (status !== "approved" && status !== "sent_for_approval") {
+          reasons.push("Kontrol edilmedi");
+        }
+        if (isManagerApproved && !isLatestKontrolEdildi) {
+          reasons.push("En guncel 'Kontrol edildi' senaryo degil");
+        }
         if (!Number.isFinite(progress) || Number(progress) < 100) reasons.push("Ilerleme %100 degil");
         if (row.sent_at != null || SENT_STATES.has(String(row.status || ""))) {
           reasons.push("Merkeze iletildi");
@@ -698,7 +960,8 @@ router.post(
       }
 
       const [scenarioRows] = await pool.query(
-        `SELECT sc.id, sc.school_id, sc.name, sc.academic_year, sc.status, sc.sent_at, sc.created_at, sc.checked_at
+        `SELECT sc.id, sc.school_id, sc.name, sc.academic_year, sc.status, sc.sent_at, sc.created_at, sc.checked_at,
+                sc.input_currency, sc.local_currency_code, sc.fx_usd_to_local
          FROM school_scenarios sc
          WHERE sc.id IN (:ids)`,
         { ids: scenarioIds }
@@ -726,7 +989,7 @@ router.post(
       });
 
       const progressByScenarioId = await buildProgressByScenarioId(pool, req.user.country_id, rows);
-      const splitInfoByScenarioId = await buildScenarioSplitInfo(pool, scenarioIds);
+      const splitInfoByScenarioId = await buildScenarioSplitInfo(pool, rows);
 
       const SENT_STATES = new Set(["sent_for_approval"]);
       const results = [];
@@ -753,7 +1016,10 @@ router.post(
           Number(latestBySchoolId.get(String(schoolId))) === Number(scenarioId);
 
         const reasons = [];
-        if (String(row.status || "") !== "approved") reasons.push("Kontrol edilmedi");
+        const status = String(row.status || "");
+        if (status !== "approved" && status !== "sent_for_approval") {
+          reasons.push("Kontrol edilmedi");
+        }
         if (!isLatestKontrolEdildi) reasons.push("En guncel 'Kontrol edildi' senaryo degil");
         if (!Number.isFinite(progress) || Number(progress) < 100) reasons.push("Ilerleme %100 degil");
         if (row.sent_at != null || SENT_STATES.has(String(row.status || ""))) {
@@ -764,6 +1030,17 @@ router.post(
 
         if (reasons.length) {
           results.push({ scenarioId, ok: false, reasons });
+          continue;
+        }
+
+        try {
+          await ensureScenarioKpis(pool, row, req.user.id);
+        } catch (err) {
+          results.push({
+            scenarioId,
+            ok: false,
+            reasons: [err?.message || "KPI hesaplanamadi"],
+          });
           continue;
         }
 

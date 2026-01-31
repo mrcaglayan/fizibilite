@@ -296,11 +296,27 @@ async function buildPreview({
     throw err;
   }
 
-  const uniqueTargetIds = pickUniqueScenarioIds(targetScenarioIds).filter(
-    (id) => String(id) !== String(sourceScenarioId)
-  );
-  if (pickUniqueScenarioIds(targetScenarioIds).length !== uniqueTargetIds.length) {
+  const requestedTargetIds = pickUniqueScenarioIds(targetScenarioIds);
+  let uniqueTargetIds = requestedTargetIds.filter((id) => String(id) !== String(sourceScenarioId));
+  if (requestedTargetIds.length !== uniqueTargetIds.length) {
     warnings.push("Kaynak senaryo hedef listesinden çikarildi.");
+  }
+  if (uniqueTargetIds.length) {
+    const [sourceRows] = await pool.query(
+      `SELECT DISTINCT source_scenario_id
+       FROM expense_distribution_sets
+       WHERE source_scenario_id IN (:ids)`,
+      { ids: uniqueTargetIds }
+    );
+    const sourceIdSet = new Set(
+      (Array.isArray(sourceRows) ? sourceRows : [])
+        .map((row) => String(row?.source_scenario_id))
+        .filter((id) => id)
+    );
+    if (sourceIdSet.size) {
+      uniqueTargetIds = uniqueTargetIds.filter((id) => !sourceIdSet.has(String(id)));
+      warnings.push("Gider paylastirma kaynagi olan senaryolar hedef listesinden cikarildi.");
+    }
   }
 
   let targetRows = [];
@@ -546,6 +562,10 @@ router.get("/expense-distributions/targets", async (req, res) => {
        JOIN schools s ON s.id = sc.school_id
        WHERE s.country_id = :country_id
          AND sc.academic_year = :academic_year
+         AND NOT EXISTS (
+           SELECT 1 FROM expense_distribution_sets eds
+           WHERE eds.source_scenario_id = sc.id
+         )
          ${includeClosed ? "" : "AND s.status = 'active'"}
        ORDER BY s.name ASC, sc.name ASC`,
       { country_id: req.user.country_id, academic_year: academicYear }
@@ -556,6 +576,70 @@ router.get("/expense-distributions/targets", async (req, res) => {
     return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
   }
 });
+
+/**
+ * GET /schools/:schoolId/scenarios/:scenarioId/expense-split/last-scope
+ *
+ * Returns the last applied expense split scope for a source scenario.
+ */
+router.get(
+  "/schools/:schoolId/scenarios/:scenarioId/expense-split/last-scope",
+  requirePermission("scenario.expense_split", "write", { schoolIdParam: "schoolId" }),
+  async (req, res) => {
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      if (!Number.isFinite(schoolId) || !Number.isFinite(scenarioId)) {
+        return res.status(400).json({ error: "Invalid schoolId or scenarioId" });
+      }
+
+      const pool = getPool();
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: "School not found" });
+
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+
+      const [[row]] = await pool.query(
+        `SELECT id, basis, basis_year_key, scope_json, created_at
+         FROM expense_distribution_sets
+         WHERE source_scenario_id=:sid
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+        { sid: scenarioId }
+      );
+
+      if (!row) return res.json({ scope: null });
+
+      let scope = null;
+      if (row.scope_json) {
+        if (typeof row.scope_json === "string") {
+          try {
+            scope = JSON.parse(row.scope_json);
+          } catch (_) {
+            scope = null;
+          }
+        } else if (typeof row.scope_json === "object") {
+          scope = row.scope_json;
+        }
+      }
+
+      const normalizedScope = scope && typeof scope === "object" ? scope : {};
+      return res.json({
+        distributionId: row.id,
+        createdAt: row.created_at,
+        scope: {
+          basis: String(normalizedScope.basis || row.basis || "").toLowerCase() || null,
+          basisYearKey: String(normalizedScope.basisYearKey || row.basis_year_key || "").toLowerCase() || null,
+          expenseKeys: Array.isArray(normalizedScope.expenseKeys) ? normalizedScope.expenseKeys : [],
+          targetScenarioIds: Array.isArray(normalizedScope.targetScenarioIds) ? normalizedScope.targetScenarioIds : [],
+        },
+      });
+    } catch (e) {
+      return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    }
+  }
+);
 
 /**
  * POST /schools/:schoolId/scenarios/:scenarioId/expense-split/preview
@@ -725,6 +809,105 @@ router.post(
 
       await conn.commit();
       return res.json({ ok: true, distributionId });
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+      if (e?.status) return res.status(e.status).json({ error: e.message || "Invalid request" });
+      return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+    } finally {
+      conn.release();
+    }
+  }
+);
+
+/**
+ * POST /schools/:schoolId/scenarios/:scenarioId/expense-split/revert
+ *
+ * Reverts targets from the latest expense distribution set for a source scenario.
+ */
+router.post(
+  "/schools/:schoolId/scenarios/:scenarioId/expense-split/revert",
+  requirePermission("scenario.expense_split", "write", { schoolIdParam: "schoolId" }),
+  async (req, res) => {
+    const pool = getPool();
+    const conn = await pool.getConnection();
+    try {
+      const schoolId = Number(req.params.schoolId);
+      const scenarioId = Number(req.params.scenarioId);
+      const targetScenarioIds = Array.isArray(req.body?.targetScenarioIds)
+        ? req.body.targetScenarioIds
+        : null;
+
+      if (!Number.isFinite(schoolId) || !Number.isFinite(scenarioId)) {
+        return res.status(400).json({ error: "Invalid schoolId or scenarioId" });
+      }
+      if (!targetScenarioIds || targetScenarioIds.length === 0) {
+        return res.status(400).json({ error: "targetScenarioIds must be a non-empty array" });
+      }
+
+      const school = await assertSchoolInUserCountry(pool, schoolId, req.user.country_id);
+      if (!school) return res.status(404).json({ error: "School not found" });
+
+      const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
+      if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+
+      const [[latest]] = await pool.query(
+        `SELECT id, created_at
+         FROM expense_distribution_sets
+         WHERE source_scenario_id=:sid
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+        { sid: scenarioId }
+      );
+      if (!latest) return res.status(404).json({ error: "No distribution set found" });
+
+      const ids = pickUniqueScenarioIds(targetScenarioIds);
+      const [existingRows] = await pool.query(
+        `SELECT target_scenario_id
+         FROM expense_distribution_targets
+         WHERE distribution_id=:did AND target_scenario_id IN (:ids)`,
+        { did: latest.id, ids: ids.length ? ids : [0] }
+      );
+      const existingIds = (Array.isArray(existingRows) ? existingRows : []).map((r) =>
+        Number(r.target_scenario_id)
+      );
+      if (!existingIds.length) {
+        return res.status(400).json({ error: "Selected targets not found in latest distribution set" });
+      }
+
+      await conn.beginTransaction();
+      await conn.query(
+        `DELETE FROM expense_distribution_allocations
+         WHERE distribution_id=:did AND target_scenario_id IN (:ids)`,
+        { did: latest.id, ids: existingIds }
+      );
+      await conn.query(
+        `DELETE FROM expense_distribution_targets
+         WHERE distribution_id=:did AND target_scenario_id IN (:ids)`,
+        { did: latest.id, ids: existingIds }
+      );
+
+      const [[remaining]] = await conn.query(
+        "SELECT COUNT(*) AS cnt FROM expense_distribution_targets WHERE distribution_id=:did",
+        { did: latest.id }
+      );
+      const remainingCount = Number(remaining?.cnt || 0);
+      let deletedSet = false;
+      if (remainingCount <= 0) {
+        await conn.query("DELETE FROM expense_distribution_sets WHERE id=:did", { did: latest.id });
+        deletedSet = true;
+      }
+
+      await conn.commit();
+      return res.json({
+        ok: true,
+        distributionId: latest.id,
+        removedTargetScenarioIds: existingIds,
+        deletedSet,
+      });
     } catch (e) {
       try {
         await conn.rollback();

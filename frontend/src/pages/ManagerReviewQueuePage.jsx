@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo, useCallback, useId, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { toast } from 'react-toastify';
+import { ToastContainer, toast } from 'react-toastify';
 import { FaCheck, FaCheckCircle, FaExclamationTriangle, FaPaperPlane, FaSearch, FaStar, FaThLarge } from 'react-icons/fa';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext';
@@ -456,7 +456,12 @@ export default function ManagerReviewQueuePage() {
       loadQueue({ activeScenarioId: keepOpenId, deferUpdate: Boolean(keepOpenId) });
     } catch (e) {
       console.error(e);
-      toast.error(e?.message || 'Failed to send for approval');
+      const reasons = Array.isArray(e?.data?.reasons) ? e.data.reasons.filter(Boolean) : [];
+      if (e?.status === 409 && reasons.length) {
+        toast.warn(`Merkeze iletilemez: ${reasons.join(', ')}`);
+      } else {
+        toast.error(e?.message || 'Failed to send for approval');
+      }
     }
   };
 
@@ -481,6 +486,7 @@ export default function ManagerReviewQueuePage() {
 
   return (
     <div className="container">
+      <ToastContainer position="bottom-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover hideProgressBar theme="dark" />
       <AnimatePresence>
         {activeCard && typeof activeCard === 'object' ? (
           <motion.div

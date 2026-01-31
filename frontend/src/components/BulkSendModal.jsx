@@ -126,6 +126,16 @@ export default function BulkSendModal({ open, onClose, schoolIds }) {
   const resultsList = Array.isArray(applyResults) ? applyResults : [];
   const failedResults = resultsList.filter((r) => !r.ok);
   const successCount = resultsList.filter((r) => r.ok).length;
+  const sendableRows = rows.filter((row) => !row.isSourceScenario);
+  const allRowsReadyForBulkSend =
+    sendableRows.length > 0 &&
+    sendableRows.every(
+      (row) =>
+        row.eligible &&
+        Number.isFinite(Number(row.progress)) &&
+        Number(row.progress) >= 100 &&
+        String(row.status || "") === "approved"
+    );
 
   if (!open) return null;
 
@@ -294,7 +304,7 @@ export default function BulkSendModal({ open, onClose, schoolIds }) {
           <button
             className="btn primary"
             onClick={handleApply}
-            disabled={guardDisabled || !selectedCount || applyLoading}
+            disabled={guardDisabled || !selectedCount || applyLoading || !allRowsReadyForBulkSend}
           >
             {applyLoading ? "Gonderiliyor..." : "Merkeze Ilet"}
           </button>

@@ -1,6 +1,6 @@
 // frontend/src/components/ExpenseSplitModal.jsx
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FaChevronDown, FaChevronRight } from "react-icons/fa";
 import { toast } from "react-toastify";
 import { api } from "../api";
@@ -147,10 +147,13 @@ export default function ExpenseSplitModal({
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
+  const [revertLoading, setRevertLoading] = useState(false);
   const [showPools, setShowPools] = useState(false);
   const [expandedTargets, setExpandedTargets] = useState(new Set());
   const [showTargets, setShowTargets] = useState(true);
   const [showExpenses, setShowExpenses] = useState(true);
+  const [prefillScope, setPrefillScope] = useState(null);
+  const prefillAppliedRef = useRef(false);
   const compactControlStyle = {
     fontSize: 12,
     height: 30,
@@ -176,6 +179,9 @@ export default function ExpenseSplitModal({
     setBasis("students");
     setBasisYearKey("y1");
     setPreview(null);
+    setRevertLoading(false);
+    setPrefillScope(null);
+    prefillAppliedRef.current = false;
   }, [open, sourceScenario?.id]);
 
   useEffect(() => {
@@ -212,6 +218,54 @@ export default function ExpenseSplitModal({
       active = false;
     };
   }, [open, sourceScenario?.academic_year, sourceScenario?.id]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadPrefill() {
+      if (!open || !sourceScenario?.id || !sourceSchoolId) return;
+      try {
+        const data = await api.getExpenseSplitLastScope(sourceSchoolId, sourceScenario.id);
+        if (!active) return;
+        setPrefillScope(data?.scope || null);
+      } catch (_) {
+        if (active) setPrefillScope(null);
+      }
+    }
+    loadPrefill();
+    return () => {
+      active = false;
+    };
+  }, [open, sourceScenario?.id, sourceSchoolId]);
+
+  useEffect(() => {
+    if (!open || prefillAppliedRef.current) return;
+    if (loadingTargets) return;
+    if (!prefillScope || typeof prefillScope !== "object") return;
+
+    const nextBasis = String(prefillScope.basis || "").toLowerCase();
+    const nextYear = String(prefillScope.basisYearKey || "").toLowerCase();
+    if (nextBasis === "students" || nextBasis === "revenue") {
+      setBasis(nextBasis);
+    }
+    if (["y1", "y2", "y3"].includes(nextYear)) {
+      setBasisYearKey(nextYear);
+    }
+
+    const allowedExpenseKeys = new Set(EXPENSE_KEYS);
+    const expenseKeys = Array.isArray(prefillScope.expenseKeys)
+      ? prefillScope.expenseKeys.filter((key) => allowedExpenseKeys.has(key))
+      : [];
+    setSelectedExpenseKeys(new Set(expenseKeys));
+
+    const targetIdSet = new Set(targets.map((row) => String(row.scenarioId)));
+    const targetScenarioIds = Array.isArray(prefillScope.targetScenarioIds)
+      ? prefillScope.targetScenarioIds.map((id) => String(id))
+      : [];
+    const filteredTargets = targetScenarioIds.filter((id) => targetIdSet.has(id));
+    setSelectedTargets(new Set(filteredTargets));
+
+    prefillAppliedRef.current = true;
+  }, [open, loadingTargets, prefillScope, targets]);
 
   const filteredTargets = useMemo(() => {
     const term = targetSearch.trim().toLowerCase();
@@ -299,6 +353,35 @@ export default function ExpenseSplitModal({
     }
   };
 
+  const handleRevert = async () => {
+    if (!sourceScenario?.id || !sourceSchoolId) return;
+    if (!selectedTargets.size || revertLoading || applyLoading) return;
+    const ok = window.confirm("Secili hedefler icin gider dagitimi geri alinsin mi?");
+    if (!ok) return;
+    setRevertLoading(true);
+    try {
+      const targetScenarioIds = Array.from(selectedTargets).map((id) => Number(id));
+      const data = await api.revertExpenseSplit(sourceSchoolId, sourceScenario.id, { targetScenarioIds });
+      const removed = Array.isArray(data?.removedTargetScenarioIds) ? data.removedTargetScenarioIds : [];
+      if (removed.length) {
+        setSelectedTargets((prev) => {
+          const next = new Set(prev);
+          removed.forEach((id) => next.delete(String(id)));
+          return next;
+        });
+      }
+      if (data?.deletedSet) {
+        setPrefillScope(null);
+        setSelectedExpenseKeys(new Set());
+      }
+      toast.success("Gider dagitimi geri alindi.");
+    } catch (e) {
+      toast.error(e.message || "Geri alma basarisiz");
+    } finally {
+      setRevertLoading(false);
+    }
+  };
+
   const previewTargets = useMemo(
     () => (Array.isArray(preview?.targets) ? preview.targets : []),
     [preview]
@@ -342,7 +425,7 @@ export default function ExpenseSplitModal({
   const someExpensesSelected = selectedExpenseCount > 0 && !allExpensesSelected;
 
   const previewDisabled =
-    !selectedTargets.size || !selectedExpenseKeys.size || previewLoading || applyLoading;
+    !selectedTargets.size || !selectedExpenseKeys.size || previewLoading || applyLoading || revertLoading;
 
   const isletmeSection = EXPENSE_SECTIONS.find((s) => s.id === "isletme") || null;
   const otherSections = EXPENSE_SECTIONS.filter((s) => s.id !== "isletme");
@@ -470,7 +553,7 @@ export default function ExpenseSplitModal({
           <button
             className="btn"
             onClick={onClose}
-            disabled={applyLoading || previewLoading}
+            disabled={applyLoading || previewLoading || revertLoading}
             style={{
               position: "absolute",
               top: 10,
@@ -665,6 +748,7 @@ export default function ExpenseSplitModal({
                 onClick={handleApply}
                 disabled={
                   applyLoading ||
+                  revertLoading ||
                   previewLoading ||
                   !selectedTargets.size ||
                   !selectedExpenseKeys.size
@@ -672,6 +756,15 @@ export default function ExpenseSplitModal({
               >
                 {applyLoading ? "Uygulaniyor..." : "Uygula"}
               </button>
+              {prefillScope ? (
+                <button
+                  className="btn danger"
+                  onClick={handleRevert}
+                  disabled={!selectedTargets.size || applyLoading || revertLoading}
+                >
+                  {revertLoading ? "Geri Aliniyor..." : "Gider Dagitimini Geri Al"}
+                </button>
+              ) : null}
             </div>
 
             {previewWarnings.length > 0 ? (

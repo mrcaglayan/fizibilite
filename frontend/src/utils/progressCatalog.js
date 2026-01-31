@@ -46,6 +46,11 @@ const IK_LOCAL_ROLES = [
   { key: "yerel_destek", label: "Yerel Destek" },
 ];
 
+const IK_HQ_ROLES = [
+  { key: "turk_temsil", label: "Temsilcilik / Egitim Kurumu Calisanlari" },
+  { key: "yerel_ulke_temsil_destek", label: "Ulke Temsilciligi Destek Per." },
+];
+
 const GIDERLER_ITEMS = [
   "ulkeTemsilciligi",
   "genelYonetim",
@@ -81,8 +86,8 @@ const TAB_DEFS = [
   },
   { key: "kapasite", label: "Kapasite", sectionIds: ["kapasite.caps"] },
   { key: "gradesPlan", label: "Sinif/Sube Plani", sectionIds: ["gradesPlan.plan"] },
-  { key: "norm", label: "Norm", sectionIds: ["norm.lessons"] },
-  { key: "ik", label: "IK / HR", sectionIds: ["ik.localStaff"] },
+  { key: "norm", label: "Norm", sectionIds: ["norm.current", "norm.lessons"] },
+  { key: "ik", label: "IK / HR", sectionIds: ["ik.localStaff", "ik.hqStaff"] },
   { key: "gelirler", label: "Gelirler", sectionIds: ["gelirler.unitFee"] },
   { key: "giderler", label: "Giderler", sectionIds: ["giderler.isletme"] },
   // Rename indirimler → discounts to match the normalized permission namespace
@@ -98,8 +103,10 @@ const SECTION_DEFS = [
   { id: "temel.performans", tabKey: "temelBilgiler", label: "Performans (Onceki Donem)", modeDefault: "ALL", minDefault: null },
   { id: "kapasite.caps", tabKey: "kapasite", label: "Kapasite", modeDefault: "ALL", minDefault: null, requiresKademe: true },
   { id: "gradesPlan.plan", tabKey: "gradesPlan", label: "Planlanan Sinif/Sube", modeDefault: "ALL", minDefault: null, requiresKademe: true },
+  { id: "norm.current", tabKey: "norm", label: "Mevcut Donem Bilgileri", modeDefault: "ALL", minDefault: null, requiresKademe: true, allowEmpty: false },
   { id: "norm.lessons", tabKey: "norm", label: "Ders Dagilimi", modeDefault: "MIN", minDefault: 3, requiresKademe: true, allowEmpty: false },
   { id: "ik.localStaff", tabKey: "ik", label: "IK Yerel", modeDefault: "ALL", minDefault: null },
+  { id: "ik.hqStaff", tabKey: "ik", label: "IK Merkez Temsilcilik", modeDefault: "ALL", minDefault: null, allowEmpty: true },
   { id: "gelirler.unitFee", tabKey: "gelirler", label: "Birim Ucret", modeDefault: "MIN", minDefault: 1 },
   { id: "giderler.isletme", tabKey: "giderler", label: "Isletme Giderleri", modeDefault: "MIN", minDefault: 5 },
   // Section for discounts.  The id and tabKey follow the new discounts.* namespace.
@@ -282,6 +289,16 @@ function getGradePlanValue(inputs, yearKey, grade, fieldKey) {
   return match ? match[fieldKey] : null;
 }
 
+function getCurrentGrades(inputs) {
+  return Array.isArray(inputs?.gradesCurrent) ? inputs.gradesCurrent : [];
+}
+
+function getCurrentGradeValue(inputs, grade, fieldKey) {
+  const rows = getCurrentGrades(inputs);
+  const match = rows.find((r) => String(r?.grade) === String(grade));
+  return match ? match[fieldKey] : null;
+}
+
 function makeField(id, label, type, getValue, appliesIf) {
   return { id, label, type, getValue, appliesIf };
 }
@@ -433,6 +450,29 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
     });
   });
 
+  grades.forEach((grade) => {
+    ["branchCount", "studentsPerBranch"].forEach((fieldKey) => {
+      const label =
+        fieldKey === "branchCount"
+          ? `Mevcut ${grade} sube`
+          : `Mevcut ${grade} ogrenci`;
+      addField(
+        "norm.current",
+        makeField(
+          `norm.current.${grade}.${fieldKey}`,
+          label,
+          "number",
+          (inputsArg) => getCurrentGradeValue(inputsArg, grade, fieldKey),
+          () => {
+            if (typeof ctx.isGradeActive === "function") return ctx.isGradeActive(grade);
+            if (ctx.enabledGrades && ctx.enabledGrades.size) return ctx.enabledGrades.has(grade);
+            return true;
+          }
+        )
+      );
+    });
+  });
+
   const normSubjects = collectNormSubjects(norm);
   normSubjects.forEach((subjectKey) => {
     addField(
@@ -447,42 +487,70 @@ export function buildProgressCatalog({ inputs, norm, scenario } = {}) {
     );
   });
 
-  YEAR_KEYS.forEach((year) => {
-    IK_LOCAL_ROLES.forEach((role) => {
-      addField(
-        "ik.localStaff",
-        makeField(
-          `ik.unitCost.${year}.${role.key}`,
-          `Unit cost ${role.label} ${year}`,
-          "number",
-          (inputsArg) => safeGet(inputsArg, ["ik", "years", year, "unitCosts", role.key], null),
-          () => true
-        )
-      );
-      IK_LEVEL_DEFS.forEach((lvl) => {
+  if (!ctx.noKademeMode) {
+    YEAR_KEYS.forEach((year) => {
+      IK_LOCAL_ROLES.forEach((role) => {
         addField(
           "ik.localStaff",
           makeField(
-            `ik.headcount.${year}.${lvl.key}.${role.key}`,
-            `Headcount ${lvl.label} ${role.label} ${year}`,
+            `ik.unitCost.${year}.${role.key}`,
+            `Unit cost ${role.label} ${year}`,
             "number",
-            (inputsArg) => {
-              const yerelValue = safeGet(
-                inputsArg,
-                ["ik", "years", year, "headcountsByLevel", lvl.yerelKey || lvl.key, role.key],
-                null
-              );
-              const intValue = safeGet(
-                inputsArg,
-                ["ik", "years", year, "headcountsByLevel", lvl.intKey || lvl.key, role.key],
-                null
-              );
-              return pickHeadcountValue(yerelValue, intValue);
-            },
-            () => (ctx.noKademeMode ? (lvl.key === "merkez") : (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true))
+            (inputsArg) => safeGet(inputsArg, ["ik", "years", year, "unitCosts", role.key], null),
+            () => true
           )
         );
+        IK_LEVEL_DEFS.forEach((lvl) => {
+          addField(
+            "ik.localStaff",
+            makeField(
+              `ik.headcount.${year}.${lvl.key}.${role.key}`,
+              `Headcount ${lvl.label} ${role.label} ${year}`,
+              "number",
+              (inputsArg) => {
+                const yerelValue = safeGet(
+                  inputsArg,
+                  ["ik", "years", year, "headcountsByLevel", lvl.yerelKey || lvl.key, role.key],
+                  null
+                );
+                const intValue = safeGet(
+                  inputsArg,
+                  ["ik", "years", year, "headcountsByLevel", lvl.intKey || lvl.key, role.key],
+                  null
+                );
+                return pickHeadcountValue(yerelValue, intValue);
+              },
+              () => (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true)
+            )
+          );
+        });
       });
+    });
+  }
+
+  YEAR_KEYS.forEach((year) => {
+    IK_HQ_ROLES.forEach((role) => {
+      addField(
+        "ik.hqStaff",
+        makeField(
+          `ik.hq.unitCost.${year}.${role.key}`,
+          `Unit cost ${role.label} ${year}`,
+          "number",
+          (inputsArg) => safeGet(inputsArg, ["ik", "years", year, "unitCosts", role.key], null),
+          () => ctx.noKademeMode === true
+        )
+      );
+      addField(
+        "ik.hqStaff",
+        makeField(
+          `ik.hq.headcount.${year}.merkez.${role.key}`,
+          `Headcount Merkez ${role.label} ${year}`,
+          "number",
+          (inputsArg) =>
+            safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", "merkez", role.key], null),
+          () => ctx.noKademeMode === true
+        )
+      );
     });
   });
 

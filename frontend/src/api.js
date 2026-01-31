@@ -278,6 +278,13 @@ export const api = {
     request(`/schools/${schoolId}/scenarios/${scenarioId}/submit`, { method: "POST" }),
   expenseSplitTargets: (academicYear) =>
     request(`/expense-distributions/targets${toQuery({ academicYear })}`),
+  getExpenseSplitLastScope: (schoolId, scenarioId) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/expense-split/last-scope`),
+  revertExpenseSplit: (schoolId, scenarioId, payload) =>
+    request(`/schools/${schoolId}/scenarios/${scenarioId}/expense-split/revert`, {
+      method: "POST",
+      body: payload,
+    }),
   previewExpenseSplit: (schoolId, scenarioId, payload) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}/expense-split/preview`, {
       method: "POST",

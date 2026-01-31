@@ -68,6 +68,21 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
 
     const requiresKademe = section.requiresKademe === true;
     const hasKademeSelection = catalog.context?.hasKademeSelection;
+    const noKademeMode = catalog.context?.noKademeMode === true;
+    const kademeSelectedButEmpty =
+      Boolean(hasKademeSelection) &&
+      catalog.context?.enabledKademes &&
+      catalog.context.enabledKademes.size === 0;
+    if (requiresKademe && kademeSelectedButEmpty) {
+      sectionResults.set(section.id, {
+        enabled: true,
+        done: true,
+        doneUnits: 0,
+        totalUnits: 0,
+        missingReasons: [],
+      });
+      return;
+    }
     if (requiresKademe && !hasKademeSelection) {
       sectionResults.set(section.id, {
         enabled: true,
@@ -79,10 +94,7 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
       addUnits(1, 0);
       return;
     }
-
-    const fieldIds = Array.isArray(section.fields) ? section.fields : [];
-    const selectedIds = fieldIds.filter((id) => cfg.selectedFields?.[id] !== false);
-    if (selectedIds.length === 0) {
+    if (noKademeMode && section.id === "gelirler.unitFee") {
       sectionResults.set(section.id, {
         enabled: true,
         done: true,
@@ -90,6 +102,30 @@ export function computeScenarioProgress({ inputs, norm, config, scenario } = {})
         totalUnits: 0,
         missingReasons: [],
       });
+      return;
+    }
+
+    const fieldIds = Array.isArray(section.fields) ? section.fields : [];
+    const selectedIds = fieldIds.filter((id) => cfg.selectedFields?.[id] !== false);
+    if (selectedIds.length === 0) {
+      if (section.allowEmpty === false) {
+        sectionResults.set(section.id, {
+          enabled: true,
+          done: false,
+          doneUnits: 0,
+          totalUnits: 1,
+          missingReasons: [section.label || "Eksik"],
+        });
+        addUnits(1, 0);
+      } else {
+        sectionResults.set(section.id, {
+          enabled: true,
+          done: true,
+          doneUnits: 0,
+          totalUnits: 0,
+          missingReasons: [],
+        });
+      }
       return;
     }
     const applicable = selectedIds

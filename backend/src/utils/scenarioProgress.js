@@ -2,7 +2,7 @@ const YEAR_KEYS = ["y1", "y2", "y3"];
 
 // Bump this whenever the progress calculation rules change.
 // Used to invalidate cached progress_json/progress_pct without requiring a DB migration.
-const PROGRESS_ENGINE_VERSION = 6;
+const PROGRESS_ENGINE_VERSION = 11;
 
 const KADEME_DEFS = [
   { key: "okulOncesi", label: "Okul Oncesi", defaultFrom: "KG", defaultTo: "KG" },
@@ -75,6 +75,11 @@ const IK_LOCAL_ROLES = [
   { key: "yerel_destek", label: "Yerel Destek" },
 ];
 
+const IK_HQ_ROLES = [
+  { key: "turk_temsil", label: "Temsilcilik / Egitim Kurumu Calisanlari" },
+  { key: "yerel_ulke_temsil_destek", label: "Ulke Temsilciligi Destek Per." },
+];
+
 const GIDERLER_ITEMS = [
   "ulkeTemsilciligi",
   "genelYonetim",
@@ -111,8 +116,8 @@ const TAB_DEFS = [
   },
   { key: "kapasite", label: "Kapasite", sectionIds: ["kapasite.caps"] },
   { key: "gradesPlan", label: "Sinif/Sube Plani", sectionIds: ["gradesPlan.plan"] },
-  { key: "norm", label: "Norm", sectionIds: ["norm.lessons"] },
-  { key: "ik", label: "IK / HR", sectionIds: ["ik.localStaff"] },
+  { key: "norm", label: "Norm", sectionIds: ["norm.current", "norm.lessons"] },
+  { key: "ik", label: "IK / HR", sectionIds: ["ik.localStaff", "ik.hqStaff"] },
   { key: "gelirler", label: "Gelirler", sectionIds: ["gelirler.unitFee"] },
   { key: "giderler", label: "Giderler", sectionIds: ["giderler.isletme"] },
   // Renamed tab key from indirimler → discounts for consistency with the new
@@ -128,8 +133,10 @@ const SECTION_DEFS = [
   { id: "temel.rakip", tabKey: "temelBilgiler", label: "Rakip Analizi", modeDefault: "ALL", minDefault: null },
   { id: "kapasite.caps", tabKey: "kapasite", label: "Kapasite", modeDefault: "ALL", minDefault: null, requiresKademe: true },
   { id: "gradesPlan.plan", tabKey: "gradesPlan", label: "Planlanan Sinif/Sube", modeDefault: "ALL", minDefault: null, requiresKademe: true },
+  { id: "norm.current", tabKey: "norm", label: "Mevcut Donem Bilgileri", modeDefault: "ALL", minDefault: null, requiresKademe: true, allowEmpty: false },
   { id: "norm.lessons", tabKey: "norm", label: "Ders Dagilimi", modeDefault: "MIN", minDefault: 3, requiresKademe: true, allowEmpty: false },
   { id: "ik.localStaff", tabKey: "ik", label: "IK Yerel", modeDefault: "ALL", minDefault: null },
+  { id: "ik.hqStaff", tabKey: "ik", label: "IK Merkez Temsilcilik", modeDefault: "ALL", minDefault: null, allowEmpty: true },
   { id: "gelirler.unitFee", tabKey: "gelirler", label: "Birim Ucret", modeDefault: "MIN", minDefault: 1 },
   { id: "giderler.isletme", tabKey: "giderler", label: "Isletme Giderleri", modeDefault: "MIN", minDefault: 5 },
   // Section definition for discounts.  The id and tabKey now refer to
@@ -322,6 +329,16 @@ function getGradePlanValue(inputs, yearKey, grade, fieldKey) {
   return match ? match[fieldKey] : null;
 }
 
+function getCurrentGrades(inputs) {
+  return Array.isArray(inputs?.gradesCurrent) ? inputs.gradesCurrent : [];
+}
+
+function getCurrentGradeValue(inputs, grade, fieldKey) {
+  const rows = getCurrentGrades(inputs);
+  const match = rows.find((r) => String(r?.grade) === String(grade));
+  return match ? match[fieldKey] : null;
+}
+
 function makeField(id, label, type, getValue, appliesIf) {
   return { id, label, type, getValue, appliesIf };
 }
@@ -453,6 +470,25 @@ function buildProgressCatalog({ inputs, norm } = {}) {
     });
   });
 
+  grades.forEach((grade) => {
+    ["branchCount", "studentsPerBranch"].forEach((fieldKey) => {
+      const label =
+        fieldKey === "branchCount"
+          ? `Mevcut ${grade} sube`
+          : `Mevcut ${grade} ogrenci`;
+      addField(
+        "norm.current",
+        makeField(
+          `norm.current.${grade}.${fieldKey}`,
+          label,
+          "number",
+          (inputsArg) => getCurrentGradeValue(inputsArg, grade, fieldKey),
+          () => (ctx.hasKademeSelection ? ctx.enabledGrades.has(grade) : true)
+        )
+      );
+    });
+  });
+
   const normSubjects = collectNormSubjects(norm);
   normSubjects.forEach((subjectKey) => {
     addField(
@@ -467,31 +503,59 @@ function buildProgressCatalog({ inputs, norm } = {}) {
     );
   });
 
-  YEAR_KEYS.forEach((year) => {
-    IK_LOCAL_ROLES.forEach((role) => {
-      addField(
-        "ik.localStaff",
-        makeField(
-          `ik.unitCost.${year}.${role.key}`,
-          `Unit cost ${role.label} ${year}`,
-          "number",
-          (inputsArg) => safeGet(inputsArg, ["ik", "years", year, "unitCosts", role.key], null),
-          () => true
-        )
-      );
-      IK_LEVEL_DEFS.forEach((lvl) => {
+  if (!ctx.noKademeMode) {
+    YEAR_KEYS.forEach((year) => {
+      IK_LOCAL_ROLES.forEach((role) => {
         addField(
           "ik.localStaff",
           makeField(
-            `ik.headcount.${year}.${lvl.key}.${role.key}`,
-            `Headcount ${lvl.label} ${role.label} ${year}`,
+            `ik.unitCost.${year}.${role.key}`,
+            `Unit cost ${role.label} ${year}`,
             "number",
-            (inputsArg) =>
-              safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", lvl.key, role.key], null),
-            () => (ctx.noKademeMode ? (lvl.key === "merkez") : (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true))
+            (inputsArg) => safeGet(inputsArg, ["ik", "years", year, "unitCosts", role.key], null),
+            () => true
           )
         );
+        IK_LEVEL_DEFS.forEach((lvl) => {
+          addField(
+            "ik.localStaff",
+            makeField(
+              `ik.headcount.${year}.${lvl.key}.${role.key}`,
+              `Headcount ${lvl.label} ${role.label} ${year}`,
+              "number",
+              (inputsArg) =>
+                safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", lvl.key, role.key], null),
+              () => (ctx.hasKademeSelection ? ctx.enabledLevels.has(lvl.key) : true)
+            )
+          );
+        });
       });
+    });
+  }
+
+  YEAR_KEYS.forEach((year) => {
+    IK_HQ_ROLES.forEach((role) => {
+      addField(
+        "ik.hqStaff",
+        makeField(
+          `ik.hq.unitCost.${year}.${role.key}`,
+          `Unit cost ${role.label} ${year}`,
+          "number",
+          (inputsArg) => safeGet(inputsArg, ["ik", "years", year, "unitCosts", role.key], null),
+          () => ctx.noKademeMode === true
+        )
+      );
+      addField(
+        "ik.hqStaff",
+        makeField(
+          `ik.hq.headcount.${year}.merkez.${role.key}`,
+          `Headcount Merkez ${role.label} ${year}`,
+          "number",
+          (inputsArg) =>
+            safeGet(inputsArg, ["ik", "years", year, "headcountsByLevel", "merkez", role.key], null),
+          () => ctx.noKademeMode === true
+        )
+      );
     });
   });
 
@@ -624,6 +688,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
 
     const requiresKademe = section.requiresKademe === true;
     const hasKademeSelection = catalog.context?.hasKademeSelection;
+    const noKademeMode = catalog.context?.noKademeMode === true;
 
     // If kademeler are explicitly present but none are enabled (e.g. Headquarter / Merkez
     // branches), treat kademe-required sections as not applicable.
@@ -652,10 +717,7 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
       addUnits(1, 0);
       return;
     }
-
-    const fieldIds = Array.isArray(section.fields) ? section.fields : [];
-    const selectedIds = fieldIds.filter((id) => cfg.selectedFields?.[id] !== false);
-    if (selectedIds.length === 0) {
+    if (noKademeMode && section.id === "gelirler.unitFee") {
       sectionResults.set(section.id, {
         enabled: true,
         done: true,
@@ -663,6 +725,30 @@ function computeScenarioProgress({ inputs, norm, config } = {}) {
         totalUnits: 0,
         missingReasons: [],
       });
+      return;
+    }
+
+    const fieldIds = Array.isArray(section.fields) ? section.fields : [];
+    const selectedIds = fieldIds.filter((id) => cfg.selectedFields?.[id] !== false);
+    if (selectedIds.length === 0) {
+      if (section.allowEmpty === false) {
+        sectionResults.set(section.id, {
+          enabled: true,
+          done: false,
+          doneUnits: 0,
+          totalUnits: 1,
+          missingReasons: [section.label || "Eksik"],
+        });
+        addUnits(1, 0);
+      } else {
+        sectionResults.set(section.id, {
+          enabled: true,
+          done: true,
+          doneUnits: 0,
+          totalUnits: 0,
+          missingReasons: [],
+        });
+      }
       return;
     }
     const applicable = selectedIds

@@ -33,7 +33,8 @@ function parseJsonMaybe(value) {
 }
 
 async function computeExpenseSplitStaleByDistributions(pool, distributions) {
-  const distIds = (Array.isArray(distributions) ? distributions : [])
+  const distList = Array.isArray(distributions) ? distributions : [];
+  const distIds = distList
     .map((d) => Number(d?.id))
     .filter((n) => Number.isFinite(n) && n > 0);
   if (!distIds.length) return new Map();
@@ -95,7 +96,7 @@ async function computeExpenseSplitStaleByDistributions(pool, distributions) {
   // - targets: to recompute current basis values (students/revenue) without requiring "Hesapla"
   const distSourceIds = Array.from(
     new Set(
-      (Array.isArray(distributions) ? distributions : [])
+      distList
         .map((d) => Number(d?.source_scenario_id))
         .filter((n) => Number.isFinite(n) && n > 0)
     )
@@ -116,6 +117,92 @@ async function computeExpenseSplitStaleByDistributions(pool, distributions) {
       const parsed = parseJsonMaybe(row.inputs_json) || {};
       inputsByScenario.set(sid, parsed);
     });
+  }
+
+  // Load source scenario currency metadata for "new target" detection.
+  const sourceCurrencyByScenario = new Map();
+  if (distSourceIds.length) {
+    const [rows] = await pool.query(
+      `SELECT id, input_currency, local_currency_code
+       FROM school_scenarios
+       WHERE id IN (:ids)`,
+      { ids: distSourceIds }
+    );
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const sid = Number(row?.id);
+      if (!Number.isFinite(sid)) return;
+      sourceCurrencyByScenario.set(sid, {
+        input_currency: String(row?.input_currency || "").toUpperCase(),
+        local_currency_code: String(row?.local_currency_code || "").toUpperCase(),
+      });
+    });
+  }
+
+  // Preload "new target" candidates per (country, year, currency) group.
+  const newTargetsByGroup = new Map();
+  const groupMetaByKey = new Map();
+  const toMs = (value) => {
+    const d = value ? new Date(value) : null;
+    const ms = d ? d.getTime() : NaN;
+    return Number.isFinite(ms) ? ms : NaN;
+  };
+  for (const dist of distList) {
+    const srcId = Number(dist?.source_scenario_id);
+    const srcMeta = sourceCurrencyByScenario.get(srcId);
+    const countryId = Number(dist?.country_id);
+    const academicYear = String(dist?.academic_year || "").trim();
+    const createdAtMs = toMs(dist?.created_at);
+    if (!srcMeta || !Number.isFinite(countryId) || !academicYear || !Number.isFinite(createdAtMs)) continue;
+    const inputCurrency = String(srcMeta.input_currency || "").toUpperCase();
+    if (!inputCurrency) continue;
+    const localCode = inputCurrency === "LOCAL" ? String(srcMeta.local_currency_code || "").toUpperCase() : "";
+    if (inputCurrency === "LOCAL" && !localCode) continue;
+    const key = `${countryId}|${academicYear}|${inputCurrency}|${localCode}`;
+    const current = groupMetaByKey.get(key) || {
+      countryId,
+      academicYear,
+      inputCurrency,
+      localCode,
+      minCreatedAt: createdAtMs,
+    };
+    if (Number.isFinite(createdAtMs) && createdAtMs < current.minCreatedAt) {
+      current.minCreatedAt = createdAtMs;
+    }
+    groupMetaByKey.set(key, current);
+  }
+
+  for (const [key, group] of groupMetaByKey.entries()) {
+    const minDate = new Date(group.minCreatedAt);
+    let sql = `SELECT sc.id, sc.created_at
+               FROM school_scenarios sc
+               JOIN schools s ON s.id = sc.school_id
+               WHERE s.country_id = :country_id
+                 AND s.status = 'active'
+                 AND sc.academic_year = :academic_year
+                 AND sc.input_currency = :input_currency
+                 AND NOT EXISTS (
+                   SELECT 1 FROM expense_distribution_sets eds
+                   WHERE eds.source_scenario_id = sc.id
+                 )
+                 AND sc.created_at > :min_created_at`;
+    const params = {
+      country_id: group.countryId,
+      academic_year: group.academicYear,
+      input_currency: group.inputCurrency,
+      min_created_at: minDate,
+    };
+    if (group.inputCurrency === "LOCAL") {
+      sql += " AND sc.local_currency_code = :local_currency_code";
+      params.local_currency_code = group.localCode;
+    }
+    const [rows] = await pool.query(sql, params);
+    const list = (Array.isArray(rows) ? rows : [])
+      .map((row) => ({
+        id: Number(row?.id),
+        createdAtMs: toMs(row?.created_at),
+      }))
+      .filter((row) => Number.isFinite(row.id) && Number.isFinite(row.createdAtMs));
+    newTargetsByGroup.set(key, list);
   }
 
   // Cache feasibility-derived basis metrics per scenario so we don't recalculate repeatedly.
@@ -154,7 +241,7 @@ async function computeExpenseSplitStaleByDistributions(pool, distributions) {
 
   // Determine whether each distribution is stale.
   const staleByDist = new Map();
-  for (const dist of Array.isArray(distributions) ? distributions : []) {
+  for (const dist of distList) {
     const did = Number(dist.id);
     if (!Number.isFinite(did)) continue;
 
@@ -167,6 +254,11 @@ async function computeExpenseSplitStaleByDistributions(pool, distributions) {
       scope && typeof scope.targetBasisValues === "object" && scope.targetBasisValues
         ? scope.targetBasisValues
         : null;
+    const baselineTargets = new Set(
+      Array.isArray(scope.targetScenarioIds)
+        ? scope.targetScenarioIds.map((id) => String(id))
+        : []
+    );
 
     let isStale = false;
 
@@ -217,6 +309,33 @@ async function computeExpenseSplitStaleByDistributions(pool, distributions) {
       }
     }
 
+    // 3) New targets created after this split?
+    if (!isStale) {
+      const srcId = Number(dist.source_scenario_id);
+      const srcMeta = sourceCurrencyByScenario.get(srcId);
+      const countryId = Number(dist?.country_id);
+      const academicYear = String(dist?.academic_year || "").trim();
+      const createdAtMs = toMs(dist?.created_at);
+      if (
+        srcMeta &&
+        Number.isFinite(countryId) &&
+        academicYear &&
+        Number.isFinite(createdAtMs)
+      ) {
+        const inputCurrency = String(srcMeta.input_currency || "").toUpperCase();
+        const localCode = inputCurrency === "LOCAL" ? String(srcMeta.local_currency_code || "").toUpperCase() : "";
+        const groupKey = `${countryId}|${academicYear}|${inputCurrency}|${localCode}`;
+        const candidates = newTargetsByGroup.get(groupKey) || [];
+        for (const row of candidates) {
+          if (row.createdAtMs <= createdAtMs) continue;
+          if (Number(row.id) === Number(srcId)) continue;
+          if (baselineTargets.has(String(row.id))) continue;
+          isStale = true;
+          break;
+        }
+      }
+    }
+
     staleByDist.set(did, isStale);
   }
 
@@ -229,7 +348,7 @@ async function computeExpenseSplitStaleByDistributionIds(pool, distributionIds) 
     .filter((n) => Number.isFinite(n) && n > 0);
   if (!ids.length) return new Map();
   const [distRows] = await pool.query(
-    `SELECT id, source_scenario_id, basis, basis_year_key, scope_json
+    `SELECT id, source_scenario_id, country_id, academic_year, basis, basis_year_key, scope_json, created_at
      FROM expense_distribution_sets
      WHERE id IN (:ids)`,
     { ids }
@@ -247,7 +366,7 @@ async function computeExpenseSplitStaleFlags(pool, scenarioRows) {
 
   // Load the latest distribution set for each *source* scenario (the one that was "Gider Paylaştır" applied).
   const [distRows] = await pool.query(
-    `SELECT s.id, s.source_scenario_id, s.academic_year, s.basis, s.basis_year_key, s.scope_json, s.created_at
+    `SELECT s.id, s.source_scenario_id, s.country_id, s.academic_year, s.basis, s.basis_year_key, s.scope_json, s.created_at
      FROM expense_distribution_sets s
      INNER JOIN (
        SELECT source_scenario_id, MAX(id) AS max_id
