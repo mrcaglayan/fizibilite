@@ -23,13 +23,13 @@ const BASE_RESOURCES = [
   // Page‑level resources
   { resource: "page.temel_bilgiler", label: "Temel Bilgiler", group: "Temel Bilgiler" },
   { resource: "page.kapasite", label: "Kapasite", group: "Kapasite" },
-  { resource: "page.grades_plan", label: "Sınıf/Sube Planı", group: "Sınıf/Sube Planı" },
+  { resource: "page.grades_plan", label: "Sınıf/Sube Planı", group: "Norm" },
   { resource: "page.norm", label: "Norm", group: "Norm" },
   { resource: "page.ik", label: "IK / HR", group: "IK / HR" },
   { resource: "page.gelirler", label: "Gelirler", group: "Gelirler" },
   { resource: "page.giderler", label: "Giderler", group: "Giderler" },
   // Renamed from "indirimler" to "discounts" to normalize the permission namespace.
-  { resource: "page.discounts", label: "İndirimler", group: "İndirimler" },
+  { resource: "page.discounts", label: "İndirimler", group: "Giderler" },
 
   // New top‑level pages added for dashboard and reports.  The group values control
   // how permissions are grouped in the UI.  Each page entry will be expanded
@@ -50,7 +50,7 @@ const BASE_RESOURCES = [
   { resource: "section.kapasite.caps", label: "Kapasite", group: "Kapasite" },
 
   // Section‑level resources for Grades Plan
-  { resource: "section.grades_plan.plan", label: "Planlanan Sınıf/Sube", group: "Sınıf/Sube Planı" },
+  { resource: "section.grades_plan.plan", label: "Planlanan Sınıf/Sube", group: "Norm" },
 
   // Section‑level resources for Norm
   { resource: "section.norm.ders_dagilimi", label: "Ders Dağılımı", group: "Norm" },
@@ -67,7 +67,7 @@ const BASE_RESOURCES = [
   // Section‑level resources for İndirimler/Discounts.  The section key now lives
   // under the discounts page namespace.  Clients should use
   // `section.discounts.discounts` when checking permissions on discount data.
-  { resource: "section.discounts.discounts", label: "İndirimler", group: "İndirimler" },
+  { resource: "section.discounts.discounts", label: "İndirimler", group: "Giderler" },
 
   // Scenario action permissions
   { resource: "scenario.create", label: "Yeni Senaryo", group: "Senaryo Islemleri" },

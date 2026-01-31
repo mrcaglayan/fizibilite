@@ -137,6 +137,19 @@ const getStatusMeta = (scenarioOrStatus) => {
   }
 };
 
+const getBatchStatusMeta = (status) => {
+  switch (String(status || "")) {
+    case "revision_requested":
+      return { label: "Revize istendi", className: "is-bad" };
+    case "sent_for_approval":
+      return { label: "Merkeze iletildi", className: "is-warn" };
+    case "approved":
+      return { label: "OnaylandÄ±", className: "is-ok" };
+    default:
+      return { label: "-", className: "is-muted" };
+  }
+};
+
 const getSchoolStatusMeta = (status) => {
   if (status === "closed") return { label: "Closed", className: "is-muted" };
   return { label: "Active", className: "is-ok" };
@@ -243,6 +256,24 @@ export default function AdminPage({ forcedTab = null } = {}) {
   const [expandedProgressSections, setExpandedProgressSections] = useState(new Set());
 
   const [queueRows, setQueueRows] = useState([]);
+  const [approvalsView, setApprovalsView] = useState("scenarios");
+  const [batchQueueRows, setBatchQueueRows] = useState([]);
+  const [batchQueueLoading, setBatchQueueLoading] = useState(false);
+  const [batchReviewModal, setBatchReviewModal] = useState(null);
+  const [batchReviewNote, setBatchReviewNote] = useState("");
+  const [batchReviewIncludedYears, setBatchReviewIncludedYears] = useState({
+    y1: true,
+    y2: true,
+    y3: true,
+  });
+  const [batchReviewRevisionSelection, setBatchReviewRevisionSelection] = useState(() => {
+    const initial = {};
+    REQUIRED_WORK_IDS.forEach((id) => (initial[id] = false));
+    return initial;
+  });
+  const [batchReviewSaving, setBatchReviewSaving] = useState(false);
+  const [batchDetail, setBatchDetail] = useState(null);
+  const [batchDetailLoading, setBatchDetailLoading] = useState(false);
 
   // Permissions catalog & user permissions state (for admin permission editor)
   const [permissionsCatalog, setPermissionsCatalog] = useState(null);
@@ -322,6 +353,18 @@ export default function AdminPage({ forcedTab = null } = {}) {
     setReviewRevisionSelection(next);
   }, []);
   const [reviewSaving, setReviewSaving] = useState(false);
+
+  const selectAllBatchRevisionWork = useCallback(() => {
+    const next = {};
+    REQUIRED_WORK_IDS.forEach((id) => (next[id] = true));
+    setBatchReviewRevisionSelection(next);
+  }, []);
+
+  const clearBatchRevisionWork = useCallback(() => {
+    const next = {};
+    REQUIRED_WORK_IDS.forEach((id) => (next[id] = false));
+    setBatchReviewRevisionSelection(next);
+  }, []);
 
   const [rollupYear, setRollupYear] = useState("");
   const [rollupData, setRollupData] = useState(null);
@@ -718,6 +761,25 @@ export default function AdminPage({ forcedTab = null } = {}) {
     }
   }, []);
 
+  const loadBatchQueue = useCallback(async (filtersArg) => {
+    const f = filtersArg || queueFiltersRef.current || {};
+    setBatchQueueLoading(true);
+    try {
+      const params = {
+        status: f.status,
+        academicYear: f.academicYear,
+        region: f.region,
+        countryId: f.countryId,
+      };
+      const rows = await api.adminGetApprovalBatchQueue(params);
+      setBatchQueueRows(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      toast.error(e.message || "Failed to load approval batches");
+    } finally {
+      setBatchQueueLoading(false);
+    }
+  }, []);
+
   const loadRollup = useCallback(async (academicYearArg) => {
     const academicYear = (academicYearArg ?? rollupYear).trim();
     if (!academicYear) {
@@ -741,9 +803,13 @@ export default function AdminPage({ forcedTab = null } = {}) {
 
   useEffect(() => {
     if (activeTab === "approvals" && auth.user?.role === "admin") {
-      loadQueue(); // uses latest filters via ref
+      if (approvalsView === "batches") {
+        loadBatchQueue();
+      } else {
+        loadQueue();
+      }
     }
-  }, [activeTab, auth.user?.role, loadQueue]);
+  }, [activeTab, auth.user?.role, approvalsView, loadBatchQueue, loadQueue]);
 
   useEffect(() => {
     if (activeTab !== "countries") return;
@@ -1529,6 +1595,83 @@ export default function AdminPage({ forcedTab = null } = {}) {
     }
   };
 
+  const openBatchReviewModal = (row, action) => {
+    setBatchReviewModal({ row, action });
+    setBatchReviewNote("");
+    setBatchReviewIncludedYears({ y1: true, y2: true, y3: true });
+    if (action === "revise") {
+      const initial = {};
+      REQUIRED_WORK_IDS.forEach((id) => (initial[id] = false));
+      setBatchReviewRevisionSelection(initial);
+    }
+  };
+
+  const closeBatchReviewModal = () => {
+    setBatchReviewModal(null);
+    setBatchReviewNote("");
+    setBatchReviewIncludedYears({ y1: true, y2: true, y3: true });
+    const reset = {};
+    REQUIRED_WORK_IDS.forEach((id) => (reset[id] = false));
+    setBatchReviewRevisionSelection(reset);
+    setBatchDetail(null);
+  };
+
+  useEffect(() => {
+    const batchId = batchReviewModal?.row?.batch_id;
+    if (!batchId) return;
+    setBatchDetailLoading(true);
+    api.adminGetApprovalBatch(batchId)
+      .then((data) => {
+        setBatchDetail(data || null);
+      })
+      .catch((e) => {
+        toast.error(e.message || "Failed to load batch details");
+        setBatchDetail(null);
+      })
+      .finally(() => {
+        setBatchDetailLoading(false);
+      });
+  }, [batchReviewModal?.row?.batch_id]);
+
+  const submitBatchReview = async () => {
+    const batchId = batchReviewModal?.row?.batch_id;
+    if (!batchId) return;
+    const action = batchReviewModal.action;
+    const note = batchReviewNote.trim();
+    if (action === "revise" && !note) {
+      toast.error("Note is required for revision requests");
+      return;
+    }
+    const payload = { action, note: note || null };
+    if (action === "approve") {
+      const includedYears = YEAR_KEYS.filter((key) => batchReviewIncludedYears[key]);
+      if (!includedYears.length) {
+        toast.error("Select at least one year");
+        return;
+      }
+      payload.includedYears = includedYears;
+    } else {
+      const revisionWorkIds = REQUIRED_WORK_IDS.filter((id) => batchReviewRevisionSelection[id]);
+      if (!revisionWorkIds.length) {
+        toast.error("Select at least one module");
+        return;
+      }
+      payload.revisionWorkIds = revisionWorkIds;
+    }
+
+    setBatchReviewSaving(true);
+    try {
+      await api.adminReviewApprovalBatch(batchId, payload);
+      toast.success(action === "approve" ? "Batch approved" : "Revision requested");
+      closeBatchReviewModal();
+      loadBatchQueue(queueFiltersRef.current);
+    } catch (e) {
+      toast.error(e.message || "Failed to submit batch review");
+    } finally {
+      setBatchReviewSaving(false);
+    }
+  };
+
   const toggleRegion = (regionKey) => {
     setExpandedRegions((prev) => {
       const next = new Set(prev);
@@ -1605,7 +1748,11 @@ export default function AdminPage({ forcedTab = null } = {}) {
 
   const handleRefresh = () => {
     if (activeTab === "approvals") {
-      loadQueue(queueFilters);
+      if (approvalsView === "batches") {
+        loadBatchQueue(queueFilters);
+      } else {
+        loadQueue(queueFilters);
+      }
       return;
     }
     if (activeTab === "progress") {
@@ -1650,7 +1797,8 @@ export default function AdminPage({ forcedTab = null } = {}) {
 
   const rollupExportDisabled = rollupLoading || !rollupData;
   const rollupXlsxReady = false;
-  const refreshDisabled = loading || queueLoading || rollupLoading || progressLoading;
+  const activeApprovalsLoading = approvalsView === "batches" ? batchQueueLoading : queueLoading;
+  const refreshDisabled = loading || activeApprovalsLoading || rollupLoading || progressLoading;
   const renderRefreshButton = () => (
     <button className="btn" onClick={handleRefresh} disabled={refreshDisabled}>
       Refresh
@@ -1925,6 +2073,128 @@ export default function AdminPage({ forcedTab = null } = {}) {
               </button>
               <button className="btn primary" onClick={submitReview} disabled={reviewSaving}>
                 {reviewSaving ? "Saving..." : reviewModal.action === "approve" ? "Approve" : "Request Revision"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {batchReviewModal ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true">
+          <div className="modal" style={{ maxWidth: 960 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>
+              {batchReviewModal.action === "approve" ? "Approve Batch" : "Request Revision"}
+            </div>
+            <div className="small" style={{ marginBottom: 12 }}>
+              {batchReviewModal.row?.country?.name ? `${batchReviewModal.row.country.name} - ` : ""}
+              {batchReviewModal.row?.academic_year || "Batch"}
+            </div>
+
+            {batchDetailLoading ? (
+              <div className="card">Loading batch details...</div>
+            ) : batchDetail?.items?.length ? (
+              <div className="table-scroll" style={{ marginBottom: 12 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Okul</th>
+                      <th>Senaryo</th>
+                      <th>Durum</th>
+                      <th>Progress</th>
+                      <th>Kaynak</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {batchDetail.items.map((item) => (
+                      <tr key={`${item.school_id}-${item.scenario_id}`}>
+                        <td>{item.school_name}</td>
+                        <td>{item.scenario_name}</td>
+                        <td>{item.status}</td>
+                        <td>{Number.isFinite(Number(item.progress_pct)) ? `${Math.round(Number(item.progress_pct))}%` : "-"}</td>
+                        <td>{item.is_source ? "Evet" : "Hayir"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="card">No items found.</div>
+            )}
+
+            {batchReviewModal.action === "approve" ? (
+              <div style={{ marginBottom: 10 }}>
+                <div className="small" style={{ marginBottom: 6 }}>
+                  Included years
+                </div>
+                <div className="row">
+                  {YEAR_KEYS.map((key) => (
+                    <label key={key} className="small" style={{ display: "inline-flex", gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={batchReviewIncludedYears[key]}
+                        onChange={(e) => setBatchReviewIncludedYears((prev) => ({ ...prev, [key]: e.target.checked }))}
+                      />
+                      {key.toUpperCase()}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {batchReviewModal.action === "revise" ? (
+              <div style={{ marginBottom: 10 }}>
+                <div className="small" style={{ marginBottom: 6 }}>
+                  Sadece seÃ§ilen modÃ¼ller revizeye aÃ§Ä±lacak (editable).
+                </div>
+                <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                  {REQUIRED_WORK_IDS.map((id) => (
+                    <label
+                      key={id}
+                      className="small"
+                      style={{ display: "inline-flex", gap: 6, alignItems: "center" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(batchReviewRevisionSelection[id])}
+                        onChange={(e) =>
+                          setBatchReviewRevisionSelection((prev) => ({ ...prev, [id]: e.target.checked }))
+                        }
+                      />
+                      {WORK_ID_LABELS[id] || id}
+                    </label>
+                  ))}
+                  <button type="button" className="btn sm" onClick={selectAllBatchRevisionWork}>
+                    TÃ¼mÃ¼nÃ¼ seÃ§
+                  </button>
+                  <button type="button" className="btn sm" onClick={clearBatchRevisionWork}>
+                    Temizle
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ marginBottom: 12 }}>
+              <div className="small" style={{ marginBottom: 6 }}>
+                Note {batchReviewModal.action === "revise" ? "(required)" : "(optional)"}
+              </div>
+              <textarea
+                className="input"
+                style={{ width: "100%", minHeight: 90 }}
+                value={batchReviewNote}
+                onChange={(e) => setBatchReviewNote(e.target.value)}
+              />
+            </div>
+
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button className="btn" onClick={closeBatchReviewModal}>
+                Cancel
+              </button>
+              <button className="btn primary" onClick={submitBatchReview} disabled={batchReviewSaving}>
+                {batchReviewSaving
+                  ? "Saving..."
+                  : batchReviewModal.action === "approve"
+                    ? "Approve"
+                    : "Request Revision"}
               </button>
             </div>
           </div>
@@ -2806,271 +3076,353 @@ export default function AdminPage({ forcedTab = null } = {}) {
 
       {activeTab === "approvals" && (
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
             <div>
               <div style={{ fontWeight: 700 }}>Çalışma Listeleri</div>
-              <div className="small">Review submitted scenarios and approve for rollups.</div>
+              <div className="small">
+                {approvalsView === "batches"
+                  ? "Review country approval batches."
+                  : "Review submitted scenarios and approve for rollups."}
+              </div>
             </div>
-            <div className="row admin-filter-row">
-              <select
-                className="input sm"
-                value={queueFilters.status}
-                onChange={(e) => setQueueFilters((prev) => ({ ...prev, status: e.target.value }))}
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                className={`btn ${approvalsView === "scenarios" ? "primary" : ""}`}
+                onClick={() => setApprovalsView("scenarios")}
               >
-                <option value="">All</option>
-                <option value="sent_for_approval">Sent for approval</option>
-                <option value="approved">Approved</option>
-                <option value="revision_requested">Revision requested</option>
-                <option value="draft">Draft</option>
-              </select>
-              <input
-                className="input sm"
-                placeholder="Academic year"
-                value={queueFilters.academicYear}
-                onChange={(e) => setQueueFilters((prev) => ({ ...prev, academicYear: e.target.value }))}
-              />
-              <select
-                className="input sm"
-                value={queueFilters.region}
-                onChange={(e) => setQueueFilters((prev) => ({ ...prev, region: e.target.value, countryId: "" }))}
+                Senaryolar
+              </button>
+              <button
+                className={`btn ${approvalsView === "batches" ? "primary" : ""}`}
+                onClick={() => setApprovalsView("batches")}
               >
-                <option value="">All regions</option>
-                {regionOptions.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="input sm"
-                value={queueFilters.countryId}
-                onChange={(e) => setQueueFilters((prev) => ({ ...prev, countryId: e.target.value }))}
-              >
-                <option value="">All countries</option>
-                {queueCountryOptions.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-
-              {/* ✅ don't pass click event */}
-              <button className="btn" onClick={() => loadQueue(queueFilters)} disabled={queueLoading}>
-                Apply
+                Ulke Paketleri
               </button>
             </div>
           </div>
 
-          <table className="table admin-approvals-table" style={{ marginTop: 12 }}>
-            <thead>
-              <tr>
-                <th aria-sort={ariaSort("country_name")}>
-                  <button
-                    type="button"
-                    onClick={() => toggleQueueSort("country_name")}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      cursor: "pointer",
-                      font: "inherit",
-                    }}
-                    title="Sort"
-                  >
-                    Ülke <span aria-hidden>{sortIndicator("country_name")}</span>
-                  </button>
-                </th>
-                <th aria-sort={ariaSort("school_name")}>
-                  <button
-                    type="button"
-                    onClick={() => toggleQueueSort("school_name")}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      cursor: "pointer",
-                      font: "inherit",
-                    }}
-                    title="Sort"
-                  >
-                    School <span aria-hidden>{sortIndicator("school_name")}</span>
-                  </button>
-                </th>
-                <th aria-sort={ariaSort("scenario_name")}>
-                  <button
-                    type="button"
-                    onClick={() => toggleQueueSort("scenario_name")}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      cursor: "pointer",
-                      font: "inherit",
-                    }}
-                    title="Sort"
-                  >
-                    Scenario <span aria-hidden>{sortIndicator("scenario_name")}</span>
-                  </button>
-                </th>
-                <th aria-sort={ariaSort("academic_year")}>
-                  <button
-                    type="button"
-                    onClick={() => toggleQueueSort("academic_year")}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      cursor: "pointer",
-                      font: "inherit",
-                    }}
-                    title="Sort"
-                  >
-                    Academic Year <span aria-hidden>{sortIndicator("academic_year")}</span>
-                  </button>
-                </th>
-                <th aria-sort={ariaSort("submitted_at")}>
-                  <button
-                    type="button"
-                    onClick={() => toggleQueueSort("submitted_at")}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      cursor: "pointer",
-                      font: "inherit",
-                    }}
-                    title="Sort"
-                  >
-                    Submitted <span aria-hidden>{sortIndicator("submitted_at")}</span>
-                  </button>
-                </th>
-                <th aria-sort={ariaSort("status")}>
-                  <button
-                    type="button"
-                    onClick={() => toggleQueueSort("status")}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      cursor: "pointer",
-                      font: "inherit",
-                    }}
-                    title="Sort"
-                  >
-                    Status <span aria-hidden>{sortIndicator("status")}</span>
-                  </button>
-                </th>
-                <th>Progress</th>
-                <th>Y1 KPIs</th>
-                <th>Y2 KPIs</th>
-                <th>Y3 KPIs</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queueLoading ? (
-                <tr>
-                  <td colSpan="11" className="small">
-                    Loading...
-                  </td>
-                </tr>
-              ) : sortedQueueRows.length === 0 ? (
-                <tr>
-                  <td colSpan="11" className="small">
-                    No scenarios found.
-                  </td>
-                </tr>
-              ) : (
-                sortedQueueRows.map((row) => {
-                  const statusMeta = getStatusMeta(row.scenario);
-                  const canApprove =
-                    row.scenario?.status === 'sent_for_approval' || row.scenario?.status === 'submitted';
-                  const canRevise = ['sent_for_approval', 'approved', 'submitted'].includes(row.scenario?.status);
-                  const missing = row.missingKpis?.y1 || row.missingKpis?.y2 || row.missingKpis?.y3;
-                  const progressPct = Number.isFinite(Number(row.scenario?.progress_pct))
-                    ? Math.round(Number(row.scenario.progress_pct))
-                    : null;
-                  const progressMissingCount = Number(row.scenario?.progress_missing_count || 0);
-                  const progressMissingPreview = row.scenario?.progress_missing_preview;
-                  const progressTooltipLines =
-                    progressPct == null
-                      ? []
-                      : progressMissingCount > 0
-                        ? ["Eksik:", progressMissingPreview || "Eksik alanlar"]
-                        : ["Tum tablar tamamlandi"];
+          <div className="row admin-filter-row" style={{ marginTop: 10 }}>
+            <select
+              className="input sm"
+              value={queueFilters.status}
+              onChange={(e) => setQueueFilters((prev) => ({ ...prev, status: e.target.value }))}
+            >
+              <option value="">All</option>
+              <option value="sent_for_approval">Sent for approval</option>
+              <option value="approved">Approved</option>
+              <option value="revision_requested">Revision requested</option>
+              <option value="draft">Draft</option>
+            </select>
+            <input
+              className="input sm"
+              placeholder="Academic year"
+              value={queueFilters.academicYear}
+              onChange={(e) => setQueueFilters((prev) => ({ ...prev, academicYear: e.target.value }))}
+            />
+            <select
+              className="input sm"
+              value={queueFilters.region}
+              onChange={(e) => setQueueFilters((prev) => ({ ...prev, region: e.target.value, countryId: "" }))}
+            >
+              <option value="">All regions</option>
+              {regionOptions.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input sm"
+              value={queueFilters.countryId}
+              onChange={(e) => setQueueFilters((prev) => ({ ...prev, countryId: e.target.value }))}
+            >
+              <option value="">All countries</option>
+              {queueCountryOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
 
-                  return (
-                    <tr key={row.scenario?.id || `${row.school?.id}-${row.scenario?.name}`}>
-                      <td>
-                        <div style={{ fontWeight: 700 }}>{row.country?.name || "-"}</div>
-                        {row.country?.region ? <div className="small">{row.country.region}</div> : null}
-                      </td>
-                      <td>
-                        <div style={{ fontWeight: 700 }}>{row.school?.name || "-"}</div>
-                      </td>
-                      <td>
-                        <div>{row.scenario?.name || "-"}</div>
-                        {missing ? <span className="status-badge is-bad">Missing KPIs</span> : null}
-                      </td>
-                      <td className="small">{row.scenario?.academic_year || "-"}</td>
-                      <td className="small">{formatDateTime(row.scenario?.submitted_at)}</td>
-                      <td>
-                        <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
-                      </td>
-                      <td>
-                        {progressPct == null ? (
-                          <span className="small">-</span>
-                        ) : (
-                          <Tooltip lines={progressTooltipLines}>
-                            <span className="badge">{progressPct}%</span>
-                          </Tooltip>
-                        )}
-                      </td>
-                      <td>{renderQueueKpis(row.kpis?.y1)}</td>
-                      <td>{renderQueueKpis(row.kpis?.y2)}</td>
-                      <td>{renderQueueKpis(row.kpis?.y3)}</td>
-                      <td>
-                        <div className="row">
-                          <button
-                            className="btn primary"
-                            onClick={() => openReviewModal(row, "approve")}
-                            disabled={!canApprove || reviewSaving}
-                          >
-                            Onayla
-                          </button>
-                          <button
-                            className="btn"
-                            onClick={() => openReviewModal(row, "revise")}
-                            disabled={!canRevise || reviewSaving}
-                          >
-                            Revizyon İste
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+            <button
+              className="btn"
+              onClick={() => (approvalsView === "batches" ? loadBatchQueue(queueFilters) : loadQueue(queueFilters))}
+              disabled={approvalsView === "batches" ? batchQueueLoading : queueLoading}
+            >
+              Apply
+            </button>
+          </div>
+
+          {approvalsView === "scenarios" ? (
+            <table className="table admin-approvals-table" style={{ marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th aria-sort={ariaSort("country_name")}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQueueSort("country_name")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        font: "inherit",
+                      }}
+                      title="Sort"
+                    >
+                      Ülke <span aria-hidden>{sortIndicator("country_name")}</span>
+                    </button>
+                  </th>
+                  <th aria-sort={ariaSort("school_name")}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQueueSort("school_name")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        font: "inherit",
+                      }}
+                      title="Sort"
+                    >
+                      School <span aria-hidden>{sortIndicator("school_name")}</span>
+                    </button>
+                  </th>
+                  <th aria-sort={ariaSort("scenario_name")}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQueueSort("scenario_name")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        font: "inherit",
+                      }}
+                      title="Sort"
+                    >
+                      Scenario <span aria-hidden>{sortIndicator("scenario_name")}</span>
+                    </button>
+                  </th>
+                  <th aria-sort={ariaSort("academic_year")}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQueueSort("academic_year")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        font: "inherit",
+                      }}
+                      title="Sort"
+                    >
+                      Academic Year <span aria-hidden>{sortIndicator("academic_year")}</span>
+                    </button>
+                  </th>
+                  <th aria-sort={ariaSort("submitted_at")}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQueueSort("submitted_at")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        font: "inherit",
+                      }}
+                      title="Sort"
+                    >
+                      Submitted <span aria-hidden>{sortIndicator("submitted_at")}</span>
+                    </button>
+                  </th>
+                  <th aria-sort={ariaSort("status")}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQueueSort("status")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        font: "inherit",
+                      }}
+                      title="Sort"
+                    >
+                      Status <span aria-hidden>{sortIndicator("status")}</span>
+                    </button>
+                  </th>
+                  <th>Progress</th>
+                  <th>Y1 KPIs</th>
+                  <th>Y2 KPIs</th>
+                  <th>Y3 KPIs</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {queueLoading ? (
+                  <tr>
+                    <td colSpan="11" className="small">
+                      Loading...
+                    </td>
+                  </tr>
+                ) : sortedQueueRows.length === 0 ? (
+                  <tr>
+                    <td colSpan="11" className="small">
+                      No scenarios found.
+                    </td>
+                  </tr>
+                ) : (
+                  sortedQueueRows.map((row) => {
+                    const statusMeta = getStatusMeta(row.scenario);
+                    const canApprove =
+                      row.scenario?.status === 'sent_for_approval' || row.scenario?.status === 'submitted';
+                    const canRevise = ['sent_for_approval', 'approved', 'submitted'].includes(row.scenario?.status);
+                    const missing = row.missingKpis?.y1 || row.missingKpis?.y2 || row.missingKpis?.y3;
+                    const progressPct = Number.isFinite(Number(row.scenario?.progress_pct))
+                      ? Math.round(Number(row.scenario.progress_pct))
+                      : null;
+                    const progressMissingCount = Number(row.scenario?.progress_missing_count || 0);
+                    const progressMissingPreview = row.scenario?.progress_missing_preview;
+                    const progressTooltipLines =
+                      progressPct == null
+                        ? []
+                        : progressMissingCount > 0
+                          ? ["Eksik:", progressMissingPreview || "Eksik alanlar"]
+                          : ["Tum tablar tamamlandi"];
+
+                    return (
+                      <tr key={row.scenario?.id || `${row.school?.id}-${row.scenario?.name}`}>
+                        <td>
+                          <div style={{ fontWeight: 700 }}>{row.country?.name || "-"}</div>
+                          {row.country?.region ? <div className="small">{row.country.region}</div> : null}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 700 }}>{row.school?.name || "-"}</div>
+                        </td>
+                        <td>
+                          <div>{row.scenario?.name || "-"}</div>
+                          {missing ? <span className="status-badge is-bad">Missing KPIs</span> : null}
+                        </td>
+                        <td className="small">{row.scenario?.academic_year || "-"}</td>
+                        <td className="small">{formatDateTime(row.scenario?.submitted_at)}</td>
+                        <td>
+                          <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
+                        </td>
+                        <td>
+                          {progressPct == null ? (
+                            <span className="small">-</span>
+                          ) : (
+                            <Tooltip lines={progressTooltipLines}>
+                              <span className="badge">{progressPct}%</span>
+                            </Tooltip>
+                          )}
+                        </td>
+                        <td>{renderQueueKpis(row.kpis?.y1)}</td>
+                        <td>{renderQueueKpis(row.kpis?.y2)}</td>
+                        <td>{renderQueueKpis(row.kpis?.y3)}</td>
+                        <td>
+                          <div className="row">
+                            <button
+                              className="btn primary"
+                              onClick={() => openReviewModal(row, "approve")}
+                              disabled={!canApprove || reviewSaving}
+                            >
+                              Onayla
+                            </button>
+                            <button
+                              className="btn"
+                              onClick={() => openReviewModal(row, "revise")}
+                              disabled={!canRevise || reviewSaving}
+                            >
+                              Revizyon İste
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          ) : (
+            <table className="table admin-approvals-table" style={{ marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th>Ülke</th>
+                  <th>Akademik Yıl</th>
+                  <th>Durum</th>
+                  <th>Oluşturma</th>
+                  <th>İnceleme</th>
+                  <th>Senaryo</th>
+                  <th>Okul</th>
+                  <th>İşlem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {batchQueueLoading ? (
+                  <tr>
+                    <td colSpan="8" className="small">Loading...</td>
+                  </tr>
+                ) : batchQueueRows.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" className="small">No batches found.</td>
+                  </tr>
+                ) : (
+                  batchQueueRows.map((row) => {
+                    const statusMeta = getBatchStatusMeta(row.status);
+                    const canApprove = row.status === "sent_for_approval";
+                    const canRevise = ["sent_for_approval", "approved"].includes(row.status);
+                    return (
+                      <tr key={row.batch_id}>
+                        <td>
+                          <div style={{ fontWeight: 700 }}>{row.country?.name || "-"}</div>
+                          {row.country?.region ? <div className="small">{row.country.region}</div> : null}
+                        </td>
+                        <td className="small">{row.academic_year || "-"}</td>
+                        <td>
+                          <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
+                        </td>
+                        <td className="small">{formatDateTime(row.created_at)}</td>
+                        <td className="small">{formatDateTime(row.reviewed_at)}</td>
+                        <td className="small">{row.scenario_count}</td>
+                        <td className="small">{row.school_count}</td>
+                        <td>
+                          <div className="row">
+                            <button className="btn" onClick={() => openBatchReviewModal(row, "approve")} disabled={!canApprove || batchReviewSaving}>
+                              Onayla
+                            </button>
+                            <button className="btn" onClick={() => openBatchReviewModal(row, "revise")} disabled={!canRevise || batchReviewSaving}>
+                              Revizyon İste
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

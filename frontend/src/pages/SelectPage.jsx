@@ -9,7 +9,6 @@ import {
   FaCheckCircle,
   FaCopy,
   FaEdit,
-  FaPaperPlane,
   FaPlus,
   FaSort,
   FaSortDown,
@@ -20,7 +19,7 @@ import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import ProgressBar from "../components/ui/ProgressBar";
 import ExpenseSplitModal from "../components/ExpenseSplitModal";
-import BulkSendModal from "../components/BulkSendModal";
+import CountrySendModal from "../components/CountrySendModal";
 import {
   getDefaultKademeConfig,
   getKademeDefinitions,
@@ -1373,14 +1372,12 @@ export default function SelectPage() {
   );
   const role = String(auth.user?.role || "");
   const canCreateScenario = can(auth.user, "scenario.create", "write", permissionScope);
-  const canEditScenarioPlan = can(auth.user, "scenario.plan_edit", "write", permissionScope);
-  const canCopyScenario = can(auth.user, "scenario.copy", "write", permissionScope);
-  const canExpenseSplit = can(auth.user, "scenario.expense_split", "write", permissionScope);
-  const canSubmitScenario = can(auth.user, "scenario.submit", "write", permissionScope);
-  const canForwardScenario =
-    role === "manager" || role === "accountant" || can(auth.user, "scenario.forward", "write", permissionScope);
-  const canBulkSend = role === "manager" || role === "accountant";
-  const canDeleteScenario = can(auth.user, "scenario.delete", "write", permissionScope);
+    const canEditScenarioPlan = can(auth.user, "scenario.plan_edit", "write", permissionScope);
+    const canCopyScenario = can(auth.user, "scenario.copy", "write", permissionScope);
+    const canExpenseSplit = can(auth.user, "scenario.expense_split", "write", permissionScope);
+    const canSubmitScenario = can(auth.user, "scenario.submit", "write", permissionScope);
+    const canBulkSend = role === "manager" || role === "accountant";
+    const canDeleteScenario = can(auth.user, "scenario.delete", "write", permissionScope);
 
   // Lock editing when the scenario has been forwarded to admins (sent_for_approval)
   // or when it has been admin‑approved.  Manager‑approved scenarios (status
@@ -1392,10 +1389,7 @@ export default function SelectPage() {
   const isSubmitStage =
     Boolean(selectedRowScenario) &&
     (selectedRowScenario.status === "draft" || selectedRowScenario.status === "revision_requested");
-  const isForwardStage =
-    Boolean(selectedRowScenario) && selectedRowScenario.status === "approved" && !selectedRowScenario.sent_at;
   const canSubmitToolbar = isSubmitStage && canSubmitScenario;
-  const canForwardToolbar = isForwardStage && canForwardScenario;
   const canCopyToolbar = Boolean(selectedRowScenario) && inputs && canCopyScenario;
   const toolbarIsCopying =
     selectedRowScenario && String(copyingScenarioId) === String(selectedRowScenario.id);
@@ -1403,6 +1397,28 @@ export default function SelectPage() {
     selectedRowScenario && String(submittingScenarioId) === String(selectedRowScenario.id);
   const toolbarIsDeleting =
     selectedRowScenario && String(deletingScenarioId) === String(selectedRowScenario.id);
+
+  const selectedScenarioProgress =
+    selectedRowScenario && scenarioProgressMap
+      ? scenarioProgressMap[selectedRowScenario.id]
+      : null;
+  const selectedScenarioProgressPct =
+    selectedScenarioProgress && !selectedScenarioProgress.error
+      ? Number(selectedScenarioProgress.pct ?? 0)
+      : null;
+  const selectedScenarioProgressComplete =
+    Number.isFinite(selectedScenarioProgressPct) && selectedScenarioProgressPct >= 100;
+  const submitToolbarProgressReady = Boolean(selectedRowScenario) && selectedScenarioProgressComplete;
+  let submitToolbarTitle = "Onaya Gonder";
+  if (canSubmitToolbar && !submitToolbarProgressReady) {
+    if (scenarioProgressLoading) {
+      submitToolbarTitle = "Ilerleme hesaplanıyor.";
+    } else if (!selectedScenarioProgress || selectedScenarioProgress.error) {
+      submitToolbarTitle = "Ilerleme bilgisi alinmadi.";
+    } else {
+      submitToolbarTitle = "Ilerleme %100 degil.";
+    }
+  }
 
   const handleScenarioCurrencyChange = (next) => {
     setNewScenarioInputCurrency(next);
@@ -2159,10 +2175,39 @@ export default function SelectPage() {
     return ok;
   }
 
+  async function ensureScenarioProgressComplete(scenarioId, actionLabel = "Gonderme") {
+    let pct = null;
+    const cached = scenarioProgressMap?.[scenarioId];
+    if (cached && !cached.error) {
+      const n = Number(cached.pct ?? 0);
+      if (Number.isFinite(n)) pct = n;
+    }
+
+    if (!Number.isFinite(pct)) {
+      try {
+        if (selectedSchoolId) {
+          const data = await api.getScenarioProgress(selectedSchoolId, scenarioId);
+          const progress = data?.progress;
+          const n = Number(progress?.pct ?? 0);
+          if (Number.isFinite(n)) pct = n;
+        }
+      } catch (_) {
+        // ignore; handle below
+      }
+    }
+
+    if (!Number.isFinite(pct) || pct < 100) {
+      const msg = `${actionLabel} yapilamaz: Ilerleme %100 degil.`;
+      toast.warn(msg);
+      return false;
+    }
+    return true;
+  }
+
   async function submitScenarioForApproval(scenarioId) {
     if (!canSubmitScenario) return;
-    if (!selectedSchoolId || !scenarioId || scenarioId !== selectedScenarioIdLocal) return;
-    const status = String(selectedScenario?.status || "draft");
+    if (!selectedSchoolId || !scenarioId || String(scenarioId) !== String(selectedScenarioIdLocal)) return;
+    const status = String(selectedRowScenario?.status || selectedScenario?.status || "draft");
     if (!["draft", "revision_requested"].includes(status)) {
       setErr("Senaryo onayda veya onaylandi, gonderilemez.");
       return;
@@ -2170,48 +2215,45 @@ export default function SelectPage() {
     if (!ensurePrevRealFxForLocal("Onaya gonderme")) return;
     if (!ensurePlanningStudentsForY2Y3("Onaya gonderme")) return;
     if (submittingScenarioId) return;
+    const progressOk = await ensureScenarioProgressComplete(scenarioId, "Onaya gonderme");
+    if (!progressOk) return;
 
     setErr("");
     setSubmittingScenarioId(scenarioId);
     try {
       const calcOk = await calculate({ keepTab: true });
       if (!calcOk) return;
-      const data = await api.submitScenario(selectedSchoolId, scenarioId);
-      toast.success("Senaryo onaya gonderildi.");
-      if (data?.scenario) {
-        setSelectedScenario((prev) => ({ ...(prev || {}), ...data.scenario }));
-      }
-      await refreshScenarios();
-    } catch (e) {
-      setErr(e.message || "Submit failed");
-    } finally {
-      setSubmittingScenarioId(null);
-    }
-  }
+      const workData = await api.listWorkItems(selectedSchoolId, scenarioId);
+      const requiredWorkIds = Array.isArray(workData?.requiredWorkIds) ? workData.requiredWorkIds : [];
+      const workItems = Array.isArray(workData?.workItems) ? workData.workItems : [];
+      const workItemMap = new Map(workItems.map((item) => [String(item.work_id), item]));
+      const toSubmit = requiredWorkIds.filter((wid) => {
+        const item = workItemMap.get(String(wid));
+        const state = String(item?.state || "not_started");
+        return ["not_started", "in_progress", "needs_revision"].includes(state);
+      });
 
-  async function sendScenarioForApproval(scenarioId) {
-    if (!canForwardScenario) return;
-    if (!selectedSchoolId || !scenarioId || scenarioId !== selectedScenarioIdLocal) return;
-    const status = String(selectedScenario?.status || "draft");
-    if (status !== "approved" || selectedScenario?.sent_at) {
-      setErr("Senaryo merkeze iletilemez.");
-      return;
-    }
-    if (!ensurePrevRealFxForLocal("Merkeze iletme")) return;
-    if (!ensurePlanningStudentsForY2Y3("Merkeze iletme")) return;
-    if (submittingScenarioId) return;
-
-    setErr("");
-    setSubmittingScenarioId(scenarioId);
-    try {
-      const calcOk = await calculate({ keepTab: true });
-      if (!calcOk) return;
-      const data = await api.sendForApproval(selectedSchoolId, scenarioId);
-      toast.success("Merkeze iletildi");
-      if (data?.scenario) {
-        setSelectedScenario((prev) => ({ ...(prev || {}), ...data.scenario }));
+      if (toSubmit.length === 0) {
+        toast.warn("Gonderilecek modul yok.");
+      } else {
+        const results = await Promise.allSettled(
+          toSubmit.map((wid) => api.submitWorkItem(selectedSchoolId, scenarioId, wid))
+        );
+        const failed = results.filter((r) => r.status === "rejected");
+        if (failed.length) {
+          const firstErr = failed[0]?.reason;
+          toast.error(firstErr?.message || "Moduller gonderilemedi.");
+        } else {
+          toast.success("Moduller onaya gonderildi.");
+        }
       }
-      await refreshScenarios();
+      const rows = await refreshScenarios();
+      if (Array.isArray(rows)) {
+        const match = rows.find((row) => String(row.id) === String(scenarioId));
+        if (match) {
+          setSelectedScenario((prev) => (prev ? { ...prev, ...match } : prev));
+        }
+      }
     } catch (e) {
       setErr(e.message || "Gonderme basarisiz");
     } finally {
@@ -2525,10 +2567,10 @@ export default function SelectPage() {
       ) : null}
 
       {bulkSendOpen ? (
-        <BulkSendModal
+        <CountrySendModal
           open={bulkSendOpen}
           onClose={() => setBulkSendOpen(false)}
-          schoolIds={schools.map((s) => s.id)}
+          countryId={auth.user?.country_id}
         />
       ) : null}
 
@@ -2987,7 +3029,7 @@ export default function SelectPage() {
                 onClick={() => setBulkSendOpen(true)}
                 disabled={!schools.length || loadingSchools}
               >
-                Merkeze Gonder (Toplu)
+                Ulke Onay Paketi Gonder
               </button>
             </div>
           ) : null}
@@ -3066,23 +3108,6 @@ export default function SelectPage() {
                     </span>
                   </button>
                 ) : null}
-                {canForwardScenario && isForwardStage ? (
-                  <button
-                    type="button"
-                    className="btn primary"
-                    onClick={() => {
-                      if (!selectedRowScenario) return;
-                      sendScenarioForApproval(selectedRowScenario.id);
-                    }}
-                    disabled={!canForwardToolbar || calculating || scenarioOpsBusy}
-                    title="Merkeze ilet"
-                  >
-                    <span className="btn-inner">
-                      {toolbarIsSubmitting ? <InlineSpinner /> : <FaPaperPlane style={{ marginRight: 4 }} />}
-                      <span>Merkeze ilet</span>
-                    </span>
-                  </button>
-                ) : null}
                 {canSubmitScenario && isSubmitStage ? (
                   <button
                     type="button"
@@ -3091,8 +3116,13 @@ export default function SelectPage() {
                       if (!selectedRowScenario) return;
                       submitScenarioForApproval(selectedRowScenario.id);
                     }}
-                    disabled={!canSubmitToolbar || calculating || scenarioOpsBusy}
-                    title="Onaya Gonder"
+                    disabled={
+                      !canSubmitToolbar ||
+                      !submitToolbarProgressReady ||
+                      calculating ||
+                      scenarioOpsBusy
+                    }
+                    title={submitToolbarTitle}
                   >
                     <span className="btn-inner">
                       {/* Show a spinner while submitting; otherwise show an approval icon. */}
@@ -3170,32 +3200,32 @@ export default function SelectPage() {
                       </button>
                     </th>
                     <th>İlerleme</th>
-                    <th aria-sort={getSortAria("date")}>
-                      <button
-                        type="button"
-                        className="sort-th"
+                      <th aria-sort={getSortAria("date")}>
+                        <button
+                          type="button"
+                          className="sort-th"
                         onClick={() => toggleScenarioSort("date")}
                         aria-label="Sirala: Tarih"
                       >
                         <span>Tarih</span>
                         {sortIcon("date")}
-                      </button>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loadingScenarios ? (
-                    <tr>
-                      <td colSpan="7" className="small">Yukleniyor...</td>
+                        </button>
+                      </th>
                     </tr>
-                  ) : sortedScenarios.length === 0 ? (
-                    <tr>
-                      <td colSpan="7" className="small">Gosterilecek senaryo yok.</td>
-                    </tr>
-                  ) : (
-                    sortedScenarios.map((s) => {
-                      const statusMeta = getScenarioStatusMeta(s);
-                      const isSelected = String(selectedScenarioIdLocal) === String(s.id);
+                  </thead>
+                  <tbody>
+                    {loadingScenarios ? (
+                      <tr>
+                        <td colSpan="7" className="small">Yukleniyor...</td>
+                      </tr>
+                    ) : sortedScenarios.length === 0 ? (
+                      <tr>
+                        <td colSpan="7" className="small">Gosterilecek senaryo yok.</td>
+                      </tr>
+                    ) : (
+                      sortedScenarios.map((s) => {
+                        const statusMeta = getScenarioStatusMeta(s);
+                        const isSelected = String(selectedScenarioIdLocal) === String(s.id);
                       const isThisRowBusy = String(s.id) === String(busyRowId);
                       const isOtherRowDisabled = scenarioOpsBusy && busyRowId && !isThisRowBusy;
                       const disableThisRowActions = scenarioOpsBusy;
@@ -3268,12 +3298,12 @@ export default function SelectPage() {
                                 {scenarioProgressLoading ? "Hesaplanıyor..." : "-"}
                               </span>
                             )}
-                          </td>
-                          <td className="small">{new Date(s.created_at).toLocaleString()}</td>
-                        </tr>
-                      );
-                    })
-                  )}
+                            </td>
+                            <td className="small">{new Date(s.created_at).toLocaleString()}</td>
+                          </tr>
+                        );
+                      })
+                    )}
                 </tbody>
                 </table>
               </div>

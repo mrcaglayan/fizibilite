@@ -2198,9 +2198,6 @@ router.post(
 
       try {
         const splitInfo = await getScenarioSplitInfo(pool, scenarioId);
-        if (splitInfo.isSourceScenario) {
-          reasons.add("Kaynak senaryo");
-        }
         if (splitInfo.splitStatus === "stale") {
           reasons.add("Gider dagitimi guncel degil");
         }

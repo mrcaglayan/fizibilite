@@ -22,6 +22,13 @@ function normalizeCode(code) {
   return String(code || "").trim().toUpperCase();
 }
 
+function resourceForWorkId(workId) {
+  const wid = String(workId || "").trim();
+  if (!wid) return null;
+  if (wid.includes(".")) return `section.${wid}`;
+  return `page.${wid}`;
+}
+
 const GRADE_KEYS = ["KG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
 
 const ASSIGNMENT_ROLES = ["principal", "hr", "accountant"];
@@ -970,6 +977,375 @@ router.get("/scenarios/queue", async (req, res) => {
 });
 
 /**
+ * GET /admin/approval-batches/queue
+ * Query: status (optional, empty = all), academicYear, region, countryId
+ */
+router.get("/approval-batches/queue", async (req, res) => {
+  try {
+    const status = String(req.query?.status ?? "").trim();
+    const academicYear = parseAcademicYearFilter(req.query?.academicYear);
+    const region = String(req.query?.region || "").trim();
+    const countryId = toNumberOrNull(req.query?.countryId ?? req.query?.country_id);
+
+    const pool = getPool();
+    const params = {};
+    const where = [];
+    if (status) {
+      where.push("b.status = :status");
+      params.status = status;
+    }
+    if (academicYear) {
+      where.push("b.academic_year = :academic_year");
+      params.academic_year = academicYear;
+    }
+    if (region) {
+      where.push("c.region = :region");
+      params.region = region;
+    }
+    if (countryId) {
+      where.push("c.id = :country_id");
+      params.country_id = countryId;
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const [rows] = await pool.query(
+      `SELECT
+        b.id AS batch_id,
+        b.status,
+        b.academic_year,
+        b.created_at,
+        b.reviewed_at,
+        b.review_note,
+        c.id AS country_id,
+        c.name AS country_name,
+        c.region AS country_region,
+        COUNT(i.scenario_id) AS scenario_count,
+        COUNT(DISTINCT i.school_id) AS school_count
+       FROM country_approval_batches b
+       JOIN countries c ON c.id = b.country_id
+       LEFT JOIN country_approval_batch_items i ON i.batch_id = b.id
+       ${whereSql}
+       GROUP BY b.id
+       ORDER BY b.created_at DESC, b.id DESC`,
+      params
+    );
+
+    const data = (Array.isArray(rows) ? rows : []).map((row) => ({
+      batch_id: row.batch_id,
+      status: row.status,
+      academic_year: row.academic_year,
+      created_at: row.created_at,
+      reviewed_at: row.reviewed_at,
+      review_note: row.review_note,
+      country: { id: row.country_id, name: row.country_name, region: row.country_region },
+      scenario_count: Number(row.scenario_count || 0),
+      school_count: Number(row.school_count || 0),
+    }));
+
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /admin/approval-batches/:batchId
+ */
+router.get("/approval-batches/:batchId", async (req, res) => {
+  try {
+    const batchId = Number(req.params.batchId);
+    if (!Number.isFinite(batchId)) return res.status(400).json({ error: "Invalid batch id" });
+
+    const pool = getPool();
+    const [[batchRow]] = await pool.query(
+      `SELECT b.id, b.status, b.academic_year, b.created_at, b.reviewed_at, b.review_note,
+              c.id AS country_id, c.name AS country_name, c.region AS country_region
+       FROM country_approval_batches b
+       JOIN countries c ON c.id = b.country_id
+       WHERE b.id=:id`,
+      { id: batchId }
+    );
+    if (!batchRow) return res.status(404).json({ error: "Batch not found" });
+
+    const [itemRows] = await pool.query(
+      `SELECT
+        i.scenario_id,
+        i.school_id,
+        i.is_source,
+        sc.name AS scenario_name,
+        sc.status,
+        sc.sent_at,
+        sc.progress_pct,
+        s.name AS school_name
+       FROM country_approval_batch_items i
+       JOIN school_scenarios sc ON sc.id = i.scenario_id
+       JOIN schools s ON s.id = i.school_id
+       WHERE i.batch_id = :id
+       ORDER BY s.name ASC, sc.name ASC`,
+      { id: batchId }
+    );
+
+    const items = (Array.isArray(itemRows) ? itemRows : []).map((row) => ({
+      scenario_id: row.scenario_id,
+      scenario_name: row.scenario_name,
+      school_id: row.school_id,
+      school_name: row.school_name,
+      status: row.status,
+      sent_at: row.sent_at,
+      progress_pct: row.progress_pct != null ? Number(row.progress_pct) : null,
+      is_source: Boolean(row.is_source),
+    }));
+
+    return res.json({
+      batch: {
+        id: batchRow.id,
+        status: batchRow.status,
+        academic_year: batchRow.academic_year,
+        created_at: batchRow.created_at,
+        reviewed_at: batchRow.reviewed_at,
+        review_note: batchRow.review_note,
+        country: {
+          id: batchRow.country_id,
+          name: batchRow.country_name,
+          region: batchRow.country_region,
+        },
+      },
+      items,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  }
+});
+
+/**
+ * PATCH /admin/approval-batches/:batchId/review
+ * Body: approve -> { action:"approve", note?:string, includedYears:["y1","y2","y3"] }
+ *       revise  -> { action:"revise", note:string, revisionWorkIds:[...] }
+ */
+router.patch("/approval-batches/:batchId/review", async (req, res) => {
+  const pool = getPool();
+  const conn = await pool.getConnection();
+  try {
+    const batchId = Number(req.params.batchId);
+    if (!Number.isFinite(batchId)) return res.status(400).json({ error: "Invalid batch id" });
+
+    const action = String(req.body?.action || "").trim();
+    const note = String(req.body?.note || "").trim();
+    if (!["approve", "revise"].includes(action)) {
+      return res.status(400).json({ error: "Invalid action" });
+    }
+
+    await conn.beginTransaction();
+    const [[batch]] = await conn.query(
+      `SELECT id, country_id, academic_year, status
+       FROM country_approval_batches
+       WHERE id=:id
+       FOR UPDATE`,
+      { id: batchId }
+    );
+    if (!batch) {
+      await conn.rollback();
+      return res.status(404).json({ error: "Batch not found" });
+    }
+
+    const [itemRows] = await conn.query(
+      `SELECT scenario_id, school_id
+       FROM country_approval_batch_items
+       WHERE batch_id=:id
+       FOR UPDATE`,
+      { id: batchId }
+    );
+    const items = Array.isArray(itemRows) ? itemRows : [];
+    const scenarioIds = items.map((row) => Number(row.scenario_id)).filter((id) => Number.isFinite(id));
+    if (!scenarioIds.length) {
+      await conn.rollback();
+      return res.status(409).json({ error: "Batch has no scenarios" });
+    }
+
+    const [scenarioRows] = await conn.query(
+      `SELECT id, school_id, academic_year, status
+       FROM school_scenarios
+       WHERE id IN (:ids)
+       FOR UPDATE`,
+      { ids: scenarioIds }
+    );
+    const scenarios = Array.isArray(scenarioRows) ? scenarioRows : [];
+
+    if (action === "approve") {
+      if (String(batch.status) !== "sent_for_approval") {
+        await conn.rollback();
+        return res.status(409).json({ error: "Batch must be sent for approval before admin approval" });
+      }
+      const notReady = scenarios.find((sc) => String(sc.status) !== "sent_for_approval");
+      if (notReady) {
+        await conn.rollback();
+        return res.status(409).json({ error: "One or more scenarios are not in sent_for_approval state" });
+      }
+
+      let includedYears = normalizeIncludedYears(req.body?.includedYears);
+      if (!includedYears.length) includedYears = YEAR_KEYS.slice();
+      const includedSet = includedYears.join(",");
+
+      await conn.query(
+        `UPDATE school_scenarios
+         SET status='approved',
+             reviewed_at=CURRENT_TIMESTAMP,
+             reviewed_by=:u,
+             review_note=:note
+         WHERE id IN (:ids)`,
+        { ids: scenarioIds, u: req.user.id, note: note || null }
+      );
+
+      for (const sc of scenarios) {
+        await conn.query(
+          `INSERT INTO school_reporting_scenarios
+            (school_id, academic_year, scenario_id, included_years, approved_by, approved_at)
+           VALUES
+            (:school_id, :academic_year, :scenario_id, :included_years, :approved_by, CURRENT_TIMESTAMP)
+           ON DUPLICATE KEY UPDATE
+            scenario_id=VALUES(scenario_id),
+            included_years=VALUES(included_years),
+            approved_by=VALUES(approved_by),
+            approved_at=VALUES(approved_at)`,
+          {
+            school_id: sc.school_id,
+            academic_year: sc.academic_year,
+            scenario_id: sc.id,
+            included_years: includedSet,
+            approved_by: req.user.id,
+          }
+        );
+        await conn.query(
+          `INSERT INTO scenario_review_events (scenario_id, action, note, actor_user_id)
+           VALUES (:id, 'approve', :note, :u)`,
+          { id: sc.id, note: note || null, u: req.user.id }
+        );
+      }
+
+      await conn.query(
+        `UPDATE country_approval_batches
+         SET status='approved',
+             reviewed_by=:u,
+             reviewed_at=CURRENT_TIMESTAMP,
+             review_note=:note
+         WHERE id=:id`,
+        { id: batchId, u: req.user.id, note: note || null }
+      );
+    } else {
+      if (!["sent_for_approval", "approved"].includes(String(batch.status))) {
+        await conn.rollback();
+        return res.status(409).json({ error: "Batch must be sent for approval or approved to request revision" });
+      }
+      if (!note) {
+        await conn.rollback();
+        return res.status(400).json({ error: "note is required for revision requests" });
+      }
+      const revisionWorkIdsRaw = req.body?.revisionWorkIds;
+      if (!Array.isArray(revisionWorkIdsRaw) || revisionWorkIdsRaw.length === 0) {
+        await conn.rollback();
+        return res.status(400).json({ error: "revisionWorkIds must be a non-empty array" });
+      }
+      const uniqueIds = Array.from(
+        new Set(
+          revisionWorkIdsRaw
+            .map((id) => String(id || "").trim())
+            .filter((id) => Boolean(id))
+        )
+      );
+      for (const wid of uniqueIds) {
+        if (!BASE_REQUIRED_WORK_IDS.includes(wid)) {
+          await conn.rollback();
+          return res.status(400).json({ error: `Invalid work id: ${wid}` });
+        }
+      }
+      if (uniqueIds.length === 0) {
+        await conn.rollback();
+        return res.status(400).json({ error: "revisionWorkIds must contain at least one valid work id" });
+      }
+
+      await conn.query(
+        `UPDATE school_scenarios
+         SET status='revision_requested',
+             reviewed_at=CURRENT_TIMESTAMP,
+             reviewed_by=:u,
+             review_note=:note,
+             sent_at=NULL,
+             sent_by=NULL,
+             checked_at=NULL,
+             checked_by=NULL
+         WHERE id IN (:ids)`,
+        { ids: scenarioIds, u: req.user.id, note }
+      );
+
+      await conn.query(
+        "DELETE FROM school_reporting_scenarios WHERE scenario_id IN (:ids)",
+        { ids: scenarioIds }
+      );
+
+      await conn.query(
+        "DELETE FROM country_approval_batch_items WHERE batch_id=:id",
+        { id: batchId }
+      );
+
+      for (const sc of scenarios) {
+        await conn.query(
+          `INSERT INTO scenario_review_events (scenario_id, action, note, actor_user_id)
+           VALUES (:id, 'revise', :note, :u)`,
+          { id: sc.id, note, u: req.user.id }
+        );
+
+        for (const wid of BASE_REQUIRED_WORK_IDS) {
+          const resource = resourceForWorkId(wid);
+          await conn.query(
+            `INSERT INTO scenario_work_items (scenario_id, work_id, resource, state, updated_by)
+             SELECT :sid, :wid, :resource, 'approved', :uid
+             FROM DUAL
+             WHERE NOT EXISTS (
+               SELECT 1 FROM scenario_work_items WHERE scenario_id=:sid AND work_id=:wid
+             )`,
+            { sid: sc.id, wid, resource, uid: req.user.id }
+          );
+        }
+        await conn.query(
+          `UPDATE scenario_work_items
+           SET state='approved', updated_by=?, updated_at=CURRENT_TIMESTAMP
+           WHERE scenario_id=? AND work_id IN (?)`,
+          [req.user.id, sc.id, BASE_REQUIRED_WORK_IDS]
+        );
+        await conn.query(
+          `UPDATE scenario_work_items
+           SET state='needs_revision', updated_by=?, updated_at=CURRENT_TIMESTAMP
+           WHERE scenario_id=? AND work_id IN (?)`,
+          [req.user.id, sc.id, uniqueIds]
+        );
+      }
+
+      await conn.query(
+        `UPDATE country_approval_batches
+         SET status='revision_requested',
+             reviewed_by=:u,
+             reviewed_at=CURRENT_TIMESTAMP,
+             review_note=:note
+         WHERE id=:id`,
+        { id: batchId, u: req.user.id, note }
+      );
+    }
+
+    await conn.commit();
+    return res.json({ ok: true, batchId });
+  } catch (e) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      // ignore rollback errors
+    }
+    return res.status(500).json({ error: "Server error", details: String(e?.message || e) });
+  } finally {
+    conn.release();
+  }
+});
+
+/**
  * PATCH /admin/scenarios/:scenarioId/review
  * Body: { action: "approve" | "revise", note?: string, includedYears?: ["y1","y2","y3"] }
  */
@@ -1094,14 +1470,15 @@ router.patch("/scenarios/:scenarioId/review", async (req, res) => {
         );
         // Ensure all required work items exist.  Insert missing rows with default state 'approved'.
         for (const wid of BASE_REQUIRED_WORK_IDS) {
+          const resource = resourceForWorkId(wid);
           await conn.query(
-            `INSERT INTO scenario_work_items (scenario_id, work_id, state, updated_by)
-             SELECT :sid, :wid, 'approved', :uid
+            `INSERT INTO scenario_work_items (scenario_id, work_id, resource, state, updated_by)
+             SELECT :sid, :wid, :resource, 'approved', :uid
              FROM DUAL
              WHERE NOT EXISTS (
                SELECT 1 FROM scenario_work_items WHERE scenario_id=:sid AND work_id=:wid
              )`,
-            { sid: scenarioId, wid, uid: req.user.id }
+            { sid: scenarioId, wid, resource, uid: req.user.id }
           );
         }
         // Set all required work items to 'approved' by default (lock them)

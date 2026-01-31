@@ -129,6 +129,33 @@ const fmtNum = (v, fractionDigits = 2) =>
 const fmtPct = (v) =>
   Number.isFinite(Number(v)) ? `${(Number(v) * 100).toFixed(2)}%` : "-";
 
+function parseAcademicYearParts(value) {
+  const raw = String(value || "").trim();
+  const range = raw.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (range) {
+    const startYear = Number(range[1]);
+    const endYear = Number(range[2]);
+    if (Number.isFinite(startYear) && Number.isFinite(endYear)) {
+      return { startYear: String(startYear), endYear: String(endYear) };
+    }
+  }
+  const single = raw.match(/^(\d{4})$/);
+  if (single) {
+    const year = Number(single[1]);
+    if (Number.isFinite(year)) return { startYear: String(year), endYear: String(year) };
+  }
+  return { startYear: null, endYear: null };
+}
+
+function resolveTargetYear(academicYear, yearBasis) {
+  if (!academicYear) return null;
+  if (yearBasis === "start" || yearBasis === "end") {
+    const { startYear, endYear } = parseAcademicYearParts(academicYear);
+    return yearBasis === "start" ? startYear : endYear;
+  }
+  return academicYear;
+}
+
 export default function ExpenseSplitModal({
   open,
   onClose,
@@ -143,6 +170,7 @@ export default function ExpenseSplitModal({
   const [selectedTargets, setSelectedTargets] = useState(new Set());
   const [basis, setBasis] = useState("students");
   const [basisYearKey, setBasisYearKey] = useState("y1");
+  const [yearBasis, setYearBasis] = useState("academic");
   const [selectedExpenseKeys, setSelectedExpenseKeys] = useState(new Set());
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -178,6 +206,7 @@ export default function ExpenseSplitModal({
     setSelectedExpenseKeys(new Set());
     setBasis("students");
     setBasisYearKey("y1");
+    setYearBasis("academic");
     setPreview(null);
     setRevertLoading(false);
     setPrefillScope(null);
@@ -190,15 +219,17 @@ export default function ExpenseSplitModal({
     setExpandedTargets(new Set());
     setShowTargets(true);
     setShowExpenses(true);
-  }, [basis, basisYearKey, selectedTargetsKey, selectedExpenseKeyStr]);
+  }, [basis, basisYearKey, yearBasis, selectedTargetsKey, selectedExpenseKeyStr]);
 
   useEffect(() => {
     let active = true;
     async function loadTargets() {
       if (!open || !sourceScenario?.academic_year) return;
+      const targetYear = resolveTargetYear(sourceScenario.academic_year, yearBasis);
+      if (!targetYear) return;
       setLoadingTargets(true);
       try {
-        const data = await api.expenseSplitTargets(sourceScenario.academic_year);
+        const data = await api.expenseSplitTargets(targetYear, yearBasis);
         if (!active) return;
         const list = Array.isArray(data) ? data : [];
         const filtered = list.filter(
@@ -217,7 +248,7 @@ export default function ExpenseSplitModal({
     return () => {
       active = false;
     };
-  }, [open, sourceScenario?.academic_year, sourceScenario?.id]);
+  }, [open, sourceScenario?.academic_year, sourceScenario?.id, yearBasis]);
 
   useEffect(() => {
     let active = true;
@@ -276,6 +307,19 @@ export default function ExpenseSplitModal({
       return schoolName.includes(term) || scenarioName.includes(term);
     });
   }, [targets, targetSearch]);
+
+  useEffect(() => {
+    if (!targets.length) {
+      setSelectedTargets((prev) => (prev.size ? new Set() : prev));
+      return;
+    }
+    const idSet = new Set(targets.map((row) => String(row.scenarioId)));
+    setSelectedTargets((prev) => {
+      if (!prev || prev.size === 0) return prev;
+      const next = new Set(Array.from(prev).filter((id) => idSet.has(String(id))));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [targets]);
 
   const toggleTarget = (id) => {
     setSelectedTargets((prev) => {
@@ -582,18 +626,31 @@ export default function ExpenseSplitModal({
                     <option value="revenue">Revenue</option>
                   </select>
                 </div>
-                <div style={{ minWidth: 160 }}>
-                  <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Basis Yil</div>
-                  <select className="input sm" style={compactControlStyle} value={basisYearKey} onChange={(e) => setBasisYearKey(e.target.value)}>
-                    <option value="y1">Y1</option>
-                    <option value="y2">Y2</option>
-                    <option value="y3">Y3</option>
-                  </select>
-                </div>
-                <div style={{ flex: "1 1 220px" }}>
-                  <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Hedef Ara</div>
-                  <input
-                    className="input sm"
+                  <div style={{ minWidth: 160 }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Basis Yil</div>
+                    <select className="input sm" style={compactControlStyle} value={basisYearKey} onChange={(e) => setBasisYearKey(e.target.value)}>
+                      <option value="y1">Y1</option>
+                      <option value="y2">Y2</option>
+                      <option value="y3">Y3</option>
+                    </select>
+                  </div>
+                  <div style={{ minWidth: 210 }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Yil ortasi donemleri</div>
+                    <select
+                      className="input sm"
+                      style={compactControlStyle}
+                      value={yearBasis}
+                      onChange={(e) => setYearBasis(e.target.value)}
+                    >
+                      <option value="academic">Ayrik (2024-2025)</option>
+                      <option value="start">Baslangic yilina dahil</option>
+                      <option value="end">Bitis yilina dahil</option>
+                    </select>
+                  </div>
+                  <div style={{ flex: "1 1 220px" }}>
+                    <div className="small" style={{ fontWeight: 700, marginBottom: 6 }}>Hedef Ara</div>
+                    <input
+                      className="input sm"
                     style={compactControlStyle}
                     placeholder="Okul veya senaryo ara"
                     value={targetSearch}

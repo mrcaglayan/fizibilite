@@ -15,6 +15,7 @@ const schoolsRoutes = require("./routes/schools");
 const normRoutes = require("./routes/norm");
 const scenariosRoutes = require("./routes/scenarios");
 const expenseDistributionsRoutes = require("./routes/expenseDistributions");
+const approvalBatchesRoutes = require("./routes/approvalBatches");
 const metaRoutes = require("./routes/meta");
 
 const app = express();
@@ -37,6 +38,7 @@ app.use("/api/admin", adminRoutes);
 // roles and permissions within their assigned country.  They are mounted under /api/manager.
 app.use("/api/manager", managerRoutes);
 app.use("/api/schools", schoolsRoutes);
+app.use("/api/countries", approvalBatchesRoutes);
 
 // norm routes include /schools/:id/norm-config
 app.use("/api", normRoutes);

@@ -16,9 +16,7 @@ import { writeGlobalLastRouteSegment, writeLastVisitedPath, writeSelectedScenari
  * accountants, admins, or users granted the manage_permissions permission can
  * access this page.  The page lists each scenario's required modules and
  * allows the reviewer to approve or request revision for submitted modules.
- * When all required modules are approved, the reviewer can forward the
- * scenario to administrators for final approval via the "Onaya Gönder"
- * button.  The list refreshes automatically after each action.
+ * The list refreshes automatically after each action.
  */
 
 // Define the stable required work item identifiers and their friendly labels.
@@ -442,29 +440,6 @@ export default function ManagerReviewQueuePage() {
     }
   };
 
-  // Handler for sending a scenario for admin approval
-  const handleSendForApproval = async (schoolId, scenarioId) => {
-    try {
-      const calcRes = await api.calculateScenario(schoolId, scenarioId);
-      if (!calcRes || !calcRes.results) {
-        toast.error('Hesaplama tamamlanamadı');
-        return;
-      }
-      await api.sendForApproval(schoolId, scenarioId);
-      toast.success('Merkeze iletildi');
-      const keepOpenId = activeCard?.scenario?.id ?? null;
-      loadQueue({ activeScenarioId: keepOpenId, deferUpdate: Boolean(keepOpenId) });
-    } catch (e) {
-      console.error(e);
-      const reasons = Array.isArray(e?.data?.reasons) ? e.data.reasons.filter(Boolean) : [];
-      if (e?.status === 409 && reasons.length) {
-        toast.warn(`Merkeze iletilemez: ${reasons.join(', ')}`);
-      } else {
-        toast.error(e?.message || 'Failed to send for approval');
-      }
-    }
-  };
-
   if (!canView) {
     return (
       <div className="container">
@@ -482,8 +457,6 @@ export default function ManagerReviewQueuePage() {
   const activeSchool = activeCard?.school;
   const activeStatusMeta = activeScenario ? getScenarioStatusMeta(activeScenario) : null;
   const activeTotalRequired = activeCard ? getRequiredTotal(activeCard) : REQUIRED_WORK_IDS.length;
-  const activeAllApproved = activeCard ? activeCard.approvedCount === activeTotalRequired : false;
-
   return (
     <div className="container">
       <ToastContainer position="bottom-right" autoClose={3500} newestOnTop closeOnClick pauseOnFocusLoss pauseOnHover hideProgressBar theme="dark" />
@@ -569,21 +542,6 @@ export default function ManagerReviewQueuePage() {
                     </span>
                   ) : null}
 
-                  <button
-                    className="btn sm primary"
-                    type="button"
-                    onClick={() => handleSendForApproval(activeSchool.id, activeScenario.id)}
-                    disabled={!activeAllApproved || activeScenario?.status !== 'approved' || activeScenario?.sent_at != null}
-                    title={
-                      !activeAllApproved
-                        ? 'Tüm modüller tamamlanmalı'
-                        : activeScenario?.status !== 'approved' || activeScenario?.sent_at
-                        ? 'Durum izin vermiyor'
-                        : undefined
-                    }
-                  >
-                    Merkeze ilet
-                  </button>
                 </div>
               </div>
 
@@ -736,8 +694,6 @@ export default function ManagerReviewQueuePage() {
             const { school, scenario, requiredItems, approvedCount } = entry;
             const statusMeta = getScenarioStatusMeta(scenario);
             const totalRequired = getRequiredTotal(entry);
-            const allApproved = approvedCount === totalRequired;
-
             const cardPayload = { school, scenario, requiredItems, approvedCount, totalRequired };
 
             return (
@@ -786,24 +742,6 @@ export default function ManagerReviewQueuePage() {
                       İncele
                     </button>
 
-                    <button
-                      className="btn sm primary"
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSendForApproval(school.id, scenario.id);
-                      }}
-                      disabled={!allApproved || scenario.status !== 'approved' || scenario.sent_at != null}
-                      title={
-                        !allApproved
-                          ? 'Tüm modüller tamamlanmalı'
-                          : scenario.status !== 'approved' || scenario.sent_at
-                          ? 'Durum izin vermiyor'
-                          : undefined
-                      }
-                    >
-                      Merkeze ilet
-                    </button>
                   </div>
                 </div>
               </motion.div>

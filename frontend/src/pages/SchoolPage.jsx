@@ -1945,8 +1945,8 @@ export default function SchoolPage() {
     if (progMap && progMap.ik) {
       footerModules.push({
         key: "ik",
-        label: "?K",
-        labelShort: "?K",
+        label: "IK",
+        labelShort: "IK",
         pct: pctValue(progMap.ik),
         done: progMap.ik.done === true,
       });

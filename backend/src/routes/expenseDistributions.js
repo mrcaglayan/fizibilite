@@ -201,6 +201,64 @@ function normalizeAcademicYear(value) {
   return raw;
 }
 
+function normalizeYearBasis(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "start" || raw === "start_year" || raw === "startyear") return "start";
+  if (raw === "end" || raw === "end_year" || raw === "endyear") return "end";
+  return "academic";
+}
+
+function parseAcademicYearParts(value) {
+  const raw = String(value || "").trim();
+  const range = raw.match(/^(\d{4})\s*-\s*(\d{4})$/);
+  if (range) {
+    const startYear = Number(range[1]);
+    const endYear = Number(range[2]);
+    if (Number.isFinite(startYear) && Number.isFinite(endYear)) {
+      return { startYear: String(startYear), endYear: String(endYear), normalized: `${startYear}-${endYear}` };
+    }
+  }
+  const single = raw.match(/^(\d{4})$/);
+  if (single) {
+    const year = Number(single[1]);
+    if (Number.isFinite(year)) return { startYear: String(year), endYear: String(year), normalized: String(year) };
+  }
+  return { startYear: null, endYear: null, normalized: raw || null };
+}
+
+async function assertNoOpenCountryBatch(pool, countryId, academicYear) {
+  const { startYear, endYear, normalized } = parseAcademicYearParts(academicYear);
+  const filters = [];
+  const params = { cid: countryId };
+  if (normalized) {
+    filters.push("(year_basis='academic' AND academic_year=:ay)");
+    filters.push("(year_basis IS NULL AND academic_year=:ay)");
+    params.ay = normalized;
+  }
+  if (startYear) {
+    filters.push("(year_basis='start' AND academic_year=:start_year)");
+    params.start_year = startYear;
+  }
+  if (endYear) {
+    filters.push("(year_basis='end' AND academic_year=:end_year)");
+    params.end_year = endYear;
+  }
+  if (!filters.length) return;
+  const [[row]] = await pool.query(
+    `SELECT 1
+     FROM country_approval_batches
+     WHERE country_id=:cid AND status='sent_for_approval'
+       AND (${filters.join(" OR ")})
+     LIMIT 1`,
+    params
+  );
+  if (row) {
+    const error = new Error("Country approval batch is open for this academic year; expense split changes are locked.");
+    error.status = 409;
+    throw error;
+  }
+}
+
 async function assertSchoolInUserCountry(pool, schoolId, countryId) {
   const [[s]] = await pool.query(
     `SELECT s.id, s.name, s.status,
@@ -534,12 +592,23 @@ async function buildPreview({
 }
 
 /**
- * GET /expense-distributions/targets?academicYear=YYYY-YYYY
+ * GET /expense-distributions/targets?academicYear=YYYY-YYYY&yearBasis=academic|start|end
  */
 router.get("/expense-distributions/targets", async (req, res) => {
   try {
-    const academicYear = normalizeAcademicYear(req.query?.academicYear ?? req.query?.academic_year);
-    if (!academicYear) return res.status(400).json({ error: "academicYear is required" });
+    const academicYearRaw = String(req.query?.academicYear ?? req.query?.academic_year ?? "").trim();
+    if (!academicYearRaw) return res.status(400).json({ error: "academicYear is required" });
+    const yearBasis = normalizeYearBasis(req.query?.yearBasis ?? req.query?.year_basis);
+    let academicYear = academicYearRaw;
+    if (yearBasis === "academic") {
+      academicYear = normalizeAcademicYear(academicYearRaw);
+    } else {
+      const baseYear = normalizeAcademicYear(academicYearRaw);
+      if (!/^\d{4}$/.test(baseYear)) {
+        return res.status(400).json({ error: "academicYear must be YYYY for base-year mode" });
+      }
+      academicYear = baseYear;
+    }
 
     // By default, exclude closed schools from the target picker.
     // (Admins can include them explicitly, matching /schools behavior.)
@@ -548,27 +617,39 @@ router.get("/expense-distributions/targets", async (req, res) => {
       return res.status(403).json({ error: "Only admin can include closed schools" });
     }
 
+    let yearClause = "sc.academic_year = :academic_year";
+    const params = { country_id: req.user.country_id };
+    if (yearBasis === "start") {
+      yearClause = "(sc.academic_year = :year OR REPLACE(sc.academic_year, ' ', '') LIKE CONCAT(:year, '-%'))";
+      params.year = academicYear;
+    } else if (yearBasis === "end") {
+      yearClause = "(sc.academic_year = :year OR REPLACE(sc.academic_year, ' ', '') LIKE CONCAT('%-', :year))";
+      params.year = academicYear;
+    } else {
+      params.academic_year = academicYear;
+    }
+
     const pool = getPool();
     const [rows] = await pool.query(
       `SELECT sc.id AS scenarioId,
-              sc.name AS scenarioName,
-              sc.academic_year,
-              sc.input_currency,
-              sc.local_currency_code,
-              sc.fx_usd_to_local,
-              s.id AS schoolId,
-              s.name AS schoolName
+                sc.name AS scenarioName,
+                sc.academic_year,
+                sc.input_currency,
+                sc.local_currency_code,
+                sc.fx_usd_to_local,
+                s.id AS schoolId,
+                s.name AS schoolName
        FROM school_scenarios sc
        JOIN schools s ON s.id = sc.school_id
        WHERE s.country_id = :country_id
-         AND sc.academic_year = :academic_year
-         AND NOT EXISTS (
-           SELECT 1 FROM expense_distribution_sets eds
-           WHERE eds.source_scenario_id = sc.id
-         )
-         ${includeClosed ? "" : "AND s.status = 'active'"}
+          AND ${yearClause}
+          AND NOT EXISTS (
+            SELECT 1 FROM expense_distribution_sets eds
+            WHERE eds.source_scenario_id = sc.id
+          )
+          ${includeClosed ? "" : "AND s.status = 'active'"}
        ORDER BY s.name ASC, sc.name ASC`,
-      { country_id: req.user.country_id, academic_year: academicYear }
+      params
     );
 
     return res.json(Array.isArray(rows) ? rows : []);
@@ -723,6 +804,8 @@ router.post(
       const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
       if (!scenario) return res.status(404).json({ error: "Scenario not found" });
 
+      await assertNoOpenCountryBatch(pool, req.user.country_id, scenario.academic_year);
+
       const preview = await buildPreview({
         pool,
         sourceScenario: scenario,
@@ -853,6 +936,8 @@ router.post(
 
       const scenario = await assertScenarioInSchool(pool, scenarioId, schoolId);
       if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+
+      await assertNoOpenCountryBatch(pool, req.user.country_id, scenario.academic_year);
 
       const [[latest]] = await pool.query(
         `SELECT id, created_at

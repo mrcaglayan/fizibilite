@@ -276,8 +276,8 @@ export const api = {
     request(`/schools/${schoolId}/scenarios/${scenarioId}/report${toQuery({ mode })}`),
   submitScenario: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}/submit`, { method: "POST" }),
-  expenseSplitTargets: (academicYear) =>
-    request(`/expense-distributions/targets${toQuery({ academicYear })}`),
+  expenseSplitTargets: (academicYear, yearBasis) =>
+    request(`/expense-distributions/targets${toQuery({ academicYear, yearBasis })}`),
   getExpenseSplitLastScope: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}/expense-split/last-scope`),
   revertExpenseSplit: (schoolId, scenarioId, payload) =>
@@ -332,11 +332,27 @@ export const api = {
     request("/schools/bulk-send/preview", { method: "POST", body: { schoolIds } }),
   bulkSendApply: (scenarioIds = []) =>
     request("/schools/bulk-send/apply", { method: "POST", body: { scenarioIds } }),
+  countryApprovalBatchPreview: (countryId, academicYear, yearBasis) =>
+    request(`/countries/${countryId}/approval-batches/preview`, {
+      method: "POST",
+      body: { academicYear, yearBasis },
+    }),
+  countryApprovalBatchYears: (countryId, yearBasis) =>
+    request(`/countries/${countryId}/approval-batches/years${toQuery({ yearBasis })}`),
+  countryApprovalBatchSend: (countryId, academicYear, yearBasis) =>
+    request(`/countries/${countryId}/approval-batches`, {
+      method: "POST",
+      body: { academicYear, yearBasis },
+    }),
   getProgressRequirements: () => request("/meta/progress-requirements"),
 
   adminGetScenarioQueue: (params = {}) => request(`/admin/scenarios/queue${toQuery(params)}`),
   adminReviewScenario: (scenarioId, body) =>
     request(`/admin/scenarios/${scenarioId}/review`, { method: "PATCH", body }),
+  adminGetApprovalBatchQueue: (params = {}) => request(`/admin/approval-batches/queue${toQuery(params)}`),
+  adminGetApprovalBatch: (batchId) => request(`/admin/approval-batches/${batchId}`),
+  adminReviewApprovalBatch: (batchId, body) =>
+    request(`/admin/approval-batches/${batchId}/review`, { method: "PATCH", body }),
   adminGetRollup: (params = {}) => request(`/admin/reports/rollup${toQuery(params)}`),
 
   // --- Role & Permission management (admin) ---
