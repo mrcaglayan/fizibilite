@@ -20,6 +20,7 @@ import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import ProgressBar from "../components/ui/ProgressBar";
 import ExpenseSplitModal from "../components/ExpenseSplitModal";
+import BulkSendModal from "../components/BulkSendModal";
 import {
   getDefaultKademeConfig,
   getKademeDefinitions,
@@ -786,6 +787,7 @@ export default function SelectPage() {
   const [loadingScenarios, setLoadingScenarios] = useState(false);
   const [schoolProgress, setSchoolProgress] = useState({});
   const [schoolProgressLoading, setSchoolProgressLoading] = useState(false);
+  const [schoolExpenseSplitStaleMap, setSchoolExpenseSplitStaleMap] = useState({});
   const [scenarioProgressMap, setScenarioProgressMap] = useState({});
   const [scenarioProgressLoading, setScenarioProgressLoading] = useState(false);
 
@@ -815,6 +817,7 @@ export default function SelectPage() {
   const [deleteConfirmScenarioId, setDeleteConfirmScenarioId] = useState(null);
   const [copyModalOpen, setCopyModalOpen] = useState(false);
   const [expenseSplitOpen, setExpenseSplitOpen] = useState(false);
+  const [bulkSendOpen, setBulkSendOpen] = useState(false);
   const [copyModalError, setCopyModalError] = useState("");
   const [copySelection, setCopySelection] = useState(null);
   const [copySelectionMsg, setCopySelectionMsg] = useState("");
@@ -885,6 +888,24 @@ export default function SelectPage() {
     }
   }, []);
 
+  const loadSchoolExpenseSplitStale = useCallback(async (rows) => {
+    if (!Array.isArray(rows) || !rows.length) {
+      setSchoolExpenseSplitStaleMap({});
+      return;
+    }
+    try {
+      const ids = rows.map((s) => s.id);
+      const data = await api.getSchoolsExpenseSplitStale(ids);
+      const map =
+        data?.staleBySchoolId && typeof data.staleBySchoolId === "object"
+          ? data.staleBySchoolId
+          : {};
+      setSchoolExpenseSplitStaleMap(map);
+    } catch (_) {
+      setSchoolExpenseSplitStaleMap({});
+    }
+  }, []);
+
   useEffect(() => {
     if (!schools.length) {
       setSchoolProgress({});
@@ -893,6 +914,14 @@ export default function SelectPage() {
     }
     loadSchoolProgress(schools);
   }, [schools, loadSchoolProgress]);
+
+  useEffect(() => {
+    if (!schools.length) {
+      setSchoolExpenseSplitStaleMap({});
+      return;
+    }
+    loadSchoolExpenseSplitStale(schools);
+  }, [schools, loadSchoolExpenseSplitStale]);
 
   useEffect(() => {
     const raw = searchParams.get("schoolId");
@@ -1126,6 +1155,26 @@ export default function SelectPage() {
     }
   }, [selectedSchoolId]);
 
+  const handleExpenseSplitApplied = useCallback(
+    ({ sourceScenarioId } = {}) => {
+      if (!sourceScenarioId) return;
+      setScenarios((prev) => {
+        if (!Array.isArray(prev)) return prev;
+        return prev.map((row) => {
+          if (String(row.id) !== String(sourceScenarioId)) return row;
+          return {
+            ...row,
+            expense_split_applied: true,
+            expense_split_stale: false,
+          };
+        });
+      });
+      refreshScenarios();
+      loadSchoolExpenseSplitStale(schools);
+    },
+    [refreshScenarios, loadSchoolExpenseSplitStale, schools]
+  );
+
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
 
@@ -1330,6 +1379,7 @@ export default function SelectPage() {
   const canSubmitScenario = can(auth.user, "scenario.submit", "write", permissionScope);
   const canForwardScenario =
     role === "manager" || role === "accountant" || can(auth.user, "scenario.forward", "write", permissionScope);
+  const canBulkSend = role === "manager" || role === "accountant";
   const canDeleteScenario = can(auth.user, "scenario.delete", "write", permissionScope);
 
   // Lock editing when the scenario has been forwarded to admins (sent_for_approval)
@@ -2467,9 +2517,18 @@ export default function SelectPage() {
         <ExpenseSplitModal
           open={expenseSplitOpen}
           onClose={() => setExpenseSplitOpen(false)}
+          onApplied={handleExpenseSplitApplied}
           sourceScenario={selectedRowScenario}
           sourceSchoolId={selectedSchoolId}
           sourceSchoolName={selectedSchoolName}
+        />
+      ) : null}
+
+      {bulkSendOpen ? (
+        <BulkSendModal
+          open={bulkSendOpen}
+          onClose={() => setBulkSendOpen(false)}
+          schoolIds={schools.map((s) => s.id)}
         />
       ) : null}
 
@@ -2832,11 +2891,13 @@ export default function SelectPage() {
               <table className="table select-school-table">
                 <colgroup>
                   <col style={{ width: 32 }} />
+                  <col style={{ width: 32 }} />
                   <col />
                   <col style={{ width: 180 }} />
                 </colgroup>
               <thead>
                 <tr>
+                  <th>#</th>
                   <th></th>
                   <th>Okul</th>
                   <th>İlerleme</th>
@@ -2845,16 +2906,20 @@ export default function SelectPage() {
               <tbody>
                 {schools.length === 0 ? (
                   <tr>
-                    <td colSpan="3" className="small">Okul bulunamadi.</td>
+                    <td colSpan="4" className="small">Okul bulunamadi.</td>
                   </tr>
                 ) : (
-                  schools.map((s) => {
+                  schools.map((s, idx) => {
                     const isSelected = String(selectedSchoolId) === String(s.id);
+                    const showStaleSplit = !!schoolExpenseSplitStaleMap?.[s.id];
+                    const rowClassName = `scenario-row${isSelected ? " is-selected" : ""}${
+                      showStaleSplit ? " is-expense-split-stale" : ""
+                    }`;
                     const progress = schoolProgress[s.id];
                     return (
                       <tr
                         key={s.id}
-                        className={isSelected ? "scenario-row is-selected" : "scenario-row"}
+                        className={rowClassName}
                         // Provide a pointer cursor for the whole row to indicate interactivity. Clicking the row or any
                         // cell will select the school.
                         style={{ cursor: isSelected ? "default" : "pointer" }}
@@ -2863,6 +2928,9 @@ export default function SelectPage() {
                           handleSelectSchool(s.id);
                         }}
                       >
+                        <td className="small" style={{ padding: "6px 8px" }}>
+                          {idx + 1}
+                        </td>
                         <td
                           onClick={(e) => {
                             e.stopPropagation();
@@ -2912,6 +2980,17 @@ export default function SelectPage() {
               </table>
             </div>
           )}
+          {canBulkSend ? (
+            <div className="row select-table-footer" style={{ justifyContent: "flex-end" }}>
+              <button
+                className="btn primary"
+                onClick={() => setBulkSendOpen(true)}
+                disabled={!schools.length || loadingSchools}
+              >
+                Merkeze Gonder (Toplu)
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="card select-table-card" style={{ flex: "2 1 420px", minWidth: 320 }}>
@@ -3127,7 +3206,13 @@ export default function SelectPage() {
                       return (
                         <tr
                           key={s.id}
-                          className={isSelected ? "scenario-row is-selected" : "scenario-row"}
+                          className={`${isSelected ? "scenario-row is-selected" : "scenario-row"}${
+                            s?.expense_split_applied
+                              ? s?.expense_split_stale
+                                ? " is-expense-split-stale"
+                                : " is-expense-split"
+                              : ""
+                          }`}
                           // Apply opacity and pointer-event rules as before. Also set cursor to pointer when
                           // selection is possible. When another row is busy or this row is disabled/selected, the
                           // cursor remains default and clicking does nothing.

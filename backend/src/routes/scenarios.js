@@ -29,7 +29,9 @@ const {
   applyDistributionOverlay,
   getLatestDistributionForScenario,
   getDistributionAllocationsForTarget,
+  computePoolAmounts,
 } = require("../utils/expenseDistributions");
+const { computeExpenseSplitStaleFlags } = require("../utils/expenseSplitStale");
 const { buildRaporAoa } = require("../utils/excel/raporAoa");
 const { buildTemelBilgilerAoa } = require("../utils/excel/temelBilgilerAoa");
 const { buildKapasiteAoa } = require("../utils/excel/kapasiteAoa");
@@ -431,6 +433,8 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       "sent_at",
       "checked_at",
       "checked_by",
+      // True if this scenario has had an expense distribution applied as the *source* scenario ("Gider Paylaştır").
+      "(EXISTS(SELECT 1 FROM expense_distribution_sets eds WHERE eds.source_scenario_id = school_scenarios.id)) AS expense_split_applied",
       "input_currency",
       "local_currency_code",
       "fx_usd_to_local",
@@ -445,6 +449,7 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       "sent_at",
       "checked_at",
       "checked_by",
+      "(EXISTS(SELECT 1 FROM expense_distribution_sets eds WHERE eds.source_scenario_id = school_scenarios.id)) AS expense_split_applied",
       "reviewed_at",
       "review_note",
       "created_by",
@@ -476,6 +481,16 @@ router.get("/schools/:schoolId/scenarios", async (req, res) => {
       ORDER BY ${orderBy || "created_at DESC"}${limitClause}${offsetClause}
     `;
     const [rows] = await pool.query(sql, queryParams);
+
+    // If a scenario has been part of an expense split ("Gider Paylaştır"), compute whether
+    // any of the inputs that drive that distribution have changed since it was applied.
+    // Frontend uses this to show a green (ok) or red (stale) indicator bar.
+    const hasAnySplit = (Array.isArray(rows) ? rows : []).some((r) => !!r?.expense_split_applied);
+    const staleMap = hasAnySplit ? await computeExpenseSplitStaleFlags(pool, rows) : new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const sid = Number(row?.id);
+      row.expense_split_stale = !!staleMap.get(sid);
+    });
 
     res.setHeader("X-Total-Scenarios", total);
     if (!isPagedOrSelective && fields === "all") {
@@ -1421,9 +1436,14 @@ router.put(
       );
 
       // Automatically revert work items to in_progress when principals or HR
-      // modify their inputs.  Only consider non-admin users and when a list
-      // of modified resources or paths is provided.
+      // modify their inputs. Skip this for draft scenarios so copying/initial
+      // setup does not move them into review.
       if (!isAdmin) {
+        const scenarioStatus = String(scenario?.status || "draft");
+        if (scenarioStatus === "draft") {
+          await invalidateScenarioProgress(pool, scenarioId).catch(() => {});
+          return res.json({ ok: true });
+        }
         const workEntries = [];
         // Helper to record a revert entry for a given resource key
         const addEntry = (resKey) => {

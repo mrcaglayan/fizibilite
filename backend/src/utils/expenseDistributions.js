@@ -76,6 +76,108 @@ function pickGradesForY1(inputs) {
   return [];
 }
 
+function roundTo(value, decimals) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const m = 10 ** decimals;
+  return Math.round((n + Number.EPSILON) * m) / m;
+}
+
+function computeDiscountTotalY1(inputs, warnings) {
+  const warn = Array.isArray(warnings) ? warnings : [];
+  const grades = pickGradesForY1(inputs);
+  const totalStudents = computeStudentsFromGrades(grades).totalStudents;
+  const incomeBase = computeIncomeFromGelirler({
+    totalStudents,
+    gelirler: inputs?.gelirler || {},
+  });
+
+  const tuitionStudents = safeNum(incomeBase?.tuitionStudents);
+  const grossTuition = safeNum(incomeBase?.grossTuition);
+  const avgTuition = safeNum(incomeBase?.tuitionAvgFee);
+
+  if (tuitionStudents <= 0 || grossTuition <= 0) {
+    warn.push("Burs/indirim havuzu için brut ogrenim ucreti 0.");
+    return 0;
+  }
+
+  const list = Array.isArray(inputs?.discounts) ? inputs.discounts : [];
+  const discountCategories = list.map((d) => {
+    if (!d || typeof d !== "object") return d;
+    const count = d.studentCount != null && d.studentCount !== "" ? safeNum(d.studentCount) : null;
+    const ratioFromCount =
+      count != null && tuitionStudents > 0 ? clamp(count / tuitionStudents, 0, 1) : null;
+    const ratio = ratioFromCount != null ? ratioFromCount : clamp(safeNum(d.ratio), 0, 1);
+    return {
+      ...d,
+      ratio,
+      value: safeNum(d.value),
+    };
+  });
+
+  const disc = calculateDiscounts({
+    tuitionStudents,
+    grossTuition,
+    tuitionAvgFee: avgTuition,
+    discountCategories,
+  });
+
+  return safeNum(disc?.totalDiscounts);
+}
+
+/**
+ * Compute pool amounts (in scenario input currency) for the requested expense keys.
+ * Mirrors the logic used by the Expense Split preview/apply endpoints.
+ */
+function computePoolAmounts(inputs, expenseKeys, warnings) {
+  const warn = Array.isArray(warnings) ? warnings : [];
+  const keys = Array.isArray(expenseKeys) ? expenseKeys : [];
+  const out = new Map();
+
+  const nonEdRows = Array.isArray(inputs?.gelirler?.nonEducationFees?.rows)
+    ? inputs.gelirler.nonEducationFees.rows
+    : [];
+  const nonEdByKey = new Map(nonEdRows.map((row) => [String(row?.key || ""), row]));
+  const dormRows = Array.isArray(inputs?.gelirler?.dormitory?.rows)
+    ? inputs.gelirler.dormitory.rows
+    : [];
+  const dormByKey = new Map(dormRows.map((row) => [String(row?.key || ""), row]));
+
+  const salaryPools = computeSalaryFromIkY1(inputs?.ik);
+
+  for (const rawKey of keys) {
+    const key = String(rawKey || "").trim();
+    if (!key) continue;
+    let poolAmount = 0;
+
+    if (OPERATING_KEYS.has(key)) {
+      if (SALARY_KEYS.has(key)) {
+        poolAmount = safeNum(salaryPools?.[key]);
+      } else {
+        poolAmount = safeNum(inputs?.giderler?.isletme?.items?.[key]);
+      }
+    } else if (SERVICE_KEYS.has(key)) {
+      const incomeKey = SERVICE_TO_INCOME_KEY[key];
+      const incRow = incomeKey ? nonEdByKey.get(incomeKey) : null;
+      const sc = safeNum(incRow?.studentCount);
+      const uc = safeNum(inputs?.giderler?.ogrenimDisi?.items?.[key]?.unitCost);
+      poolAmount = sc * uc;
+    } else if (DORM_KEYS.has(key)) {
+      const incomeKey = DORM_TO_INCOME_KEY[key];
+      const incRow = incomeKey ? dormByKey.get(incomeKey) : null;
+      const sc = safeNum(incRow?.studentCount);
+      const uc = safeNum(inputs?.giderler?.yurt?.items?.[key]?.unitCost);
+      poolAmount = sc * uc;
+    } else if (key === DISCOUNT_TOTAL_KEY) {
+      poolAmount = computeDiscountTotalY1(inputs, warn);
+    }
+
+    out.set(key, roundTo(poolAmount, 6));
+  }
+
+  return out;
+}
+
 function computeDiscountBaseY1(inputs) {
   const grades = pickGradesForY1(inputs);
   const totalStudents = computeStudentsFromGrades(grades).totalStudents;
@@ -302,5 +404,6 @@ module.exports = {
   applyDistributionOverlay,
   getLatestDistributionForScenario,
   getDistributionAllocationsForTarget,
+  computePoolAmounts,
 };
 

@@ -6,6 +6,7 @@ const {
   computeIncomeFromGelirler,
   computeStudentsFromGrades,
   calculateDiscounts,
+  calculateSchoolFeasibility,
 } = require("../engine/feasibilityEngine");
 const {
   requireAuth,
@@ -402,28 +403,66 @@ async function buildPreview({
     };
   });
 
-  const includedIds = includedTargets.map((t) => Number(t.scenarioId));
-  const basisRows = new Map();
+  // IMPORTANT:
+  // We derive basis values directly from inputs_json so users don't need to click "Hesapla".
+  // scenario_kpis is only refreshed when "Hesapla" runs, which can make splits and the stale indicator incorrect.
+  const includedIds = Array.from(
+    new Set(includedTargets.map((t) => Number(t.scenarioId)).filter((n) => Number.isFinite(n) && n > 0))
+  );
+
+  const inputsByScenario = new Map();
   if (includedIds.length) {
     const [rows] = await pool.query(
-      `SELECT scenario_id, net_ciro, students_total
-       FROM scenario_kpis
-       WHERE scenario_id IN (:ids) AND academic_year=:academic_year AND year_key=:year_key`,
-      { ids: includedIds, academic_year: academicYear, year_key: basisYearKey }
+      `SELECT scenario_id, inputs_json
+       FROM scenario_inputs
+       WHERE scenario_id IN (:ids)`,
+      { ids: includedIds }
     );
-    (Array.isArray(rows) ? rows : []).forEach((row) => {
-      basisRows.set(String(row.scenario_id), row);
+    (Array.isArray(rows) ? rows : []).forEach((r) => {
+      const sid = Number(r.scenario_id);
+      if (!Number.isFinite(sid)) return;
+      inputsByScenario.set(String(sid), parseInputsJson(r.inputs_json));
     });
   }
 
+  const basisMetricsCache = new Map();
+  const getBasisMetrics = (scenarioId) => {
+    const sid = Number(scenarioId);
+    if (!Number.isFinite(sid) || sid <= 0) return null;
+    if (basisMetricsCache.has(sid)) return basisMetricsCache.get(sid);
+    const inputs = inputsByScenario.get(String(sid));
+    if (!inputs) {
+      basisMetricsCache.set(sid, null);
+      return null;
+    }
+    try {
+      const results = calculateSchoolFeasibility(inputs, {});
+      const years = results && typeof results === "object" && results.years && typeof results.years === "object" ? results.years : { y1: results };
+      const out = {};
+      for (const yk of ["y1", "y2", "y3"]) {
+        const y = years?.[yk] || null;
+        out[yk] = {
+          netCiro: roundTo(safeNum(y?.income?.netActivityIncome), 6),
+          students: roundTo(safeNum(y?.students?.totalStudents), 6),
+        };
+      }
+      basisMetricsCache.set(sid, out);
+      return out;
+    } catch (_) {
+      basisMetricsCache.set(sid, null);
+      return null;
+    }
+  };
+
   const basisKind = String(basis || "").toLowerCase();
   const targetsWithBasis = includedTargets.map((row) => {
-    const kpi = basisRows.get(String(row.scenarioId));
+    const metrics = getBasisMetrics(row.scenarioId);
+    const m = metrics?.[basisYearKey] || metrics?.y1;
     let basisValue = 0;
-    if (kpi) {
-      basisValue = basisKind === "revenue" ? safeNum(kpi.net_ciro) : safeNum(kpi.students_total);
+    if (m) {
+      basisValue = basisKind === "revenue" ? safeNum(m.netCiro) : safeNum(m.students);
     } else {
-      warnings.push(`KPI bulunamadi: senaryo ${row.scenarioId} (${basisYearKey})`);
+      warnings.push(`Girdi bulunamadi / hesaplanamadi: senaryo ${row.scenarioId} (${basisYearKey})`);
     }
     if (!Number.isFinite(basisValue) || basisValue < 0) basisValue = 0;
     return { row, basisValue: roundTo(basisValue, 6) };
@@ -486,6 +525,13 @@ router.get("/expense-distributions/targets", async (req, res) => {
     const academicYear = normalizeAcademicYear(req.query?.academicYear ?? req.query?.academic_year);
     if (!academicYear) return res.status(400).json({ error: "academicYear is required" });
 
+    // By default, exclude closed schools from the target picker.
+    // (Admins can include them explicitly, matching /schools behavior.)
+    const includeClosed = String(req.query?.includeClosed || "") === "1";
+    if (includeClosed && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Only admin can include closed schools" });
+    }
+
     const pool = getPool();
     const [rows] = await pool.query(
       `SELECT sc.id AS scenarioId,
@@ -498,7 +544,9 @@ router.get("/expense-distributions/targets", async (req, res) => {
               s.name AS schoolName
        FROM school_scenarios sc
        JOIN schools s ON s.id = sc.school_id
-       WHERE s.country_id = :country_id AND sc.academic_year = :academic_year
+       WHERE s.country_id = :country_id
+         AND sc.academic_year = :academic_year
+         ${includeClosed ? "" : "AND s.status = 'active'"}
        ORDER BY s.name ASC, sc.name ASC`,
       { country_id: req.user.country_id, academic_year: academicYear }
     );
@@ -615,6 +663,15 @@ router.post(
         basisYearKey: yearKey,
         expenseKeys: preview.pools.map((p) => p.expenseKey),
         targetScenarioIds: preview.targets.map((t) => t.targetScenarioId),
+
+        // Snapshots used to detect if a distribution becomes stale later.
+        // (We store these here to avoid rounding drift from summing allocations.)
+        poolAmounts: Object.fromEntries(
+          preview.pools.map((p) => [p.expenseKey, roundTo(p.poolAmount, 6)])
+        ),
+        targetBasisValues: Object.fromEntries(
+          preview.targets.map((t) => [String(t.targetScenarioId), roundTo(t.basisValue, 6)])
+        ),
       });
 
       const [setResult] = await conn.query(

@@ -2613,7 +2613,7 @@ hr {
 }
 .scenario-table th:first-child,
 .scenario-table td:first-child {
-  width: 32px;
+  width: 36px;
   padding-right: 4px;
 }
 .scenario-table th:nth-child(2),
@@ -2636,6 +2636,38 @@ hr {
 }
 .scenario-row.is-selected {
   background: rgba(59, 130, 246, 0.08);
+}
+
+/* Scenario row indicator for "Gider Paylaştır" applied scenarios */
+.scenario-row.is-expense-split td:first-child {
+  position: relative;
+  padding-left: 10px;
+}
+.scenario-row.is-expense-split td:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 4px;
+  background: #22c55e;
+}
+
+/* If the scenario changed after "Gider Paylaştır" was applied, show a red indicator. */
+.scenario-row.is-expense-split-stale td:first-child {
+  position: relative;
+  padding-left: 10px;
+}
+.scenario-row.is-expense-split-stale td:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 4px;
+  background: #ef4444;
 }
 .scenario-toolbar {
   display: flex;

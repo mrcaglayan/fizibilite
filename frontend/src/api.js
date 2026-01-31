@@ -231,6 +231,8 @@ export const api = {
     request(`/schools/${schoolId}/scenarios/${scenarioId}/progress`, { noCache: true }),
   getSchoolsProgressBulk: (schoolIds = []) =>
     request(`/schools/progress?schoolIds=${encodeURIComponent(schoolIds.join(","))}`, { noCache: true }),
+  getSchoolsExpenseSplitStale: (schoolIds = []) =>
+    request(`/schools/expense-split-stale?schoolIds=${encodeURIComponent(schoolIds.join(","))}`, { noCache: true }),
   /**
    * Save scenario inputs. Optionally accept a list of modifiedPaths for non‑admin enforcement.
    *
@@ -319,6 +321,10 @@ export const api = {
    */
   sendForApproval: (schoolId, scenarioId) =>
     request(`/schools/${schoolId}/scenarios/${scenarioId}/send-for-approval`, { method: 'POST' }),
+  bulkSendPreview: (schoolIds = []) =>
+    request("/schools/bulk-send/preview", { method: "POST", body: { schoolIds } }),
+  bulkSendApply: (scenarioIds = []) =>
+    request("/schools/bulk-send/apply", { method: "POST", body: { scenarioIds } }),
   getProgressRequirements: () => request("/meta/progress-requirements"),
 
   adminGetScenarioQueue: (params = {}) => request(`/admin/scenarios/queue${toQuery(params)}`),

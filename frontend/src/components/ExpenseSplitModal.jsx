@@ -132,6 +132,7 @@ const fmtPct = (v) =>
 export default function ExpenseSplitModal({
   open,
   onClose,
+  onApplied,
   sourceScenario,
   sourceSchoolId,
   sourceSchoolName,
@@ -286,6 +287,10 @@ export default function ExpenseSplitModal({
     try {
       await api.applyExpenseSplit(sourceSchoolId, sourceScenario.id, payload);
       toast.success("Gider dagitimi kaydedildi.");
+      onApplied?.({
+        sourceScenarioId: sourceScenario.id,
+        targetScenarioIds: payload.targetScenarioIds,
+      });
       onClose?.();
     } catch (e) {
       toast.error(e.message || "Dagitim uygulanamadi");
