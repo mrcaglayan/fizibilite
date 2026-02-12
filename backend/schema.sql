@@ -264,6 +264,7 @@ CREATE TABLE `country_approval_batches` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `country_id` bigint NOT NULL,
   `academic_year` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `year_basis` enum('academic','start','end') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'academic',
   `status` enum('sent_for_approval','revision_requested','approved') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'sent_for_approval',
   `created_by` bigint NOT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
