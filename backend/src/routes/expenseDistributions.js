@@ -982,7 +982,12 @@ router.post(
       const remainingCount = Number(remaining?.cnt || 0);
       let deletedSet = false;
       if (remainingCount <= 0) {
-        await conn.query("DELETE FROM expense_distribution_sets WHERE id=:did", { did: latest.id });
+        // The latest set is now empty. Clear historical sets too so the source
+        // scenario returns to an "unsplit" state.
+        await conn.query(
+          "DELETE FROM expense_distribution_sets WHERE source_scenario_id=:sid",
+          { sid: scenarioId }
+        );
         deletedSet = true;
       }
 

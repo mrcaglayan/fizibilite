@@ -160,6 +160,7 @@ export default function ExpenseSplitModal({
   open,
   onClose,
   onApplied,
+  onReverted,
   sourceScenario,
   sourceSchoolId,
   sourceSchoolName,
@@ -418,6 +419,11 @@ export default function ExpenseSplitModal({
         setPrefillScope(null);
         setSelectedExpenseKeys(new Set());
       }
+      onReverted?.({
+        sourceScenarioId: sourceScenario.id,
+        removedTargetScenarioIds: removed,
+        deletedSet: !!data?.deletedSet,
+      });
       toast.success("Gider dagitimi geri alindi.");
     } catch (e) {
       toast.error(e.message || "Geri alma basarisiz");

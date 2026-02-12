@@ -1174,6 +1174,28 @@ export default function SelectPage() {
     [refreshScenarios, loadSchoolExpenseSplitStale, schools]
   );
 
+  const handleExpenseSplitReverted = useCallback(
+    ({ sourceScenarioId, deletedSet } = {}) => {
+      if (!sourceScenarioId) return;
+      if (deletedSet) {
+        setScenarios((prev) => {
+          if (!Array.isArray(prev)) return prev;
+          return prev.map((row) => {
+            if (String(row.id) !== String(sourceScenarioId)) return row;
+            return {
+              ...row,
+              expense_split_applied: false,
+              expense_split_stale: false,
+            };
+          });
+        });
+      }
+      refreshScenarios();
+      loadSchoolExpenseSplitStale(schools);
+    },
+    [refreshScenarios, loadSchoolExpenseSplitStale, schools]
+  );
+
   const kademeDefs = useMemo(() => getKademeDefinitions(), []);
   const gradeOptions = useMemo(() => getGradeOptions(), []);
 
@@ -2560,6 +2582,7 @@ export default function SelectPage() {
           open={expenseSplitOpen}
           onClose={() => setExpenseSplitOpen(false)}
           onApplied={handleExpenseSplitApplied}
+          onReverted={handleExpenseSplitReverted}
           sourceScenario={selectedRowScenario}
           sourceSchoolId={selectedSchoolId}
           sourceSchoolName={selectedSchoolName}
