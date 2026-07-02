@@ -2,6 +2,7 @@ import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ADMIN_TABS } from "../data/adminTabs";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 import {
   readSelectedScenarioId,
   readLastVisitedPath,
@@ -552,6 +553,7 @@ export default function AppLayout() {
               </div>
             ) : null}
             <div className="app-topbar-slot" ref={captureHeaderPortalEl}>
+              <LanguageSwitcher />
               {showSchoolsMenu ? (
                 <button
                   type="button"

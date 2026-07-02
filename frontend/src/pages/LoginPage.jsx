@@ -3,6 +3,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 
 export default function LoginPage() {
   const auth = useAuth();
@@ -81,6 +82,7 @@ export default function LoginPage() {
       className="auth-shell"
       style={{ "--auth-bg": `url(${process.env.PUBLIC_URL}/login-bg.png)` }}
     >
+      <LanguageSwitcher className="auth-language-switcher" />
       <div className="auth-grid">
         <section className="auth-hero">
           <div className="auth-badge">Feasibility Studio v1.5</div>
