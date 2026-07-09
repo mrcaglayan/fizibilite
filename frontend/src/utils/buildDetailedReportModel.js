@@ -741,13 +741,21 @@ export function buildDetailedReportModel({
     else discountsSumInputs += cost;
   }
 
-  // allow report-provided values to override
-  const scholarshipsAmount =
-    numOrNull(reportExpenses?.scholarshipsTotal) != null
+  // Live preview: when discount inputs exist, prefer current frontend inputs over
+  // stale saved report values. Official report export still comes from Kaydet + Hesapla.
+  const hasDiscountInputValues = discountInputList.some((d) => {
+    const count = safeNum(d?.studentCount ?? d?.studentCountY2 ?? d?.studentCountY3);
+    const value = safeNum(d?.value ?? d?.valueY2 ?? d?.valueY3);
+    return count > 0 && value > 0;
+  });
+  const scholarshipsAmount = hasDiscountInputValues
+    ? scholarshipsSumInputs
+    : numOrNull(reportExpenses?.scholarshipsTotal) != null
       ? safeNum(reportExpenses?.scholarshipsTotal)
       : scholarshipsSumInputs;
-  const discountsAmount =
-    numOrNull(reportExpenses?.discountsTotal) != null
+  const discountsAmount = hasDiscountInputValues
+    ? discountsSumInputs
+    : numOrNull(reportExpenses?.discountsTotal) != null
       ? safeNum(reportExpenses?.discountsTotal)
       : discountsSumInputs;
 

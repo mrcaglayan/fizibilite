@@ -1164,12 +1164,15 @@ export default function ExpensesEditor({
                 onDiscountsChange(next);
 
                 if (yk === "y1") {
+                  onDirty?.(discountPath(name, "studentCount"), studentCountValue ?? 0);
                   onDirty?.(discountPath(name, "ratio"), ratio);
                   onDirty?.(discountPath(name, "value"), pct);
                 } else if (yk === "y2") {
+                  onDirty?.(discountPath(name, "studentCountY2"), studentCountValue ?? 0);
                   onDirty?.(discountPath(name, "ratioY2"), ratio);
                   onDirty?.(discountPath(name, "valueY2"), pct);
                 } else {
+                  onDirty?.(discountPath(name, "studentCountY3"), studentCountValue ?? 0);
                   onDirty?.(discountPath(name, "ratioY3"), ratio);
                   onDirty?.(discountPath(name, "valueY3"), pct);
                 }
@@ -1219,7 +1222,7 @@ export default function ExpensesEditor({
                       <td>{r.name}</td>
                       <td className="cell-count sep-left">
                         <NumberInput
-                          className={inputClass("input xs num", discountPath(r.name, "ratio"))}
+                          className={inputClass("input xs num", discountPath(r.name, "studentCount"))}
                           min="0"
                           step="1"
                           value={r.c1}
@@ -1242,7 +1245,7 @@ export default function ExpensesEditor({
 
                       <td className="cell-count sep-left">
                         <NumberInput
-                          className={inputClass("input xs num", discountPath(r.name, "ratioY2"))}
+                          className={inputClass("input xs num", discountPath(r.name, "studentCountY2"))}
                           min="0"
                           step="1"
                           value={r.c2}
@@ -1266,7 +1269,7 @@ export default function ExpensesEditor({
 
                       <td className="cell-count sep-left">
                         <NumberInput
-                          className={inputClass("input xs num", discountPath(r.name, "ratioY3"))}
+                          className={inputClass("input xs num", discountPath(r.name, "studentCountY3"))}
                           min="0"
                           step="1"
                           value={r.c3}

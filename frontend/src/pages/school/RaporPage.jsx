@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useOutletContext } from "react-router-dom";
 import ReportView from "../../components/ReportView";
+import { applyLiveDiscountPreviewToResults } from "../../utils/liveDiscountPreview";
 
 export default function RaporPage() {
   const {
@@ -12,8 +13,14 @@ export default function RaporPage() {
     reportModeLoading,
     handleReportModeChange,
     reportExportRef,
+    inputs,
   } =
     useOutletContext();
+
+  const displayReport = useMemo(
+    () => applyLiveDiscountPreviewToResults(report, inputs),
+    [report, inputs],
+  );
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -40,7 +47,7 @@ export default function RaporPage() {
       </div>
       <div ref={reportExportRef} data-report-export="1" className="report-export">
         <ReportView
-          results={report}
+          results={displayReport}
           currencyMeta={selectedScenario}
           reportCurrency={reportCurrency}
           onReportCurrencyChange={setReportCurrency}
